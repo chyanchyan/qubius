@@ -73,7 +73,11 @@ npm run quickstart
 npm run quickstart -- --registry 2 --config-dir /path/to/qubius-config
 npm run quickstart -- --port 8790
 npm run quickstart -- --dry-run   # 只打印将要执行的命令
+npm run quickstart -- --verbose   # 输出 npm 安装/构建的详细日志，并实时显示依赖安装脚本输出
+npm run quickstart -- --loglevel=silly   # 最详细的 npm 日志（silent 则尽量安静）
 ```
+
+默认情况下 `npm ci` 只显示最终结果（npm 的 `notice` 级别），不会逐条列出下载和安装的包；需要排查安装问题时用 `--verbose`。
 
 默认端口是 8787（副实例 8788）。端口被占用时，quickstart 会在安装依赖前列出占用进程的 PID 和命令，并让你选择：停止占用进程（需二次确认；Windows 上会强制结束）、换一个空闲端口，或退出；也可以用 `--port` 直接指定。已有配置文件时以配置里的 `listen` 为准。
 

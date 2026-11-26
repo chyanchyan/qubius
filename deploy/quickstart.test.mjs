@@ -50,6 +50,10 @@ test("参数解析支持等号和空格两种写法", () => {
   assert.deepEqual(parseArgs(["--dry-run"]), { dryRun: true });
   assert.deepEqual(parseArgs(["--port", "9123"]), { port: "9123" });
   assert.deepEqual(parseArgs(["--port=9123"]), { port: "9123" });
+  assert.deepEqual(parseArgs(["--verbose"]), { verbose: true });
+  assert.deepEqual(parseArgs(["-v"]), { verbose: true });
+  assert.deepEqual(parseArgs(["--loglevel", "silly"]), { loglevel: "silly" });
+  assert.deepEqual(parseArgs(["--loglevel=info"]), { loglevel: "info" });
 });
 
 test("端口解析只接受 1–65535 的整数", () => {

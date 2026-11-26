@@ -14,6 +14,9 @@ export const REGISTRIES = [
 
 export const DEFAULT_REGISTRY = REGISTRIES[0].url;
 
+/** npm 支持的日志级别，从安静到最详细。 */
+export const NPM_LOGLEVELS = ["silent", "error", "warn", "notice", "http", "info", "verbose", "silly"];
+
 /**
  * 把用户输入解析成 registry URL。
  * 空输入用官方源；数字按列表选择；也接受直接粘贴的 http(s) 地址。
@@ -41,6 +44,9 @@ export function parseArgs(argv) {
     else if (arg.startsWith("--config-dir=")) options.configDir = arg.slice("--config-dir=".length);
     else if (arg === "--port") options.port = argv[++index];
     else if (arg.startsWith("--port=")) options.port = arg.slice("--port=".length);
+    else if (arg === "--loglevel") options.loglevel = argv[++index];
+    else if (arg.startsWith("--loglevel=")) options.loglevel = arg.slice("--loglevel=".length);
+    else if (arg === "--verbose" || arg === "-v") options.verbose = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--dry-run") options.dryRun = true;
     else unknown.push(arg);
