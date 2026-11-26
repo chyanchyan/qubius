@@ -8,6 +8,10 @@ import { useEffect } from "react";
  * visualViewport and exposing its rect as CSS variables keeps the composer
  * above the keyboard. Pinch zoom is left alone so zooming still works the
  * way the browser intends.
+ *
+ * 键盘收起时不要用 visualViewport.height 定高：iOS 独立网页会把它少算一条
+ * 状态栏，输入框因此停在离屏幕底部很远的位置。这时让 .app 直接铺满布局
+ * 视口；只有检测到键盘占掉一大块时，才切到视觉视口的高度和位移。
  */
 export function useVisibleViewport() {
   useEffect(() => {
@@ -23,15 +27,29 @@ export function useVisibleViewport() {
       if (!viewport || viewport.scale > 1.01) {
         if (signature === "hidden") return;
         signature = "hidden";
+        delete root.dataset.keyboard;
         root.style.removeProperty("--app-height");
         root.style.removeProperty("--app-top");
         return;
       }
-      const next = `${viewport.height}:${viewport.offsetTop}`;
+      /* 状态栏/地址栏这类小偏差（几十像素）不算键盘；键盘至少占一两百像素。
+         iOS 的布局视口不会随键盘缩小，所以底部差得多就是键盘弹出。 */
+      const keyboardOpen =
+        document.documentElement.clientHeight - (viewport.offsetTop + viewport.height) > 120;
+      const next = keyboardOpen ? `keyboard:${viewport.height}:${viewport.offsetTop}` : "full";
       if (next === signature) return;
       signature = next;
-      root.style.setProperty("--app-height", `${viewport.height}px`);
-      root.style.setProperty("--app-top", `${viewport.offsetTop}px`);
+      if (keyboardOpen) {
+        /* 键盘弹出：贴住视觉视口，同时让输入框收起安全区外边距（由 CSS 用
+           data-keyboard 处理），否则会离键盘隔出一条比手指还宽的空白。 */
+        root.dataset.keyboard = "true";
+        root.style.setProperty("--app-height", `${viewport.height}px`);
+        root.style.setProperty("--app-top", `${viewport.offsetTop}px`);
+      } else {
+        delete root.dataset.keyboard;
+        root.style.removeProperty("--app-height");
+        root.style.removeProperty("--app-top");
+      }
     };
     const resync = () => {
       if (!frame) frame = window.requestAnimationFrame(apply);

@@ -1507,6 +1507,12 @@ summary:focus-visible {
   flex: none;
 }
 
+/* 键盘弹出时 Home Indicator 已被键盘盖住，安全区外边距不再需要；
+   留着会让输入框和键盘之间空出 30 多像素。data-keyboard 由 viewport.ts 维护。 */
+html[data-keyboard="true"] .composer {
+  margin-bottom: calc(8px * var(--control-scale));
+}
+
 /* 左滑切换语音输入模式：上方文字编辑框 + 下方整宽大语音按钮。
    两套底部面板交叉滑动，外层高度由 Composer 量出来平滑过渡；
    竖向滑动留给页面滚动，横向才由 Composer 接管。 */
