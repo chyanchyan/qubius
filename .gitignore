@@ -5,6 +5,19 @@ dist/
 data/
 /config.yaml
 /config-secondary.yaml
+# 直接把配置放在 checkout 根目录时（Windows 上常见），部署页和服务会在旁边
+# 生成配置备份、env、部署状态和凭据；这些运行时文件同样不提交。默认位置
+# .qubius/ 已经整目录忽略。
+/config.yaml.bak*
+/config-secondary.yaml.bak*
+/projects.yaml.bak*
+/env
+/env.bak*
+/env.*.local
+/deploy.json
+/edge.json
+/ops.meta
+/lan-proxy.credentials
 /deploy/env
 /deploy/env.bak.*
 /deploy/env.*.local
