@@ -1500,18 +1500,19 @@ summary:focus-visible {
   color: var(--green);
 }
 
-/* 底部安全区：主屏独立网页（viewport-fit=cover）里 Home Indicator 会压在
-   输入框和发送键上，底部外边距至少留出安全区高度；普通标签页/桌面 env()
-   为 0，仍然使用 8px 基准间距。 */
+/* 输入框离屏幕底边固定 8px，不再按 Home Indicator 安全区（iPhone 上 34px）
+   留整条空白——真正常用的只有底部十几像素，整条安全区会让输入框明显浮在
+   屏幕底边上方。发送键本身在输入框里还缩进 6px，离底边约 14px，不会被
+   指示条压住。 */
 .composer {
-  margin: 0 calc(8px * var(--control-scale)) max(calc(8px * var(--control-scale)), env(safe-area-inset-bottom, 0px));
+  margin: 0 calc(8px * var(--control-scale)) calc(8px * var(--control-scale));
   flex: none;
 }
 
-/* 键盘弹出时 Home Indicator 已被键盘盖住，安全区外边距不再需要；
-   留着会让输入框和键盘之间空出 30 多像素。data-keyboard 由 viewport.ts 维护。 */
+/* 键盘弹出时 Home Indicator 已被键盘盖住；再收一点，让输入框贴着键盘上沿。
+   data-keyboard 由 viewport.ts 维护。 */
 html[data-keyboard="true"] .composer {
-  margin-bottom: calc(8px * var(--control-scale));
+  margin-bottom: calc(4px * var(--control-scale));
 }
 
 /* 左滑切换语音输入模式：上方文字编辑框 + 下方整宽大语音按钮。

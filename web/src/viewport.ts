@@ -13,6 +13,28 @@ import { useEffect } from "react";
  * 状态栏，输入框因此停在离屏幕底部很远的位置。这时让 .app 直接铺满布局
  * 视口；只有检测到键盘占掉一大块时，才切到视觉视口的高度和位移。
  */
+
+/* 键盘至少占一两百像素；状态栏、地址栏这类小偏差（几十像素）不算键盘。 */
+const KEYBOARD_MIN = 120;
+
+/**
+ * 判断键盘是否弹出。
+ *
+ * @param maxBottom 本次窗口方向下见过的最高可视底边（offsetTop + height）
+ * @param bottom 当前可视底边
+ * @param layoutHeight 布局视口高度（documentElement.clientHeight）
+ *
+ * 两条线索任一成立即可：
+ * - 可视底边比历史最高位置矮了一大截。键盘把可见区域顶上去；Chrome 打开
+ *   `interactive-widget=resizes-content` 时布局视口会一起缩，布局视口和可视
+ *   视口之间看不出覆盖，只剩“可见区域变矮”这一条线索。
+ * - 布局视口底边比可视底边高出一大截。iOS Safari 上键盘弹出时布局视口不缩，
+ *   键盘只是盖在页面上。
+ */
+export function keyboardOpen(maxBottom: number, bottom: number, layoutHeight: number): boolean {
+  return maxBottom - bottom > KEYBOARD_MIN || layoutHeight - bottom > KEYBOARD_MIN;
+}
+
 export function useVisibleViewport() {
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -22,6 +44,9 @@ export function useVisibleViewport() {
     let frame = 0;
     let settle = 0;
     let signature = "";
+    /* 见过的最高的可视底边。键盘弹出时可见区域变矮，底边随之下降；拿它和
+       历史最高值比，不论浏览器缩不缩布局视口都能认出键盘。 */
+    let maxBottom = 0;
     const apply = () => {
       frame = 0;
       if (!viewport || viewport.scale > 1.01) {
@@ -32,16 +57,15 @@ export function useVisibleViewport() {
         root.style.removeProperty("--app-top");
         return;
       }
-      /* 状态栏/地址栏这类小偏差（几十像素）不算键盘；键盘至少占一两百像素。
-         iOS 的布局视口不会随键盘缩小，所以底部差得多就是键盘弹出。 */
-      const keyboardOpen =
-        document.documentElement.clientHeight - (viewport.offsetTop + viewport.height) > 120;
-      const next = keyboardOpen ? `keyboard:${viewport.height}:${viewport.offsetTop}` : "full";
+      const bottom = viewport.offsetTop + viewport.height;
+      if (bottom > maxBottom) maxBottom = bottom;
+      const open = keyboardOpen(maxBottom, bottom, document.documentElement.clientHeight);
+      const next = open ? `keyboard:${viewport.height}:${viewport.offsetTop}` : "full";
       if (next === signature) return;
       signature = next;
-      if (keyboardOpen) {
-        /* 键盘弹出：贴住视觉视口，同时让输入框收起安全区外边距（由 CSS 用
-           data-keyboard 处理），否则会离键盘隔出一条比手指还宽的空白。 */
+      if (open) {
+        /* 键盘弹出：贴住视觉视口，同时收掉输入框底部外边距（由 CSS 用
+           data-keyboard 处理），否则会离键盘隔出一条空白。 */
         root.dataset.keyboard = "true";
         root.style.setProperty("--app-height", `${viewport.height}px`);
         root.style.setProperty("--app-top", `${viewport.offsetTop}px`);
@@ -61,18 +85,23 @@ export function useVisibleViewport() {
       window.clearTimeout(settle);
       settle = window.setTimeout(resync, 300);
     };
+    const onOrientation = () => {
+      /* 横竖屏切换后整屏尺寸都变了，历史底边不再有参考价值。 */
+      maxBottom = 0;
+      schedule();
+    };
     apply();
     viewport?.addEventListener("resize", schedule);
     /* 键盘弹出时浏览器也可能只平移可见视口而不发 resize，光靠 resize
        会让 --app-top 停在旧值，输入框就跑到键盘上方很远的地方。 */
     viewport?.addEventListener("scroll", schedule);
     window.addEventListener("resize", schedule);
-    window.addEventListener("orientationchange", schedule);
+    window.addEventListener("orientationchange", onOrientation);
     return () => {
       viewport?.removeEventListener("resize", schedule);
       viewport?.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
-      window.removeEventListener("orientationchange", schedule);
+      window.removeEventListener("orientationchange", onOrientation);
       if (frame) window.cancelAnimationFrame(frame);
       window.clearTimeout(settle);
     };
