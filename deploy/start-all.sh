@@ -4,6 +4,7 @@
 #
 # 行为：
 # - 角色由 QUBIUS_START_PRIMARY / QUBIUS_START_SECONDARY 决定（默认都启动）。
+# - QUBIUS_START_LAN=0 时不管理局域网入口（只做本机部署；已在运行的代理不停止）。
 # - flock 串行化（QUBIUS_DEPLOY_LOCK），与安装脚本共用同一把锁。
 # - 按 server/dist/build.json 的 head 与当前 git HEAD 决定是否调用 deploy/build.sh。
 # - 用各实例数据目录下的 qubius.pid 停止；pidfile 缺失/陈旧时退回 ss 查找监听进程。
@@ -511,7 +512,11 @@ for role in primary secondary; do
     continue
   fi
   missing=0
-  for f in "$repo/deploy/build.sh" "$repo/deploy/run.sh" "$repo/deploy/lan-proxy.sh"; do
+  required=("$repo/deploy/build.sh" "$repo/deploy/run.sh")
+  if (( QUBIUS_START_LAN )); then
+    required+=("$repo/deploy/lan-proxy.sh")
+  fi
+  for f in "${required[@]}"; do
     if [[ ! -x $f ]]; then
       qubius_warn "$name：缺少或不可执行 $f，跳过该角色"
       missing=1
@@ -538,7 +543,7 @@ for role in "${MANAGED[@]}"; do
   manage_instance "$role"
 done
 
-if (( RESTART )); then
+if (( RESTART && QUBIUS_START_LAN )); then
   stop_proxies
   for role in "${MANAGED[@]}"; do
     if lan_listening "${ROLE_PORT[$role]}"; then
@@ -548,9 +553,13 @@ if (( RESTART )); then
   done
 fi
 
-for role in "${MANAGED[@]}"; do
-  ensure_proxy "$role" || FAILED=1
-done
+if (( QUBIUS_START_LAN )); then
+  for role in "${MANAGED[@]}"; do
+    ensure_proxy "$role" || FAILED=1
+  done
+else
+  echo "跳过局域网入口（QUBIUS_START_LAN=0）" >&2
+fi
 
 if (( FAILED )); then
   echo "至少一个组件未就绪，请查看各实例数据目录下的日志" >&2
@@ -563,7 +572,11 @@ else
   summary=""
   for role in "${MANAGED[@]}"; do
     port=${ROLE_PORT[$role]}
-    summary+="${ROLE_LABEL[$role]} http://127.0.0.1:$port（LAN $port）; "
+    if (( QUBIUS_START_LAN )); then
+      summary+="${ROLE_LABEL[$role]} http://127.0.0.1:$port（LAN $port）; "
+    else
+      summary+="${ROLE_LABEL[$role]} http://127.0.0.1:$port; "
+    fi
   done
   echo "已就绪：${summary%; }"
 fi

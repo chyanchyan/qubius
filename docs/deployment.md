@@ -63,6 +63,7 @@
 | `QUBIUS_CLONE_PEER` | `install.sh` 是否自动克隆另一实例的 checkout（等同 `--clone-peer`） | `0` |
 | `QUBIUS_PULL_LATEST` | 部署任务构建前是否从各 checkout 的 `origin` 快进拉取当前分支（对应部署页「部署前从远端拉取最新代码」） | `0` |
 | `QUBIUS_START_PRIMARY` / `QUBIUS_START_SECONDARY` | `start-all.sh` 是否启动对应实例 | `1` |
+| `QUBIUS_START_LAN` | `start-all.sh` 是否启动/重启局域网入口；`0` 只做本机部署（不停止已在运行的代理） | `1` |
 | `QUBIUS_GITEA_URL` / `QUBIUS_GITEA_OWNER` / `QUBIUS_GITEA_TOKEN` | `create-repos.sh` 的 Gitea 地址、所属用户或组织、token | `http://gitea.example.com` / `example` / 空 |
 | `QUBIUS_AUTH` / `QUBIUS_AUTH_TOKEN` | 启用 API 访问令牌；令牌至少 16 个字符，留空且 `QUBIUS_AUTH=1` 时自动生成到 `dataDir/auth-token` | 空 |
 | `QUBIUS_TERMINAL` | 浏览器命令行页，`0` 关闭；`config.yaml` 里的 `terminal` 优先 | `1` |
@@ -119,7 +120,23 @@ cd ~/co-qubius && QUBIUS_SECONDARY=1 ./deploy/install.sh
 "$QUBIUS_PRIMARY_DIR/deploy/start-all.sh" --restart
 ```
 
-`start-all.sh` 按 `QUBIUS_START_PRIMARY` / `QUBIUS_START_SECONDARY`（默认都为 `1`）启动两个实例，可从任一 checkout 运行。只跑副实例的机器设 `QUBIUS_START_PRIMARY=0`；只跑主实例设 `QUBIUS_START_SECONDARY=0`，否则缺失的 checkout 会让它以非零退出。`build.sh` 在依赖变化或缺 `node_modules` 时先 `npm ci`，成功后写 `server/dist/build.json`（`head`、`builtAt`、`dirty`）；`start-all.sh` 用它判断是否重建，工作区脏也会触发下次重建。
+`start-all.sh` 按 `QUBIUS_START_PRIMARY` / `QUBIUS_START_SECONDARY`（默认都为 `1`）启动两个实例，可从任一 checkout 运行。只跑副实例的机器设 `QUBIUS_START_PRIMARY=0`；只跑主实例设 `QUBIUS_START_SECONDARY=0`，否则缺失的 checkout 会让它以非零退出。`QUBIUS_START_LAN=0` 时只启动实例，不启动/重启局域网入口（已在运行的代理不停止）。`build.sh` 在依赖变化或缺 `node_modules` 时先 `npm ci`，成功后写 `server/dist/build.json`（`head`、`builtAt`、`dirty`）；`start-all.sh` 用它判断是否重建，工作区脏也会触发下次重建。
+
+### make 快捷部署
+
+仓库根的 `make deploy` / `make deploy-lan` / `make deploy-wan` 统一调用 `deploy/deploy.sh`，按入口层级递进：
+
+| 命令 | 做什么 |
+|---|---|
+| `make deploy` | 构建并重启本机实例，只保证 `127.0.0.1:<端口>` 可访问；不启动局域网/公网入口，也不停止已在运行的入口 |
+| `make deploy-lan` | 在 `deploy` 基础上启动/重启局域网入口（`lan-proxy` / `qubius-proxy.service`） |
+| `make deploy-wan` | 在 `lan` 基础上应用公网入口：走运行中实例的 `/api/edge`（plan → 确认域名 → apply → 轮询状态），与部署页同一套作业 |
+
+- 部署对象是 env 里的 `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR`，不是当前目录；与 `install.sh` / `start-all.sh` 一致。
+- 自动检测 systemd user unit：`qubius.service` 等已启用或运行中时用 `systemctl --user restart`，否则交给 `start-all.sh --restart`（本机模式会传 `QUBIUS_START_LAN=0`）。依赖变化（`node_modules` 缺失或 `package-lock.json` 变化）时会先停 unit 再 `npm ci`。
+- 部署后检查 `/api/health`，存在构建 stamp 时校验 `head` 与 checkout 的 git HEAD；`deploy-lan` / `deploy-wan` 还会等待局域网端口监听。
+- `deploy-wan` 需要 env 里已配置 `QUBIUS_EDGECTL_CONFIG`；计划里的差异和警告会先打印，确认后才应用。`QUBIUS_EDGE_YES=1`（或 `--yes`）跳过交互确认，`QUBIUS_EDGE_DOMAIN` 指定确认域名，`QUBIUS_EDGE_WAIT` 指定等待作业的秒数。启用访问令牌时从 `QUBIUS_AUTH_TOKEN` 或 `<dataDir>/auth-token` 读取。
+- 手工执行时参与和部署页相同的 ops lock；部署页任务或公网入口作业进行中时会等待/失败。
 
 ## 页面部署与冷启动
 

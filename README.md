@@ -122,6 +122,18 @@ npm start         # 服务和页面都在 http://127.0.0.1:8787
 
 服务默认读取仓库根目录的 `config.yaml`，也可以用 `--config <路径>` 或环境变量 `QUBIUS_CONFIG` 指定其他位置。如果需要开机自启、日志轮转和双实例互备，参见 [双实例部署与运维](docs/deployment.md)。
 
+### 快捷部署（Linux）
+
+配置好 env（至少 `QUBIUS_PRIMARY_DIR` 和端口，见 [双实例部署与运维](docs/deployment.md)）后，可以在仓库根用 make 按入口层级部署：
+
+```bash
+make deploy       # 本地：构建并重启本机实例，只保证 127.0.0.1 可访问
+make deploy-lan   # 局域网：再启动/重启 lan-proxy 局域网入口
+make deploy-wan   # 公网：再应用 edgectl 公网入口（交互确认）
+```
+
+部署的是 env 里 `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR` 指向的 checkout，不是当前目录。检测到 systemd user unit 已接管时用 `systemctl --user restart`，否则交给 `deploy/start-all.sh --restart`。`make deploy` 不会停止已经运行的局域网/公网入口；非交互环境应用公网入口时加 `QUBIUS_EDGE_YES=1`。
+
 ### Windows 图形化部署
 
 Windows 上没有 bash/systemd 时，`/deploy` 页面由 `deploy/deploy-job.mjs` 完成部署：生成 `config.yaml`、按需 `npm ci` / `npm run build`、停掉旧进程、按新配置启动，并用 `/api/health` 校验。需要 Node.js 22+ 和 git 在 PATH 里，也可以在页面「Node 路径」里填 `node.exe` 的绝对路径。

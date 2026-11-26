@@ -2,6 +2,8 @@
 
 部署页（`/deploy`）的「公网入口」区块用于查看和修改 qubius / co-qubius 两个站点的 edgectl 配置。它只移植 qubius 需要的必要能力：读取现有 `edgectl.yaml`、生成可直接审阅的变更计划、在用户确认公网域名后应用，并把整个作业的状态和日志落到配置目录。
 
+命令行可以用 `make deploy-wan`（或 `deploy/deploy.sh wan`）走完全相同的 plan → 确认 → apply 流程；也可以单独运行 `node deploy/edge-deploy.mjs --port <端口> --yes`。非交互环境必须显式加 `--yes`，否则命令会拒绝应用。
+
 ## 目标与范围
 
 - qubius 部署页可以配置公网入口，不必手工编辑远端 `edgectl.yaml`。

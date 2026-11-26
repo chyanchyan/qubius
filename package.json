@@ -12,7 +12,7 @@
     "dev:web": "npm run dev -w web",
     "dev:all": "node tools/dev.mjs",
     "test": "npm test -w server",
-    "test:deploy": "bash deploy/test-lib.sh && bash deploy/test-install.sh && bash deploy/test-locks.sh && bash deploy/test-start-all.sh && bash deploy/test-pull.sh && bash deploy/ops-lock.test.sh && node --test deploy/lan-proxy-limit.test.mjs && node --test deploy/lan-proxy-http.test.mjs && npm run test:deploy-lib && node --test deploy/quickstart.test.mjs",
+    "test:deploy": "bash deploy/test-lib.sh && bash deploy/test-install.sh && bash deploy/test-locks.sh && bash deploy/test-start-all.sh && bash deploy/test-deploy.sh && bash deploy/test-pull.sh && bash deploy/ops-lock.test.sh && node --test deploy/lan-proxy-limit.test.mjs && node --test deploy/lan-proxy-http.test.mjs && npm run test:deploy-lib && node --test deploy/edge-deploy.test.mjs && node --test deploy/quickstart.test.mjs",
     "test:deploy-lib": "node --test deploy/deploy-lib.test.mjs",
     "quickstart": "node deploy/quickstart.mjs",
     "build": "npm run build -w server && npm run build -w web",
