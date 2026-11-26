@@ -46,6 +46,14 @@ interface Row {
   effort: Effort;
 }
 
+/** 对比记录浮层的定位：从输入区里的入口按钮向上弹出。 */
+interface PanelAnchor {
+  left: number;
+  bottom: number;
+  width: number;
+  maxHeight: number;
+}
+
 let nextRowKey = 1;
 
 function makeRow(selection: RunSelection): Row {
@@ -96,6 +104,9 @@ export function MultiModelRun({
   const submitting = progress !== null;
 
   const [showPanel, setShowPanel] = useState(false);
+  const [panelAnchor, setPanelAnchor] = useState<PanelAnchor | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [usage, setUsage] = useState<SessionUsage[] | null>(null);
@@ -220,7 +231,34 @@ export function MultiModelRun({
     setRefreshing(false);
   }, [projectId]);
 
+  /* 记录面板是从输入区按钮向上弹出的浮层：点外面、按 Escape 或滚动页面
+     都收起，避免浮层停在过期位置。面板自己的滚动不算。 */
+  useEffect(() => {
+    if (!showPanel) return;
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as Node;
+      if (panelRef.current?.contains(target) || barRef.current?.contains(target)) return;
+      setShowPanel(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setShowPanel(false);
+    }
+    function onScroll(event: Event) {
+      if (panelRef.current?.contains(event.target as Node)) return;
+      setShowPanel(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [showPanel]);
+
   function openDialog() {
+    setShowPanel(false);
     setRows([makeRow(baseSelection(providers, defaults))]);
     setFormError(null);
     setProgress(null);
@@ -303,7 +341,7 @@ export function MultiModelRun({
         setGroupsError(null);
         setOpen(false);
         setExpandedGroupId(group.id);
-        setShowPanel(true);
+        openPanel();
         onDone();
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : "保存失败";
@@ -319,10 +357,30 @@ export function MultiModelRun({
     if (savedGroup) void refresh();
   }
 
+  /* 按入口按钮的当前位置算出浮层坐标：贴着按钮上方展开，左右不越出视口。 */
+  function openPanel() {
+    const bar = barRef.current;
+    if (!bar) return;
+    const rect = bar.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const width = Math.min(520, Math.max(260, viewportWidth - 16));
+    const left = Math.min(Math.max(8, rect.left), Math.max(8, viewportWidth - 8 - width));
+    setPanelAnchor({
+      left,
+      bottom: window.innerHeight - rect.top + 6,
+      width,
+      maxHeight: Math.min(460, Math.max(160, rect.top - 12)),
+    });
+    setShowPanel(true);
+  }
+
   function togglePanel() {
-    const next = !showPanel;
-    setShowPanel(next);
-    if (next) void refresh();
+    if (showPanel) {
+      setShowPanel(false);
+      return;
+    }
+    openPanel();
+    void refresh();
   }
 
   function toggleGroup(groupId: string) {
@@ -373,148 +431,173 @@ export function MultiModelRun({
 
   const groupCount = projectGroups.length;
 
+  /* 读取记录失败时也让入口出现，点开面板能看到原因，而不是静默消失。 */
+  const historyVisible = groupCount > 0 || groupsError !== null;
+  const historyTitle = groupsError
+    ? `对比记录读取失败：${groupsError}`
+    : "查看最近的多模型对比记录";
+
   return (
-    <div className="multi-model">
-      <div className="multi-model-bar">
+    <div className="multi-model" ref={barRef}>
+      <button
+        type="button"
+        className="multi-model-btn"
+        disabled={disabled || submitting || providers.length === 0}
+        title={
+          providers.length === 0
+            ? "先在设置里添加接口和模型"
+            : "同一个提示用多个模型各建一个会话并对比"
+        }
+        onClick={openDialog}
+      >
+        多模型
+      </button>
+      {progress && (
+        <span className="multi-model-progress" role="status">
+          正在创建 {progress.current}/{progress.total}
+        </span>
+      )}
+      {historyVisible && (
         <button
           type="button"
-          className="multi-model-btn"
-          disabled={disabled || submitting || providers.length === 0}
-          title={
-            providers.length === 0
-              ? "先在设置里添加接口和模型"
-              : "同一个提示用多个模型各建一个会话并对比"
-          }
-          onClick={openDialog}
+          className="multi-model-history"
+          aria-expanded={showPanel}
+          aria-label={`对比记录（${groupCount}）`}
+          title={historyTitle}
+          onClick={togglePanel}
         >
-          多模型
-        </button>
-        {progress && (
-          <span className="multi-model-progress" role="status">
-            正在创建 {progress.current}/{progress.total}
+          <span className="multi-model-history-label">对比记录</span>
+          <span className="multi-model-count" data-error={groupsError ? "true" : undefined}>
+            {groupsError ? "!" : groupCount}
           </span>
-        )}
-        {groupCount > 0 && (
-          <button
-            type="button"
-            className="multi-model-history"
-            aria-expanded={showPanel}
-            onClick={togglePanel}
-          >
-            对比记录 <span className="multi-model-count">{groupCount}</span>
-            <span className="multi-model-caret" data-open={showPanel || undefined} aria-hidden="true">▾</span>
-          </button>
-        )}
-      </div>
-      {groupsError && (
-        <p className="multi-model-error">对比记录读取失败：{groupsError}</p>
+          <span className="multi-model-caret" data-open={showPanel || undefined} aria-hidden="true">▾</span>
+        </button>
       )}
 
-      {showPanel && groupCount > 0 && (
-        <div className="multi-model-panel">
-          <div className="multi-model-panel-head">
-            <span className="multi-model-panel-title">最近的多模型对比</span>
-            <button
-              type="button"
-              className="multi-model-refresh"
-              disabled={refreshing}
-              onClick={() => void refresh()}
-            >
-              {refreshing ? "刷新中…" : "刷新"}
-            </button>
-          </div>
-          {refreshError && <p className="multi-model-error">{refreshError}</p>}
-          {projectGroups.map((item) => {
-            const expanded = expandedGroupId === item.id;
-            const statuses = groupMemberStatuses(item, sessions, usage);
-            const summary = summarizeMembers(statuses);
-            return (
-              <section className="multi-model-group" key={item.id} data-open={expanded || undefined}>
-                <div className="multi-model-group-head">
-                  <button
-                    type="button"
-                    className="multi-model-group-toggle"
-                    aria-expanded={expanded}
-                    onClick={() => toggleGroup(item.id)}
-                  >
-                    <span className="multi-model-group-caret" data-open={expanded || undefined} aria-hidden="true">▸</span>
-                    <span className="multi-model-group-preview" title={item.promptPreview}>
-                      {item.promptPreview || "（无提示摘要）"}
-                    </span>
-                    <span className="multi-model-group-meta">
-                      {summary.total} 个 · {sessions === null ? "—" : formatCost(summary.cost)}
-                    </span>
-                    <span className="multi-model-group-time">{formatRelativeTime(item.createdAt)}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="multi-model-group-delete"
-                    aria-label="删除这组对比记录"
-                    disabled={deletingGroupId === item.id}
-                    onClick={() => void deleteGroup(item.id)}
-                  >
-                    {deletingGroupId === item.id ? "删除中…" : "删除"}
-                  </button>
-                </div>
-                {expanded && (
-                  <div className="multi-model-members">
-                    {statuses.map((status) => {
-                      const diffStateValue = diffState[status.id];
-                      return (
-                        <div className="multi-model-member" key={status.id} data-phase={status.phase}>
-                          <div className="multi-model-member-main">
-                            <span
-                              className="multi-model-member-model"
-                              title={`${status.providerName} · ${status.model}`}
-                            >
-                              {status.model}
-                            </span>
-                            <span className="multi-model-member-provider">{status.providerName}</span>
-                            <span className="multi-model-member-effort">{effortOptionLabel(status.effort)}</span>
-                            <span className="multi-model-member-phase" data-phase={status.phase}>
-                              {phaseText(status, sessions !== null)}
-                            </span>
-                            {status.branch && (
-                              <span className="multi-model-member-branch" title={status.branch}>{status.branch}</span>
-                            )}
-                            <span className="multi-model-member-cost">{formatCost(status.cost)}</span>
-                          </div>
-                          <div className="multi-model-member-actions">
-                            <button
-                              type="button"
-                              className="text-btn"
-                              disabled={!status.present}
-                              title={status.present ? undefined : "会话已删除或尚未刷新"}
-                              onClick={() => onOpen(status.id)}
-                            >
-                              打开
-                            </button>
-                            <button
-                              type="button"
-                              className="text-btn"
-                              disabled={diffStateValue === "loading"}
-                              onClick={() => void loadDiff(status.id)}
-                            >
-                              {diffStateValue === "loading" ? "差异…" : "差异"}
-                            </button>
-                            {diffStats[status.id] && (
-                              <span className="multi-model-member-diff" title={diffStats[status.id]}>
-                                {diffStats[status.id]}
-                              </span>
-                            )}
-                            {diffStateValue === "failed" && (
-                              <span className="multi-model-member-diff" data-failed="true">差异不可用</span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+      {showPanel && historyVisible && panelAnchor && typeof document !== "undefined" && createPortal(
+        <>
+          <div className="multi-model-scrim" aria-hidden="true" onClick={() => setShowPanel(false)} />
+          <div
+            ref={panelRef}
+            className="multi-model-panel"
+            style={{
+              left: `${panelAnchor.left}px`,
+              bottom: `${panelAnchor.bottom}px`,
+              width: `${panelAnchor.width}px`,
+              maxHeight: `${panelAnchor.maxHeight}px`,
+            }}
+          >
+            <div className="multi-model-panel-head">
+              <span className="multi-model-panel-title">最近的多模型对比</span>
+              <button
+                type="button"
+                className="multi-model-refresh"
+                disabled={refreshing}
+                onClick={() => void refresh()}
+              >
+                {refreshing ? "刷新中…" : "刷新"}
+              </button>
+            </div>
+            {groupsError && (
+              <p className="multi-model-error">对比记录读取失败：{groupsError}</p>
+            )}
+            {refreshError && <p className="multi-model-error">{refreshError}</p>}
+            {projectGroups.length === 0 && (
+              <p className="multi-model-dialog-empty">还没有对比记录。</p>
+            )}
+            {projectGroups.map((item) => {
+              const expanded = expandedGroupId === item.id;
+              const statuses = groupMemberStatuses(item, sessions, usage);
+              const summary = summarizeMembers(statuses);
+              return (
+                <section className="multi-model-group" key={item.id} data-open={expanded || undefined}>
+                  <div className="multi-model-group-head">
+                    <button
+                      type="button"
+                      className="multi-model-group-toggle"
+                      aria-expanded={expanded}
+                      onClick={() => toggleGroup(item.id)}
+                    >
+                      <span className="multi-model-group-caret" data-open={expanded || undefined} aria-hidden="true">▸</span>
+                      <span className="multi-model-group-preview" title={item.promptPreview}>
+                        {item.promptPreview || "（无提示摘要）"}
+                      </span>
+                      <span className="multi-model-group-meta">
+                        {summary.total} 个 · {sessions === null ? "—" : formatCost(summary.cost)}
+                      </span>
+                      <span className="multi-model-group-time">{formatRelativeTime(item.createdAt)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="multi-model-group-delete"
+                      aria-label="删除这组对比记录"
+                      disabled={deletingGroupId === item.id}
+                      onClick={() => void deleteGroup(item.id)}
+                    >
+                      {deletingGroupId === item.id ? "删除中…" : "删除"}
+                    </button>
                   </div>
-                )}
-              </section>
-            );
-          })}
-        </div>
+                  {expanded && (
+                    <div className="multi-model-members">
+                      {statuses.map((status) => {
+                        const diffStateValue = diffState[status.id];
+                        return (
+                          <div className="multi-model-member" key={status.id} data-phase={status.phase}>
+                            <div className="multi-model-member-main">
+                              <span
+                                className="multi-model-member-model"
+                                title={`${status.providerName} · ${status.model}`}
+                              >
+                                {status.model}
+                              </span>
+                              <span className="multi-model-member-provider">{status.providerName}</span>
+                              <span className="multi-model-member-effort">{effortOptionLabel(status.effort)}</span>
+                              <span className="multi-model-member-phase" data-phase={status.phase}>
+                                {phaseText(status, sessions !== null)}
+                              </span>
+                              {status.branch && (
+                                <span className="multi-model-member-branch" title={status.branch}>{status.branch}</span>
+                              )}
+                              <span className="multi-model-member-cost">{formatCost(status.cost)}</span>
+                            </div>
+                            <div className="multi-model-member-actions">
+                              <button
+                                type="button"
+                                className="text-btn"
+                                disabled={!status.present}
+                                title={status.present ? undefined : "会话已删除或尚未刷新"}
+                                onClick={() => onOpen(status.id)}
+                              >
+                                打开
+                              </button>
+                              <button
+                                type="button"
+                                className="text-btn"
+                                disabled={diffStateValue === "loading"}
+                                onClick={() => void loadDiff(status.id)}
+                              >
+                                {diffStateValue === "loading" ? "差异…" : "差异"}
+                              </button>
+                              {diffStats[status.id] && (
+                                <span className="multi-model-member-diff" title={diffStats[status.id]}>
+                                  {diffStats[status.id]}
+                                </span>
+                              )}
+                              {diffStateValue === "failed" && (
+                                <span className="multi-model-member-diff" data-failed="true">差异不可用</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        </>,
+        document.body,
       )}
 
       {open && typeof document !== "undefined" && createPortal(

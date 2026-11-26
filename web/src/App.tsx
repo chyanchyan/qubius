@@ -2308,26 +2308,29 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
         textareaRef={inputRef}
         attachments={attachments}
         chips={boardChips}
+        /* 多模型对比入口放在语音按键左侧，不再单独占一行把输入框顶高。 */
+        extraActions={(
+          <MultiModelRun
+            projectId={projectId}
+            providers={settings?.providers ?? []}
+            defaults={{ providerId, model, effort }}
+            disabled={
+              busy
+              || attachments.busy
+              || (!prompt.trim() && attachments.images.length === 0 && attachments.texts.length === 0)
+            }
+            createOne={createRunOne}
+            onError={reportActionError}
+            onDone={() => {
+              draft.clearDraft();
+              attachments.clear();
+            }}
+            onOpen={(id) => go(`/sessions/${id}`)}
+          />
+        )}
         voiceDisabled={busy}
         attachDisabled={busy || attachments.busy}
         onError={reportActionError}
-      />
-      <MultiModelRun
-        projectId={projectId}
-        providers={settings?.providers ?? []}
-        defaults={{ providerId, model, effort }}
-        disabled={
-          busy
-          || attachments.busy
-          || (!prompt.trim() && attachments.images.length === 0 && attachments.texts.length === 0)
-        }
-        createOne={createRunOne}
-        onError={reportActionError}
-        onDone={() => {
-          draft.clearDraft();
-          attachments.clear();
-        }}
-        onOpen={(id) => go(`/sessions/${id}`)}
       />
     </section>
   );

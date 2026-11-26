@@ -40,6 +40,7 @@ export const Composer = memo(function Composer({
   textareaRef,
   attachments,
   chips,
+  extraActions,
   active,
   voiceDisabled,
   attachDisabled,
@@ -57,6 +58,8 @@ export const Composer = memo(function Composer({
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   attachments: AttachmentState;
   chips: ReactNode;
+  /** 语音按键左侧的额外操作入口（目前用于多模型对比）。 */
+  extraActions?: ReactNode;
   /** 当前轮正在跑/等待确认：Enter 变成排队，显示快捷键提示并启用长按插话。 */
   active?: boolean;
   voiceDisabled?: boolean;
@@ -263,6 +266,7 @@ export const Composer = memo(function Composer({
               </span>
             )}
             <div className="composer-end">
+              {extraActions}
               {/* 精准指针设备用可见按钮进入语音模式，触摸端靠左滑。 */}
               <button
                 type="button"

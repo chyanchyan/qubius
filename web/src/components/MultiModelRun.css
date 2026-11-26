@@ -1,15 +1,11 @@
-/* 多模型并行对比：输入区下方的入口、对比记录面板和选择对话框。 */
+/* 多模型并行对比：输入区语音按键左侧的入口、对比记录浮层和选择对话框。 */
 
 .multi-model {
-  flex: none;
-  margin: 0 calc(8px * var(--control-scale)) calc(8px * var(--control-scale));
-}
-
-.multi-model-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
   align-items: center;
   gap: calc(6px * var(--control-scale));
+  min-width: 0;
 }
 
 .multi-model-btn {
@@ -57,6 +53,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.multi-model-count[data-error="true"] {
+  color: var(--error);
+}
+
 .multi-model-caret {
   font-size: var(--fs-11);
   transition: transform 140ms ease;
@@ -66,14 +66,24 @@
   transform: rotate(180deg);
 }
 
-/* 对比记录面板 */
+/* 对比记录浮层：从入口按钮向上弹出，位置由 MultiModelRun 按视口算出。
+   composer 的底部面板有 overflow: hidden，所以这里必须挂到 body 上。 */
+.multi-model-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: #00000044;
+}
+
 .multi-model-panel {
-  margin-top: calc(6px * var(--control-scale));
-  max-height: min(46vh, 420px);
+  position: fixed;
+  z-index: 81;
   overflow: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--menu);
+  box-shadow: 0 12px 32px #00000066;
 }
 
 .multi-model-panel-head {
@@ -481,6 +491,16 @@
   .multi-model-dialog {
     max-height: 92vh;
     padding: calc(12px * var(--control-scale));
+  }
+
+  /* 窄屏上对比记录收成「数字 + 箭头」，把横向空间留给输入区和语音按键。
+     按钮本身有 aria-label，读屏仍然能听到完整名称。 */
+  .multi-model-history-label {
+    display: none;
+  }
+
+  .multi-model-history {
+    padding: 0 calc(4px * var(--control-scale));
   }
 
   .multi-model-select {
