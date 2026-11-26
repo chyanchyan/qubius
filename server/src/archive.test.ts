@@ -208,6 +208,44 @@ test("超过保留期的会话先归档再删除，保留期内的不动", async
   assert.ok(store.loadFromDisk(ID));
 });
 
+test("定期清理删除本地副本后清掉 diff 评论文件，未到期会话的评论保留", async () => {
+  const { dataDir, archiveDir, sdkDir } = setup();
+  writeSession(dataDir, makeSession(ID, "2026-01-01T00:00:00.000Z"));
+  writeSession(dataDir, makeSession(ID2, "2026-03-04T00:00:00.000Z"));
+  writeSdkFiles(sdkDir, ID);
+  const commentsDir = path.join(dataDir, "diff-comments");
+  fs.mkdirSync(commentsDir, { recursive: true });
+  const removedComments = path.join(commentsDir, `${ID}.json`);
+  const keptComments = path.join(commentsDir, `${ID2}.json`);
+  fs.writeFileSync(removedComments, "[]\n");
+  fs.writeFileSync(keptComments, "[]\n");
+
+  const store = new Store(dataDir);
+  const archive = new ArchiveStore({
+    dir: archiveDir,
+    instance: "main",
+    dataDir,
+    retentionDays: 30,
+    sdkConfigDir: sdkDir,
+  });
+  const runtime = { stop: async () => {} } as unknown as Runtime;
+  const sweeper = new ArchiveSweeper({
+    archive,
+    store,
+    runtime,
+    retentionDays: 30,
+    dataDir,
+    now: () => new Date("2026-03-05T00:00:00.000Z"),
+  });
+
+  const result = await sweeper.run();
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.removed, 1);
+  assert.equal(fs.existsSync(removedComments), false);
+  // 未到期、还在使用的会话评论不能删。
+  assert.ok(fs.existsSync(keptComments));
+});
+
 test("到期前先做快照，到期后复用快照删除且不覆盖已归档的 transcript", async () => {
   const { dataDir, archiveDir, sdkDir } = setup();
   const updated = "2026-02-08T00:00:00.000Z";
@@ -431,6 +469,71 @@ test("恢复 git 会话会重建 worktree", async () => {
     });
     assert.ok(store.loadFromDisk(ID));
     assert.ok(fs.existsSync(path.join(cwd, ".git")));
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("恢复 git 会话会重跑 worktree 准备（include/共享目录/setup）", async () => {
+  const { dataDir, archiveDir, sdkDir } = setup();
+  const base = tempDir("rc-archive-git-prep-");
+  try {
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(repo, { recursive: true });
+    execFileSync("git", ["init", "-q", repo]);
+    execFileSync("git", ["-C", repo, "config", "user.name", "test"]);
+    execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+    fs.writeFileSync(path.join(repo, ".gitignore"), ".env\n.cache/\n");
+    fs.writeFileSync(path.join(repo, ".env"), "SECRET=1\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "tracked\n");
+    fs.mkdirSync(path.join(repo, ".cache"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".cache", "keep.txt"), "cache\n");
+    execFileSync("git", ["-C", repo, "add", "."]);
+    execFileSync("git", ["-C", repo, "commit", "-qm", "init"]);
+
+    const cwd = path.join(base, "worktrees", "p1", ID);
+    const session = makeSession(ID, undefined, {
+      projectPath: repo,
+      cwd,
+      git: true,
+      branch: `qubius/${ID}`,
+    });
+    writeSession(dataDir, session);
+    const store = new Store(dataDir);
+    const archive = new ArchiveStore({
+      dir: archiveDir,
+      instance: "main",
+      dataDir,
+      retentionDays: 30,
+      sdkConfigDir: sdkDir,
+      projects: [{
+        id: "p1",
+        name: "项目",
+        path: repo,
+        permission: "acceptEdits",
+        isolated: false,
+        worktree: {
+          include: [".env"],
+          sharedDirectories: [".cache"],
+          setup: "node -e \"require('fs').writeFileSync('prepared.txt','prepared')\"",
+          setupTimeoutSeconds: 30,
+        },
+      }],
+    });
+    await archive.archive(session);
+    store.remove(ID);
+    await archive.restore(ID, {
+      projectId: "p1",
+      projectPath: repo,
+      cwd,
+      git: true,
+      branch: `qubius/${ID}`,
+    });
+    assert.ok(store.loadFromDisk(ID));
+    assert.ok(fs.existsSync(path.join(cwd, ".git")));
+    assert.equal(fs.readFileSync(path.join(cwd, ".env"), "utf8"), "SECRET=1\n");
+    assert.ok(fs.lstatSync(path.join(cwd, ".cache")).isSymbolicLink());
+    assert.equal(fs.readFileSync(path.join(cwd, "prepared.txt"), "utf8"), "prepared");
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

@@ -4,6 +4,19 @@ import path from "node:path";
 import { parse } from "yaml";
 import { isPermission, type PermissionLevel } from "./permissions.js";
 import { mergeProjectLists, readProjectsFile, resolveProjectsFile } from "./project-source.js";
+import { normalizeWorktreeConfig } from "./worktree-prep.js";
+
+/** 新 worktree 的准备工作：复制 gitignored 文件、链接共享目录、执行 setup。 */
+export interface WorktreeConfig {
+  /** 在 worktree 目录里执行的 shell 命令；不配置则不执行。 */
+  setup?: string;
+  /** setup 超时秒数，默认 300，范围 1..3600。 */
+  setupTimeoutSeconds: number;
+  /** 与主检出共享的 gitignored 目录，在 worktree 里建立链接。 */
+  sharedDirectories: string[];
+  /** 从主检出复制到 worktree 的 gitignored 文件/目录。 */
+  include: string[];
+}
 
 export interface ProjectConfig {
   id: string;
@@ -12,6 +25,8 @@ export interface ProjectConfig {
   permission: PermissionLevel;
   /** 非 git 目录下每个对话使用独立子目录，可并行；git 项目仍走 worktree。 */
   isolated: boolean;
+  /** git 项目的 worktree 准备配置。 */
+  worktree?: WorktreeConfig;
   /** 服务端内置项目（普通对话），不从配置文件读取。 */
   builtin?: boolean;
 }
@@ -513,6 +528,14 @@ function normalizeProjects(value: unknown, configDir: string): ProjectConfig[] {
     if (typeof isolated !== "boolean") {
       throw new Error(`projects[${index}].isolated 必须是 true 或 false`);
     }
-    return { id, name, path: path.resolve(configDir, projectPath), permission, isolated };
+    const worktree = normalizeWorktreeConfig(record.worktree, `projects[${index}].worktree`);
+    return {
+      id,
+      name,
+      path: path.resolve(configDir, projectPath),
+      permission,
+      isolated,
+      ...(worktree ? { worktree } : {}),
+    };
   });
 }

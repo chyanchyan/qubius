@@ -1072,6 +1072,18 @@ function yamlScalar(value: unknown): string {
   return yamlString(JSON.stringify(value));
 }
 
+/** 旧版本把 worktree 写成了 JSON 字符串；读回时尽量还原成映射。 */
+function parseJsonObject(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function renderProjectsYaml(projects: DeployProject[]): string {
   if (projects.length === 0) return "";
   const lines: string[] = [];
@@ -1084,6 +1096,16 @@ export function renderProjectsYaml(projects: DeployProject[]): string {
     for (const [key, value] of Object.entries(project.extras ?? {})) {
       if (PROJECT_MODELED_KEYS.has(key)) continue;
       const safeKey = /^[A-Za-z0-9_.-]+$/.test(key) ? key : yamlString(key);
+      // worktree 是服务端认识的嵌套配置，必须写成未加引号的单行 YAML 映射
+      //（JSON 是 YAML 子集），否则会变成字符串、让服务端整份项目文件解析失败。
+      // 单行形式同时满足 install.sh 只允许四空格续行的限制；空对象也按映射输出。
+      if (key === "worktree") {
+        const nested = typeof value === "string" ? parseJsonObject(value) : value;
+        if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
+          lines.push(`    ${safeKey}: ${JSON.stringify(nested)}`);
+          continue;
+        }
+      }
       lines.push(`    ${safeKey}: ${yamlScalar(value)}`);
     }
   }

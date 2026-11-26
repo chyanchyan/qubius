@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { ProjectConfig } from "./config.js";
+import type { ProjectConfig, WorktreeConfig } from "./config.js";
 import { isPermission } from "./permissions.js";
+import { normalizeWorktreeConfig } from "./worktree-prep.js";
 
 /**
  * 额外项目文件（默认 `<configDir>/projects.yaml`）的读写。
@@ -71,7 +72,20 @@ export function readProjectsFile(file: string, configDir: string): ProjectsFileR
     if (typeof isolated !== "boolean") {
       return { projects: [], error: `${at} isolated 必须是 true 或 false` };
     }
-    projects.push({ id, name, path: path.resolve(configDir, rawPath), permission, isolated });
+    let worktree: WorktreeConfig | undefined;
+    try {
+      worktree = normalizeWorktreeConfig(record.worktree, `${at} worktree`);
+    } catch (error) {
+      return { projects: [], error: messageOf(error) };
+    }
+    projects.push({
+      id,
+      name,
+      path: path.resolve(configDir, rawPath),
+      permission,
+      isolated,
+      ...(worktree ? { worktree } : {}),
+    });
   }
   return { projects };
 }
@@ -97,6 +111,18 @@ export function renderProjectEntry(project: ProjectConfig): string {
     `    permission: ${project.permission}`,
   ];
   if (project.isolated) lines.push("    isolated: true");
+  if (project.worktree) {
+    const { setup, setupTimeoutSeconds, sharedDirectories, include } = project.worktree;
+    const worktree = {
+      ...(setup ? { setup } : {}),
+      setupTimeoutSeconds,
+      ...(sharedDirectories.length ? { sharedDirectories } : {}),
+      ...(include.length ? { include } : {}),
+    };
+    // deploy/install.sh 只允许条目内四空格续行，嵌套块状映射会被拒绝；
+    // 这里写成 YAML 兼容的 JSON 流式映射，保持单行四空格续行。
+    lines.push(`    worktree: ${JSON.stringify(worktree)}`);
+  }
   return `${lines.join("\n")}\n`;
 }
 

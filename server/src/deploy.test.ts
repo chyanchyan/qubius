@@ -27,6 +27,7 @@ import {
   type DeployForm,
   type DeployProject,
 } from "./deploy.js";
+import { readProjectsFile as readProjectSourceFile } from "./project-source.js";
 
 function tmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "qubius-deploy-"));
@@ -1207,5 +1208,109 @@ test("applyDeploy 在 QUBIUS_ENV 缺失时抛 DeployValidationError", () => {
   assert.equal(
     fs.readdirSync(path.join(base, "deploy")).some((name) => name.startsWith("env.bak.")),
     false,
+  );
+});
+
+test("projects YAML 把 worktree 渲染为单行映射而不是字符串", () => {
+  const base = tmp();
+  const worktree = {
+    setup: "npm ci",
+    setupTimeoutSeconds: 120,
+    sharedDirectories: ["node_modules"],
+    include: [".env"],
+  };
+  const projects: DeployProject[] = [
+    {
+      id: "app",
+      name: "App",
+      path: path.join(base, "app"),
+      permission: "acceptEdits",
+      isolated: false,
+      extras: { worktree },
+    },
+    {
+      id: "defaults",
+      name: "Defaults",
+      path: path.join(base, "defaults"),
+      permission: "auto",
+      isolated: false,
+      extras: { worktree: {} },
+    },
+    {
+      id: "plain",
+      name: "Plain",
+      path: path.join(base, "plain"),
+      permission: "auto",
+      isolated: false,
+    },
+  ];
+  const text = renderProjectsYaml(projects);
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    assert.ok(!line.includes("\t"), "不允许制表符");
+    assert.ok(/^  - /.test(line) || /^    [^ ]/.test(line), `缩进不合法：${line}`);
+  }
+  // 未加引号的单行 YAML/JSON 映射；空对象也保持映射形态。
+  assert.match(
+    text,
+    /^    worktree: \{"setup":"npm ci","setupTimeoutSeconds":120,"sharedDirectories":\["node_modules"\],"include":\["\.env"\]\}$/m,
+  );
+  assert.match(text, /^    worktree: \{\}$/m);
+  assert.equal((text.match(/worktree:/g) ?? []).length, 2);
+
+  // deploy 自己读回时 worktree 仍是对象，不会变成字符串。
+  const cfgDir = tmp();
+  const file = path.join(cfgDir, "projects.yaml");
+  fs.writeFileSync(file, text);
+  fs.mkdirSync(path.join(cfgDir, "cfg"), { recursive: true });
+  fs.writeFileSync(path.join(cfgDir, "cfg", "env"), `QUBIUS_PROJECTS_FILE=${file}\n`);
+  const read = deriveDeployForm({ HOME: cfgDir, QUBIUS_CONFIG_DIR: path.join(cfgDir, "cfg") }).form.projects;
+  const byId = new Map(read.map((project) => [project.id, project]));
+  assert.deepEqual(byId.get("app")?.extras?.worktree, worktree);
+  assert.deepEqual(byId.get("defaults")?.extras?.worktree, {});
+  assert.equal(byId.get("plain")?.extras, undefined);
+
+  // 服务端 project-source 读取：结构不丢，空映射补默认值。
+  const parsed = readProjectSourceFile(file, cfgDir);
+  assert.equal(parsed.error, undefined);
+  assert.deepEqual(parsed.projects.find((project) => project.id === "app")?.worktree, worktree);
+  assert.deepEqual(parsed.projects.find((project) => project.id === "defaults")?.worktree, {
+    setup: undefined,
+    setupTimeoutSeconds: 300,
+    sharedDirectories: [],
+    include: [],
+  });
+  assert.equal(parsed.projects.find((project) => project.id === "plain")?.worktree, undefined);
+
+  // 旧版本写成 JSON 字符串的 worktree 也能在重写时恢复成映射。
+  const legacy = renderProjectsYaml([{
+    id: "legacy",
+    name: "Legacy",
+    path: path.join(base, "legacy"),
+    permission: "auto",
+    isolated: false,
+    extras: { worktree: JSON.stringify(worktree) },
+  }]);
+  assert.match(legacy, /^    worktree: \{"setup":"npm ci"/m);
+  const legacyParsed = readProjectSourceFile(
+    (() => {
+      const legacyFile = path.join(tmp(), "projects.yaml");
+      fs.writeFileSync(legacyFile, legacy);
+      return legacyFile;
+    })(),
+    base,
+  );
+  assert.deepEqual(legacyParsed.projects[0]?.worktree, worktree);
+
+  // 没有 worktree 的项目输出与以前完全一致。
+  assert.equal(
+    renderProjectsYaml([{
+      id: "plain",
+      name: "Plain",
+      path: "/srv/plain",
+      permission: "acceptEdits",
+      isolated: false,
+    }]),
+    "  - id: 'plain'\n    name: 'Plain'\n    path: '/srv/plain'\n    permission: acceptEdits\n",
   );
 });

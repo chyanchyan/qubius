@@ -1,3 +1,7 @@
+/* 可评论 diff 的样式单独放一个文件，在 Thread.css 里 @import 进来：
+   Thread.tsx 会被 node:test 直接 import，DiffReview.tsx 不能自己 import .css。 */
+@import "./DiffReview.css";
+
 /* 对话区补充样式。由 Composer.tsx 引入（Thread.tsx 会被 node:test 直接
    import，而 Node 的 tsx 加载器不认识 .css），全站只加载一次。 */
 

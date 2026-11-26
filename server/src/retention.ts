@@ -1,4 +1,5 @@
 import type { ArchiveStore } from "./archive.js";
+import { removeDiffComments } from "./diff-comments.js";
 import type { Runtime } from "./runtime.js";
 import { removeSessionWorkspace } from "./session-cleanup.js";
 import { sessionSdkIds } from "./sdk-files.js";
@@ -45,6 +46,8 @@ export class ArchiveSweeper {
       store: Store;
       runtime: Runtime;
       retentionDays: number;
+      /** 当前实例的 dataDir；用于清理会话的 diff 评论文件。 */
+      dataDir?: string;
       now?: () => Date;
       log?: (message: string, error?: unknown) => void;
     },
@@ -182,6 +185,13 @@ export class ArchiveSweeper {
           // 用异步版本复用本轮 sweep 建好的目录索引。
           await this.deps.archive.removeSdkIdsAsync(sessionSdkIds(session));
           await removeSessionWorkspace(session);
+          // 本机副本删除成功后再移除评论文件，避免孤儿文件长期积累。
+          // 失败只记日志，不影响本轮清理结果。
+          const dataDir = this.deps.dataDir;
+          if (dataDir) {
+            await removeDiffComments(dataDir, session.id)
+              .catch((error) => this.log(`清理会话评论失败 ${session.id}`, error));
+          }
           this.deps.store.remove(session.id);
           // 清理成功：手动删除失败留下的「待清理」标记不再需要（尽力而为）。
           await this.deps.archive.clearPendingDelete(session.id).catch(() => undefined);

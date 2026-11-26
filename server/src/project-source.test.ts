@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appendProjectToFile, removeProjectFromFile } from "./project-source.js";
+import { appendProjectToFile, readProjectsFile, removeProjectFromFile } from "./project-source.js";
 
 function tempFile(content: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-project-source-"));
@@ -81,4 +81,70 @@ test("append/remove 往返后文件仍能被部署校验的缩进规则接受", 
     assert.ok(/^  - /.test(line) || /^    [^ ]/.test(line), `缩进不合法：${line}`);
     assert.ok(!line.includes("\t"));
   }
+});
+
+test("projects.yaml 解析 worktree 配置，非法配置整体报错", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-project-source-"));
+  const file = path.join(dir, "projects.yaml");
+  fs.writeFileSync(
+    file,
+    [
+      "  - id: app",
+      "    name: App",
+      "    path: ./app",
+      "    worktree:",
+      "      setup: npm ci",
+      "      setupTimeoutSeconds: 45",
+      "      sharedDirectories: [node_modules]",
+      "      include: [.env]",
+      "",
+    ].join("\n"),
+  );
+  const result = readProjectsFile(file, dir);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.projects[0]?.worktree, {
+    setup: "npm ci",
+    setupTimeoutSeconds: 45,
+    sharedDirectories: ["node_modules"],
+    include: [".env"],
+  });
+
+  fs.writeFileSync(
+    file,
+    ["  - id: app", "    name: App", "    path: ./app", "    worktree:", "      include: ['../x']", ""].join("\n"),
+  );
+  const invalid = readProjectsFile(file, dir);
+  assert.deepEqual(invalid.projects, []);
+  assert.match(invalid.error ?? "", /不能包含 \.\./);
+});
+
+test("appendProjectToFile 渲染 worktree 且仍符合 projects.yaml 的四空格续行规则", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-project-source-"));
+  const file = path.join(dir, "projects.yaml");
+  appendProjectToFile(file, {
+    id: "app",
+    name: "App",
+    path: "/srv/app",
+    permission: "acceptEdits",
+    isolated: false,
+    worktree: {
+      setup: "npm ci && npm run build",
+      setupTimeoutSeconds: 120,
+      sharedDirectories: ["node_modules"],
+      include: [".env", ".env.local"],
+    },
+  });
+  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+    if (!line) continue;
+    assert.ok(/^  - /.test(line) || /^    [^ ]/.test(line), `缩进不合法：${line}`);
+    assert.ok(!line.includes("\t"));
+  }
+  const parsed = readProjectsFile(file, dir);
+  assert.equal(parsed.error, undefined);
+  assert.deepEqual(parsed.projects[0]?.worktree, {
+    setup: "npm ci && npm run build",
+    setupTimeoutSeconds: 120,
+    sharedDirectories: ["node_modules"],
+    include: [".env", ".env.local"],
+  });
 });

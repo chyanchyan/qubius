@@ -59,6 +59,7 @@ import { splitTextAttachments } from "../text-attachments";
 import { pinnedPushOffset } from "../sticky-push";
 import { canOfferMessageActions, canSubmitMessageEdit, rewindCheckboxState } from "../message-actions";
 import { Lightbox, Menu, type LightboxImage } from "../ui";
+import { DiffReview } from "./DiffReview";
 import { useNow } from "../useNow";
 import { subagentMetrics, subagentStats } from "../subagent-meta";
 import { stripAgentTag } from "../workflow-progress";
@@ -1630,7 +1631,7 @@ const ToolRow = memo(function ToolRow({
         <>
           <pre className="tool-body">{formatToolInput(text)}</pre>
           {result && <pre className="tool-body tool-result">{result}</pre>}
-          {patch && <Patch text={patch} />}
+          {patch && <Patch text={patch} sessionId={sessionId} />}
         </>
       )}
     </details>
@@ -1648,6 +1649,7 @@ export function DiffDock({
   diff,
   patch,
   cwd,
+  sessionId,
   loaded = false,
   loading = false,
   onToggle,
@@ -1655,6 +1657,8 @@ export function DiffDock({
   diff: string;
   patch: string;
   cwd: string;
+  /** 当前会话 id；行级评论和工具行“转到后台”需要。 */
+  sessionId?: string;
   /** diff 是否已经加载过；未加载时只显示占位，展开才触发加载。 */
   loaded?: boolean;
   loading?: boolean;
@@ -1679,6 +1683,7 @@ export function DiffDock({
         text={loading ? "正在读取改动…" : loaded ? info.body : "展开后读取改动"}
         tone={patch ? "ok" : undefined}
         patch={patch}
+        sessionId={sessionId}
         onToggle={onToggle}
       />
     </div>
@@ -1997,9 +2002,17 @@ export function splitPatch(text: string): PatchFile[] {
   return files;
 }
 
+/* 有会话 id 时交给可评论的 DiffReview；没有时沿用只读的拆文件渲染。
+   拆开成两个 memo 组件，避免 DiffReview 分支也跑一遍 splitPatch。 */
+const Patch = memo(function Patch({ text, sessionId }: { text: string; sessionId?: string }) {
+  return sessionId
+    ? <DiffReview sessionId={sessionId} text={text} />
+    : <PlainPatch text={text} />;
+});
+
 /* diff 可能很大，且按行生成大量节点；文本不变时跳过重渲染。每个文件一个
    details，summary 显示文件名与 +/- 行数；单文件时默认展开。 */
-const Patch = memo(function Patch({ text }: { text: string }) {
+const PlainPatch = memo(function PlainPatch({ text }: { text: string }) {
   const files = useMemo(() => splitPatch(text), [text]);
   return (
     <div className="patch-files">

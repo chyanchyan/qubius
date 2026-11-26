@@ -819,6 +819,8 @@ export function createSession(projectId: string, body: {
   images?: OutgoingImage[];
   /** 这一轮使用的工作流；缺省或空串表示普通对话。 */
   workflow?: WorkflowSkill;
+  /** 显式标题；多模型对比等批量创建时用来区分同一批会话。 */
+  title?: string;
 }, signal?: AbortSignal): Promise<{ session: Session }> {
   return request(`/api/projects/${projectId}/sessions`, { method: "POST", body: JSON.stringify(body) }, signal, UPLOAD_TIMEOUT_MS);
 }

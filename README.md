@@ -11,6 +11,11 @@ qubius 是一个自托管的 Claude Agent 网页控制台。它运行在你自�
 - **并行对话**：多个项目、多个对话同时运行，超出并发上限的自动排队。每个对话基于 [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)，主 agent 可以把子任务交给并行的子 agent。
 - **排队消息**：对话运行中发送的消息排进输入框上方的队列，可以逐条「现在发送」、编辑或删除；`Ctrl+Enter`（macOS 上 `Cmd+Enter`）插话，触摸端长按发送按钮等同插话。
 - **每个对话一个 git worktree**：git 项目的每个对话都在独立的 worktree 和分支（`qubius/<对话 id>`）里工作，互不干扰；页面上可以直接查看改动、提交和推送。
+- **worktree 自动准备**：git 项目可以配置 setup 命令、共享目录（例如 `node_modules`）和要复制进新 worktree 的 `.env` 等文件；仓库根也可以放 `.worktreeinclude`。新建、分叉和归档恢复时自动准备，失败就清理掉半成品 worktree。
+- **行级 Diff 评论**：在「Diff」面板的任意改动行上留评论，标记解决后一次性把未解决意见发给 agent 修改。
+- **PR / MR 与检查**：本机已登录 `gh` / `glab` 时，可以直接从 Git 面板创建 GitHub PR 或 GitLab MR，查看检查和合并状态，监视变化，并把失败检查交给 agent 处理。
+- **多模型并行对比**：同一个 prompt 可以选多个接口/模型；git 项目各开一个独立 worktree，非 git/isolated 项目各开一个独立目录，对比状态、成本和改动后再决定保留哪个。
+- **CLI 与 MCP**：`node tools/qubius.mjs` 可以在脚本里创建对话、发消息、等待结果；`node tools/qubius-mcp.mjs` 把 qubius 作为 MCP server 暴露给其他 agent。
 - **消息回滚与分叉**：每条用户消息的「⋯」菜单可以回滚到它之前（可同时按检查点恢复 agent 用编辑工具改过的文件）、编辑后重新发送，或分叉出一个保留这条消息及之前内容的新对话；git 项目分叉时会新建独立 worktree 和分支。
 - **状态一目了然**：排队、进行中、等待确认、本轮完成、失败、已停止。「总览」页按状态汇总所有项目的对话，等待确认的问题可以直接在列表里回答。
 - **多套模型接口**：在设置页保存多套接口地址、API key 和模型名，每个对话可以随时切换接口、模型和 effort（`low` 到 `max`）。
@@ -46,6 +51,7 @@ Claude Agent SDK ──► 每个对话一个 git worktree（或独立目录）
 - **多用户机器或通过代理访问时，开启访问令牌**（`QUBIUS_AUTH=1`，见下文）。它能挡住其他本地用户和配置失误导致的暴露。
 - **用不到浏览器命令行就关掉它**（`terminal: false` 或 `QUBIUS_TERMINAL=0`）。
 - **API key 不要写进仓库文件。** 在页面「设置」里填写，它会保存在 `dataDir/secrets.json`（权限 `0600`），接口只返回「是否已配置」，不会回显 key。
+- **worktree 准备内容来自仓库和你自己的配置。** `.worktreeinclude` 由仓库控制，可能把主检出里被 gitignore 的 `.env` 等文件复制进 agent 的工作区；`worktree.setup` 会在新 worktree 里执行命令。只对可信仓库使用这些配置。
 
 ## 快速开始
 
@@ -54,6 +60,7 @@ Claude Agent SDK ──► 每个对话一个 git worktree（或独立目录）
 - Node.js 22 或更高版本，以及 git。
 - `python3`、`make` 和 C++ 编译器（`g++` 或 `clang++`）：`npm install` 需要用它们编译「命令行」功能使用的原生模块 `node-pty`（Windows 上如果没有预编译包，需要 Visual Studio Build Tools）。
 - 一个 Anthropic API key，或者兼容 Anthropic API 的接口地址和 key。
+- 可选：`gh`（GitHub PR）或 `glab`（GitLab MR），并在这台机器上登录。未安装时只影响 PR/MR 面板，其他功能不受影响。
 
 Linux 的部署脚本面向 bash 和 systemd。Windows 不需要 bash/systemd：部署页会用 Node 脚本（`deploy/deploy-job.mjs`）生成配置、构建并重启服务，见 [Windows 图形化部署](#windows-图形化部署)。本地开发用的 `npm run dev:all` 两个平台都能运行。
 
@@ -247,6 +254,11 @@ code.example.com {
 - **切换模型**：同一个对话可以随时切换接口、模型和 effort，从下一轮开始生效，上下文保留。
 - **工作流**：在输入区切换，或者在消息末尾写上 `prl`、`ser`、`plan`。输入框上方会显示各单元的开发和评审进度。
 - **Git**：在详情页的「Git」面板查看改动、提交或推送。只能操作对话自己的分支，而且要等这一轮结束。
+- **worktree 准备**：在项目配置里写 `worktree.setup`、`worktree.sharedDirectories` 和 `worktree.include`，或者在仓库根放 `.worktreeinclude`；新建 git 对话后会自动执行。路径必须是仓库内的相对路径，只处理被 gitignore 的路径；setup 失败会让创建失败并删除新 worktree。
+- **Diff 评论**：展开「Diff」面板后，在改动行上点评论按钮留意见；可以标记解决或删除。点「发送给 agent」会把所有未解决评论拼成一条带文件和行号的 prompt。
+- **PR / MR**：在 Git 面板创建 PR/MR 会先推送当前分支（普通 push，不 force），再调用本机 `gh` / `glab`。开启「监视」后页面可见时每 30 秒刷新一次，检查失败时可以把摘要发给 agent。
+- **多模型对比**：输入区下方点「多模型」，选 2–4 个接口/模型组合；git 项目每个组合各建一个独立 worktree，非 git/isolated 项目各建一个独立目录。创建完成后可以在对比面板里看状态、成本和改动，记录保存在服务端，跨设备可见。
+- **CLI / MCP**：`node tools/qubius.mjs session create --project <id> --prompt "..."` 可从脚本建对话；`QUBIUS_URL` 和 `QUBIUS_TOKEN` 指定服务和令牌。MCP 用 `node tools/qubius-mcp.mjs` 直接启动（不要用 `npm run` 启动，npm 的输出会污染 stdio）。
 - **定时任务**：在项目页设置 prompt、模型和间隔（5 分钟到 7 天），每次到点会新建一个普通对话来执行。
 - **命令行**：从顶栏进入，每个浏览器连接对应一个独立的 shell，最多同时 4 个。不需要时在 `config.yaml` 里写 `terminal: false`（或设置 `QUBIUS_TERMINAL=0`），入口和接口都会关闭。
 - **推送通知**：在「设置 → 推送通知」里开启。iPhone 需要 iOS 16.4 或更高版本，并且要先「添加到主屏幕」，再从主屏幕图标打开。
@@ -257,6 +269,7 @@ code.example.com {
 ```bash
 npm test              # 服务端测试
 npm run test:deploy   # 部署脚本测试（需要 bash）
+npm run test:tools    # CLI / MCP 工具测试
 npm run build         # 构建服务端和前端
 ```
 
@@ -268,7 +281,7 @@ npm run build         # 构建服务端和前端
 | `web/` | React 前端（Vite） |
 | `deploy/` | 安装、构建、启停脚本，systemd 和 logrotate 模板，局域网代理 |
 | `docs/` | 参考手册和部署文档 |
-| `tools/` | 开发辅助脚本 |
+| `tools/` | 开发辅助脚本、`qubius` CLI 和 MCP server |
 
 ## 文档
 

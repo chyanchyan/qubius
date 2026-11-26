@@ -12,6 +12,7 @@
 - `terminal`：浏览器「命令行」页的开关，默认开启。写 `terminal: false`（或环境变量 `QUBIUS_TERMINAL=0`）后不创建 PTY，顶栏不显示入口，`/api/terminal` 返回 404；配置文件里的值优先于环境变量。
 - `dataDir` 放会话、worktree、普通对话目录和密钥。默认是 `<configDir>/data`，即 `<checkout>/.qubius/data`（副实例在它自己的 checkout 里）；quickstart 和部署向导会把实际路径写进 env，重新部署不会再切到别的目录。部署时如果新数据目录与当前 `config.yaml` 不同、旧目录里还有会话，服务端会返回 409 要求显式确认，避免“重新部署后会话全没了”。
 - `projects` 是白名单，可省略，页面不能提交别的路径。每个项目可写 `permission`：`default`（改动和命令需确认）、`acceptEdits`（工作区内自动通过，默认）、`plan`（只规划）、`auto`（模型判断不了时再确认）、`bypassPermissions`（全部允许）。**`acceptEdits` 只是降低误操作的启发式规则，不是沙箱**：工作区内的 `npm` / `make` / `curl` / `git -c ...` 等命令会直接执行，agent 也能先改 `package.json`、`Makefile` 再执行；对不可信仓库请改成 `default`，或用专用系统用户 / 容器运行。页面改过的级别存在 `dataDir/project-permissions.json`，优先于配置文件。非 git 目录可写 `isolated: true`，每个对话使用 `<path>/<对话 id>` 独立子目录，不建 worktree，可并行。
+- `projects[].worktree`：git 项目的 worktree 准备。`include` 把主检出里存在且被 `.gitignore` 忽略的文件/目录复制到新 worktree（tracked、不存在或未忽略的跳过并记 warning）；仓库根的 `.worktreeinclude` 每行一个相对路径，空行和 `#` 注释忽略，会和 `include` 合并。`sharedDirectories` 为已存在且被忽略的目录在 worktree 同路径建立符号链接（Windows 用 junction），不复制大目录。`setup` 在 worktree 目录里用 shell 执行，默认超时 300 秒（`setupTimeoutSeconds`，范围 1–3600）；非 0 退出或超时会让对话创建失败并清理 worktree。所有路径必须是仓库内的相对路径，绝对路径和 `..` 会被拒绝。`.worktreeinclude` 由仓库内容控制，可能把主检出的 gitignored 文件复制进 agent 工作区；只对可信仓库使用。新建、分叉以及归档恢复时真正新建的 git worktree 都会执行准备；已经存在的目录不会重复执行。
 - 主页的「管理项目」可以在运行期添加或删除本机已有的 git 仓库：服务端校验目录后写入额外项目文件（`QUBIUS_PROJECTS_FILE`，未配置时是 `<configDir>/projects.yaml`），项目列表立即更新；之后手工修改该文件也会热加载，都不需要重启实例。也可以「新建仓库」：填仓库名称和母目录（不含仓库名），服务端在 `<母目录>/<仓库名称>` 建目录、`git init -b main` 并提交一个空初始提交（保证能直接建会话 worktree），再写入项目文件。仓库名称可按规则压成项目 id（小写字母、数字、连字符），压不出时（例如纯中文）生成 `repo-<8 位十六进制>` 兜底 id。母目录必须已存在，目标目录不能已存在。额外文件里的同 id 项目覆盖 `config.yaml` 里的定义；`config.yaml` 自带的项目和内置「普通对话」只能在配置文件里改，不能在这里删除。
 - 「普通对话」是内置项目 `chat`，始终排在项目列表第一位，目录为 `<dataDir>/chat`，每个对话在 `<dataDir>/chat/<对话 id>` 下运行，归档时只删该子目录。自己定义 `id: chat` 会覆盖内置入口。
 - `maxConcurrent`：同时进行的对话数，默认 4，超出排队。这里只作为设置文件的初始默认值；之后在页面「设置」里改「并发上限」，保存后立即生效，不需要重启或重新部署。
@@ -105,6 +106,9 @@ agent 用 Bash 的 `run_in_background` 启动下载、安装等耗时命令后�
 - `POST /api/sessions/<id>/queue/<promptId>/send`：现在发送，提前放行这条排队消息。
 - `DELETE /api/sessions/<id>/queue/<promptId>`：删除未被取走的排队消息（队列和对话记录一起移除）。
 - `GET /api/sessions/<id>/git`、`POST /api/sessions/<id>/git`（`commit` / `commit-push` / `push`）。
+- `GET|POST /api/sessions/<id>/diff-comments`：读取或新建 diff 行级评论；`PATCH|DELETE /api/sessions/<id>/diff-comments/<commentId>` 修改/删除单条，`DELETE /api/sessions/<id>/diff-comments` 清空。评论存在 `<dataDir>/diff-comments/<对话 id>.json`。
+- `GET|POST /api/sessions/<id>/pull-request`：读取或创建当前分支的 GitHub PR / GitLab MR。依赖本机已登录的 `gh` / `glab`；创建前会校验会话分支并 `git push -u origin HEAD`（不 force），body `{ title, body, base? }`。
+- `GET|POST /api/projects/<id>/multi-model-groups`：读取或保存多模型对比分组；`DELETE /api/projects/<id>/multi-model-groups/<groupId>` 删除一组。分组存在 `<dataDir>/multi-model-groups.json`，每个项目最多 20 组。
 - `GET /api/sessions/<id>/tasks/<taskId>/output`：后台任务输出尾部，返回 `output` / `totalBytes` / `truncated`；会话没有活跃进程时 409。
 - `POST /api/sessions/<id>/tasks/background`：body `{ toolUseId }`，把正在前台运行的 Bash 转到后台，返回 `{ ok, backgrounded }`。
 - `POST /api/sessions/<id>/tasks/<taskId>/stop`：停止后台任务，返回 `{ ok }`。
@@ -212,6 +216,18 @@ git 项目的每个对话是独立分支（新会话 `qubius/<对话 id>`，旧�
 - 从主屏幕「独立网页」打开时语音输入不可用，两边的推送订阅互不影响。
 - 同一对话的推送用 `tag` 互相替换，等待确认和完成/失败共用一个 tag，后到的替换前一条。
 - 接口：`GET /api/push`、`POST /api/push/subscriptions`、`DELETE /api/push/subscriptions`（`{ endpoint }`）、`POST /api/push/test`。浏览器返回 404/410 的失效订阅自动删除。
+
+### Diff 评论、PR/MR 与多模型对比
+
+- **Diff 评论**：详情页「Diff」面板按文件/行留言，可以标记解决、编辑或删除；每个会话最多 200 条，正文最多 2000 字。点「发送给 agent」会把所有未解决评论拼成一条带文件和行号的 prompt 发给当前对话，不会自动把评论标记为已解决。评论存在 `<dataDir>/diff-comments/<对话 id>.json`；删除会话或归档清理本地副本时会一并删除。
+- **PR/MR**：Git 面板使用本机已登录的 `gh`（GitHub）或 `glab`（GitLab），qubius 不保存托管平台 token。创建前会先校验 HEAD 是会话分支（`qubius/`、`qoder/` 或 `remote-coder/`），再普通推送（不 force）；面板显示 state、mergeable 和 checks。GitHub 返回检查明细；GitLab 从 `head_pipeline`/`pipeline` 读取 pipeline 状态，没有 pipeline 时 checks 为空。开启「监视」后，页面可见时每 30 秒刷新一次，状态或检查变化时提示；失败检查可以一键把摘要发给 agent。CLI 未安装/未登录时只影响这个面板。
+- **多模型对比**：输入区下方「多模型」可以选 2–4 个接口/模型/effort 组合；git 项目每个组合创建一个普通对话（各自独立 worktree），非 git/isolated 项目各自独立目录。只有全部创建成功才清空草稿。对比记录存在服务端 `<dataDir>/multi-model-groups.json`，每个项目最多 20 组，跨设备可见；对比面板里的状态和成本通过 `GET /api/projects/<id>/sessions` 和 `GET /api/usage` 读取。
+
+### CLI 与 MCP
+
+- CLI：`node tools/qubius.mjs`。支持 `project list`、`session list/show/create/send/wait/stop`、`schedule list/run`；`--json` 输出 JSON，`--prompt -` 或文本参数 `-` 从 stdin 读。服务地址和令牌用 `QUBIUS_URL` / `QUBIUS_TOKEN`（也支持 `QUBIUS_AUTH_TOKEN`、`QUBIUS_TOKEN_FILE`）。
+- `session wait` 每 2 秒轮询一次，默认 600 秒超时；`completed` 退出 0，`needs_input` 退出 2，超时退出 3，失败/停止/其它错误退出 1。
+- MCP：`node tools/qubius-mcp.mjs` 是 stdio MCP server，提供 `qubius_project_list`、`qubius_session_list/create/send/wait/show` 工具。请直接用 `node` 启动；通过 `npm run qubius:mcp` 启动时，npm 的条幅会写到 stdout，可能污染 MCP 协议流。
 
 ## 归档和保留期
 

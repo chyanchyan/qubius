@@ -14,8 +14,10 @@ import {
   type SdkDirIndex,
   type SdkSessionFile,
 } from "./sdk-files.js";
+import type { ProjectConfig } from "./config.js";
 import { removeRestoredWorkspace, restoreSessionWorkspace } from "./session-cleanup.js";
 import { toSummary } from "./store.js";
+import { prepareWorktree } from "./worktree-prep.js";
 import type { SessionCore, SessionSummary, TranscriptItem } from "./types.js";
 
 const INSTANCE_RE = /^[A-Za-z0-9._-]{1,64}$/;
@@ -43,6 +45,8 @@ export interface ArchiveOptions {
   retentionDays: number;
   /** 测试时可覆盖 Claude 配置目录。 */
   sdkConfigDir?: string;
+  /** 当前配置的项目列表；恢复 git 会话时据此重跑 worktree 准备。 */
+  projects?: ProjectConfig[];
   now?: () => Date;
 }
 
@@ -487,6 +491,18 @@ export class ArchiveStore {
     try {
       // 先重建 cwd，再写会话文件：失败时不会留下一个指向不存在目录的会话。
       createdWorkspace = await restoreSessionWorkspace(restored);
+      // 重建出来的 worktree 是干净 checkout，需要像新建会话时一样重跑准备
+      //（复制 .env、链接共享目录、执行 setup）。只处理本次真正新建的目录；
+      // 已存在的 worktree 不覆盖。找不到项目时跳过（不影响恢复）。
+      if (createdWorkspace && target.git) {
+        const project = this.options.projects?.find((item) => item.id === target.projectId);
+        if (project) {
+          const prep = await prepareWorktree({ project, worktreePath: target.cwd });
+          for (const warning of prep.warnings) console.warn(`[worktree] ${warning}`);
+        } else {
+          console.warn(`[archive] 恢复 ${id} 时找不到项目 ${target.projectId}，跳过 worktree 准备`);
+        }
+      }
       await writeAtomic(destSession, Buffer.from(JSON.stringify(restored), "utf8"));
       // 先清掉同名会话可能残留的图片和 transcript，再按归档恢复。
       await fs.promises.rm(path.join(this.options.dataDir, "images", id), {

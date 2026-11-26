@@ -579,6 +579,22 @@ test("删除 isolated 会话会删掉它自己的目录", async () => {
   }
 });
 
+test("手动删除会话后清掉 diff 评论文件", async () => {
+  const harness = await startHarness();
+  try {
+    createSession(harness, ID2);
+    const commentsFile = path.join(harness.dataDir, "diff-comments", `${ID2}.json`);
+    fs.mkdirSync(path.dirname(commentsFile), { recursive: true });
+    fs.writeFileSync(commentsFile, "[]\n");
+    const deleted = await json(`${harness.url}/api/sessions/${ID2}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.equal(harness.store.get(ID2), undefined);
+    assert.equal(fs.existsSync(commentsFile), false);
+  } finally {
+    await harness.close();
+  }
+});
+
 test("冷备完成后清理失败：归档列表显示待清理，重试只补未完成步骤", {
   skip: typeof process.getuid === "function" && process.getuid() === 0,
 }, async () => {

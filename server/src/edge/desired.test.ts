@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { DEFAULT_LIMITS } from "../config.js";
 import type { DeployForm } from "../deploy.js";
 import { desiredSites } from "./desired.js";
 
@@ -14,6 +15,16 @@ function form(overrides: Partial<DeployForm> = {}): DeployForm {
     secondaryPort: 8790,
     publicHost: "qubius.example.com",
     publicHostSecondary: "co-qubius.example.com",
+    allowedHostsExtra: "",
+    authMode: "auto",
+    authToken: "",
+    terminal: true,
+    maxConcurrent: 4,
+    approvalTimeoutMinutes: 10,
+    limits: { ...DEFAULT_LIMITS },
+    lanEnabled: false,
+    lanAuthUser: "qubius",
+    lanAuthPassword: "",
     lanHost: "",
     configDir: "/tmp/qubius",
     primaryDir: "/tmp/qubius-run",

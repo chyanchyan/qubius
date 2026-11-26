@@ -16,6 +16,9 @@
     "test:deploy-lib": "node --test deploy/deploy-lib.test.mjs",
     "quickstart": "node deploy/quickstart.mjs",
     "build": "npm run build -w server && npm run build -w web",
-    "start": "npm start -w server"
+    "start": "npm start -w server",
+    "qubius": "node tools/qubius.mjs",
+    "qubius:mcp": "node tools/qubius-mcp.mjs",
+    "test:tools": "node --test tools/*.test.mjs"
   }
 }

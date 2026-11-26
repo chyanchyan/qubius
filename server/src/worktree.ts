@@ -605,8 +605,11 @@ const STATUS_MAX_BUFFER = 10_000_000;
 const MAX_COMMIT_MESSAGE = 500;
 const MAX_GIT_OUTPUT = 4_000;
 
-/** 只允许 commit/push 会话自己的分支；旧 qoder/ 与 remote-coder/ 会话继续可用。 */
-function isSessionBranch(branch: string): boolean {
+/**
+ * 只允许 commit/push 会话自己的分支；旧 qoder/ 与 remote-coder/ 会话继续可用。
+ * 创建 PR/MR 前的 push 也会复用这个判断，避免把用户当前分支（如 main）推走。
+ */
+export function isSessionBranch(branch: string): boolean {
   return hasSessionBranchPrefix(branch);
 }
 

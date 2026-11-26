@@ -31,6 +31,8 @@ import {
 import type { EdgeActionDeps } from "./edge/actions.js";
 import { handleEdgeRequest } from "./edge/http.js";
 import { envFlag } from "./env.js";
+import { handleFeatureRoutes } from "./feature-routes.js";
+import { GitActionBusyError, withGitAction } from "./git-lock.js";
 import { fetchGithubVersion } from "./github-version.js";
 import {
   copyImageRefs,
@@ -80,6 +82,7 @@ import {
   sessionSdkIds,
   SUBAGENT_TASK_ID_RE,
 } from "./sdk-files.js";
+import { removeDiffComments } from "./diff-comments.js";
 import { removeSessionWorkspace } from "./session-cleanup.js";
 import {
   createSkill,
@@ -118,6 +121,7 @@ import {
   removeWorktree,
   sessionBranch,
 } from "./worktree.js";
+import { prepareWorktree } from "./worktree-prep.js";
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
@@ -361,8 +365,6 @@ export function createAppServer(options: {
   const limits = { ...DEFAULT_LIMITS, ...(config.limits ?? {}) };
   const historyPage = limits.historyPage;
   const readJson = (req: IncomingMessage): Promise<unknown> => readJsonBody(req, limits.requestBodyBytes);
-  /** 同一会话的 git 写操作串行化，避免两个提交抢 index.lock。 */
-  const gitActions = new Set<string>();
   /**
    * web/dist 构建产物就绪后不再回退，所以只缓存 true；false 继续重探，
    * 避免服务先启动、之后再构建前端时 /api/health 一直报 false。
@@ -1299,17 +1301,15 @@ export function createAppServer(options: {
       }
       const message = typeof body.message === "string" ? body.message : "";
       if (action !== "push" && !message.trim()) throw new HttpError(400, "提交信息不能为空");
-      if (gitActions.has(id)) throw new HttpError(409, "这个对话已有 git 操作在进行");
-      gitActions.add(id);
       try {
-        sendJson(res, 200, await commitAndPush(session.cwd, {
+        // 与创建 PR/MR 共用同一把锁，避免两个流程同时抢工作区或分支。
+        sendJson(res, 200, await withGitAction(id, () => commitAndPush(session.cwd, {
           message: action === "push" ? "" : message,
           push: action !== "commit",
-        }));
+        })));
       } catch (error) {
+        if (error instanceof GitActionBusyError) throw new HttpError(409, error.message);
         throw new HttpError(400, error instanceof Error ? error.message : "git 操作失败");
-      } finally {
-        gitActions.delete(id);
       }
       return;
     }
@@ -1616,6 +1616,24 @@ export function createAppServer(options: {
         return;
       }
     }
+    // 独立功能路由（diff 行级评论、PR/MR）各自处理自己的路径；返回 null
+    // 表示没匹配到，继续走静态资源或 404。
+    const feature = await handleFeatureRoutes({
+      req,
+      res,
+      url,
+      method,
+      config,
+      store,
+      runtime,
+      settings: ctx.settings,
+      readJson,
+      sendJson,
+    });
+    if (feature) {
+      sendJson(res, feature.status, feature.body);
+      return;
+    }
     if (method === "GET") {
       await serveStatic(req, res, webDist, url.pathname);
       return;
@@ -1690,6 +1708,20 @@ export async function createSession(
     await discardWorkspace();
     throw new HttpError(503, "服务正在退出");
   }
+  // 新 worktree 是干净 checkout：复制 .env 等 gitignored 文件、链接共享目录、
+  // 执行项目配置的 setup。失败时不留下半成品 worktree。
+  if (info.git) {
+    try {
+      const prep = await prepareWorktree({ project, worktreePath: cwd });
+      for (const warning of prep.warnings) console.warn(`[worktree] ${warning}`);
+    } catch (error) {
+      await discardWorkspace();
+      throw new HttpError(
+        500,
+        `worktree 准备失败：${error instanceof Error ? error.message : "未知错误"}`,
+      );
+    }
+  }
   // 调用方（定时任务/API）显式给标题时直接采用；否则先用用户首条消息的原文
   // 做标题，首个成功轮次结束后再由 agent 总结成更贴合实际的标题。
   const explicitTitle = typeof record.title === "string" && record.title.trim()
@@ -1757,7 +1789,7 @@ function archiveHttpError(error: unknown, fallback: string): HttpError {
 
 async function deleteSession(
   id: string,
-  ctx: { store: Store; runtime: Runtime; archive?: ArchiveStore },
+  ctx: { config: AppConfig; store: Store; runtime: Runtime; archive?: ArchiveStore },
 ): Promise<void> {
   const session = requireSession(ctx.store, id);
   if (!tryLockSession(id)) throw new HttpError(409, "对话正在归档或清理，请稍后再试");
@@ -1803,6 +1835,11 @@ async function deleteSession(
         + "目录可能被终端或后台进程占用，请先结束它们，再在归档面板点「重试清理」",
       );
     }
+    // 评论文件不属于会话 JSON；本机副本删除成功后直接移除文件，避免孤儿
+    // 文件长期积累。失败只记警告，不阻断会话删除。
+    await removeDiffComments(ctx.config.dataDir, id).catch((error) => {
+      console.warn(`[diff-comments] 清理会话评论失败 ${id}:`, error);
+    });
     ctx.store.remove(id);
     // 本机副本已删除：把归档条目标记回普通归档（失败不影响删除结果）。
     if (ctx.archive) {
@@ -2188,6 +2225,10 @@ async function forkSession(
         cwd = created.cwd;
         branch = created.branch;
         workspaceCreated = true;
+        // 分叉出的新 worktree 也是干净 checkout：重复创建会话时的准备步骤
+        //（复制 .env、链接共享目录、执行 setup）。失败由下面的 catch 清理。
+        const prep = await prepareWorktree({ project, worktreePath: cwd });
+        for (const warning of prep.warnings) console.warn(`[worktree] ${warning}`);
       } else if (info.isolated) {
         cwd = path.join(project.path, newId);
         fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });

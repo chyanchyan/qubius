@@ -1,0 +1,256 @@
+/* Git 面板里的 PR/MR 区块：和提交表单同宽，窄屏下不横向溢出。 */
+.pr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  min-width: 0;
+  padding-top: calc(8px * var(--control-scale));
+  border-top: 1px solid var(--line);
+}
+
+.pr-head {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  flex-wrap: wrap;
+}
+
+.pr-heading {
+  font-weight: 600;
+}
+
+.pr-actions {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  margin-left: auto;
+}
+
+.pr-actions button,
+.pr-form-actions button,
+.pr-agent {
+  min-height: calc(26px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+}
+
+.pr-actions button:hover:not(:disabled),
+.pr-form-actions button:hover:not(:disabled),
+.pr-agent:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.pr-monitor.on {
+  border-color: color-mix(in srgb, var(--green) 55%, var(--line));
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green);
+}
+
+.pr-hint {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.pr-error {
+  margin: 0;
+  color: var(--red);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.pr-notice {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.pr-summary {
+  display: flex;
+  flex-direction: column;
+  gap: calc(7px * var(--control-scale));
+  min-width: 0;
+}
+
+.pr-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(8px * var(--control-scale));
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pr-link {
+  min-width: 0;
+  flex: 1 1 180px;
+  color: var(--fg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+a.pr-link { text-decoration: none; }
+a.pr-link:hover { text-decoration: underline; }
+
+.pr-badges {
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--control-scale));
+  flex-wrap: wrap;
+}
+
+.pr-badge {
+  flex: none;
+  padding: 0 calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  line-height: calc(18px * var(--control-scale));
+}
+
+.pr-state-open,
+.pr-state-opened,
+.pr-merge-ok {
+  border-color: color-mix(in srgb, var(--green) 45%, var(--line));
+  color: var(--green);
+}
+
+.pr-state-merged {
+  border-color: color-mix(in srgb, var(--violet, var(--green)) 45%, var(--line));
+  color: var(--violet, var(--green));
+}
+
+.pr-merge-warn {
+  border-color: color-mix(in srgb, var(--red) 50%, var(--line));
+  color: var(--red);
+}
+
+.pr-checks {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--control-scale));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pr-check {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+  font-size: var(--fs-11);
+}
+
+.pr-check-dot {
+  flex: none;
+  width: calc(7px * var(--control-scale));
+  height: calc(7px * var(--control-scale));
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.pr-check.ok .pr-check-dot { background: var(--green); }
+.pr-check.warn .pr-check-dot { background: var(--red); }
+.pr-check.pending .pr-check-dot { background: var(--warn); }
+.pr-check.muted .pr-check-dot { background: var(--muted); }
+
+.pr-check-name {
+  min-width: 0;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.pr-check-name { text-decoration: none; }
+a.pr-check-name:hover { text-decoration: underline; }
+
+.pr-check-state {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.pr-check.warn .pr-check-state { color: var(--red); }
+.pr-check.pending .pr-check-state { color: var(--warn); }
+.pr-check.ok .pr-check-state { color: var(--green); }
+
+.pr-agent {
+  align-self: flex-start;
+  border-color: color-mix(in srgb, var(--red) 45%, var(--line));
+  color: var(--red);
+}
+
+.pr-form {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+}
+
+.pr-field {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3px * var(--control-scale));
+  min-width: 0;
+}
+
+.pr-field > span {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.pr-field input,
+.pr-field textarea {
+  width: 100%;
+  min-width: 0;
+  padding: calc(5px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--fg);
+}
+
+.pr-field input::placeholder,
+.pr-field textarea::placeholder {
+  color: var(--placeholder);
+}
+
+.pr-field textarea {
+  min-height: calc(56px * var(--control-scale));
+  resize: vertical;
+}
+
+.pr-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--control-scale));
+}
+
+.pr-form-actions button {
+  padding: calc(4px * var(--control-scale)) calc(12px * var(--control-scale));
+}
+
+@media (max-width: 560px) {
+  .pr-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .pr-actions button {
+    flex: 1 1 auto;
+  }
+
+  .pr-title-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pr-link {
+    flex: none;
+  }
+}

@@ -1,0 +1,344 @@
+/* 可评论 diff 面板。由 Thread.css 的 @import 引入：Thread.tsx 会被 node:test
+   直接 import，不能在自己的模块图里出现 .css。 */
+
+.diff-review {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--elev);
+  overflow: hidden;
+  font-size: var(--fs-12);
+}
+
+/* 顶部：未解决评论数 + 刷新 + 发送给 agent。窄屏自动换行。 */
+.diff-review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(8px * var(--control-scale));
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+
+.diff-review-count {
+  min-width: 0;
+  color: var(--muted);
+}
+
+.diff-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  margin-left: auto;
+}
+
+.diff-review-send {
+  min-height: calc(26px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+}
+
+/* 加载/错误/发送结果提示。 */
+.diff-review-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(8px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-12);
+  border-bottom: 1px solid var(--line);
+}
+
+.diff-review-status[data-tone="ok"] { color: var(--green); }
+.diff-review-status[data-tone="error"] { color: var(--error); }
+
+.diff-review-file + .diff-review-file {
+  border-top: 1px solid var(--line);
+}
+
+.diff-review-file-head {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  min-height: calc(28px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(8px * var(--control-scale));
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-12);
+}
+
+.diff-review-file-head::-webkit-details-marker { display: none; }
+
+.diff-review-file-head::before {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s ease;
+}
+
+.diff-review-file[open] > .diff-review-file-head::before { transform: rotate(90deg); }
+
+.diff-review-section {
+  flex: none;
+  padding: 0 calc(5px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.86em;
+  white-space: nowrap;
+}
+
+.diff-review-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.diff-review-add {
+  flex: none;
+  margin-left: auto;
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-review-del {
+  flex: none;
+  color: var(--error);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 文件内部滚动；长行横向滚动，不把整列行号挤出屏幕。 */
+.diff-review-body {
+  max-height: 26rem;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-12);
+  line-height: 1.5;
+}
+
+.diff-review-line {
+  display: flex;
+  align-items: stretch;
+  min-width: max-content;
+  white-space: pre;
+}
+
+.diff-review-line[data-kind="add"] {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+}
+
+.diff-review-line[data-kind="del"] {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+
+.diff-review-ln {
+  flex: none;
+  width: 3.2em;
+  padding: 0 calc(3px * var(--control-scale));
+  text-align: right;
+  color: var(--muted);
+  opacity: 0.75;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-review-mark {
+  flex: none;
+  width: 1.4em;
+  text-align: center;
+  color: var(--muted);
+  user-select: none;
+}
+
+.diff-review-line[data-kind="add"] .diff-review-mark { color: var(--green); }
+.diff-review-line[data-kind="del"] .diff-review-mark { color: var(--red); }
+
+/* 评论按钮放在行号之后、代码之前：长行横向滚动时仍然可见。
+   桌面端悬停/聚焦才显形；触屏常显弱化按钮。 */
+.diff-review-comment-btn {
+  flex: none;
+  align-self: stretch;
+  width: 1.6em;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.95em;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.diff-review-line:hover .diff-review-comment-btn,
+.diff-review-comment-btn:focus-visible {
+  opacity: 1;
+}
+
+.diff-review-comment-btn:hover {
+  color: var(--blue);
+}
+
+@media (pointer: coarse) {
+  .diff-review-comment-btn {
+    width: 2em;
+    opacity: 0.65;
+  }
+}
+
+.diff-review-text {
+  flex: 1;
+  min-width: 0;
+  padding-right: calc(10px * var(--control-scale));
+}
+
+.diff-review-hunk {
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+  color: var(--muted);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.diff-review-note {
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.86em;
+  white-space: nowrap;
+}
+
+/* 新建/编辑评论的输入框，紧跟对应行。 */
+.diff-review-compose {
+  display: flex;
+  flex-direction: column;
+  gap: calc(5px * var(--control-scale));
+  padding: calc(6px * var(--control-scale)) calc(10px * var(--control-scale));
+  border-top: 1px solid var(--line);
+  background: var(--input);
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  white-space: normal;
+}
+
+.diff-review-input {
+  display: block;
+  width: 100%;
+  min-height: calc(52px * var(--control-scale));
+  max-height: min(30vh, 12rem);
+  padding: calc(5px * var(--control-scale)) calc(7px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.diff-review-compose-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(6px * var(--control-scale));
+}
+
+.diff-review-compose-actions .btn,
+.diff-review-compose-actions .btn-primary {
+  min-height: calc(26px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+}
+
+/* 已有评论：挂在对应行下方，按文件缩进一点。 */
+.diff-review-comment {
+  margin: calc(2px * var(--control-scale)) calc(8px * var(--control-scale))
+    calc(6px * var(--control-scale)) calc(64px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(8px * var(--control-scale));
+  border-left: 3px solid var(--blue);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--blue) 10%, transparent);
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.diff-review-comment.is-resolved {
+  opacity: 0.6;
+  border-left-color: var(--muted);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+.diff-review-comment-head {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.diff-review-comment-side {
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-review-comment-resolved {
+  padding: 0 calc(4px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.diff-review-comment-text {
+  margin-top: calc(2px * var(--control-scale));
+  color: var(--fg);
+  font-size: var(--fs-13);
+  white-space: pre-wrap;
+}
+
+.diff-review-comment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(4px * var(--control-scale));
+  margin-top: calc(2px * var(--control-scale));
+}
+
+.diff-review-comment-actions .text-btn {
+  min-height: calc(22px * var(--control-scale));
+  padding: 0 calc(5px * var(--control-scale));
+  font-size: var(--fs-12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .diff-review-file-head::before { transition: none; }
+}
+
+/* 触屏：评论热区放大到 40px，输入框保持 16px 以上避免 iOS 聚焦放大。 */
+@media (pointer: coarse) {
+  .diff-review-send,
+  .diff-review-compose-actions .btn,
+  .diff-review-compose-actions .btn-primary {
+    min-height: calc(40px * var(--control-scale));
+    padding: calc(6px * var(--control-scale)) calc(12px * var(--control-scale));
+  }
+
+  .diff-review-input {
+    font-size: max(16px, calc(16px * var(--font-scale)));
+  }
+
+  .diff-review-comment-actions .text-btn {
+    min-height: calc(36px * var(--control-scale));
+    padding: 0 calc(8px * var(--control-scale));
+  }
+
+  .diff-review-comment {
+    margin-left: calc(8px * var(--control-scale));
+  }
+}

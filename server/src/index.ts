@@ -250,6 +250,7 @@ const archive = archiveConfig
     instance: archiveConfig.instance,
     dataDir: config.dataDir,
     retentionDays: archiveConfig.retentionDays,
+    projects: config.projects,
   })
   : undefined;
 const sweeper = archive && archiveConfig
@@ -258,6 +259,7 @@ const sweeper = archive && archiveConfig
     store,
     runtime,
     retentionDays: archiveConfig.retentionDays,
+    dataDir: config.dataDir,
   })
   : undefined;
 if (archive) {

@@ -737,3 +737,98 @@ test("冷启动 bootstrap 也合并额外项目文件", () => {
   assert.ok(config.projects.some((project) => project.id === "extra"));
   assert.ok(config.projects.some((project) => project.id === "chat"));
 });
+
+test("项目 worktree 配置解析、默认值和相对路径规范化", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-coder-config-"));
+  const file = path.join(dir, "config.yaml");
+  fs.writeFileSync(
+    file,
+    [
+      "listen: 127.0.0.1:8787",
+      "projects:",
+      "  - id: app",
+      "    name: App",
+      "    path: ./app",
+      "    worktree:",
+      "      setup: npm ci",
+      "      setupTimeoutSeconds: 120",
+      "      sharedDirectories: [node_modules, .cache, node_modules]",
+      "      include: [.env, 'config\\local.yaml', ./.env.local]",
+      "",
+    ].join("\n"),
+  );
+  const config = loadConfig(file, {});
+  assert.deepEqual(config.projects[0]?.worktree, {
+    setup: "npm ci",
+    setupTimeoutSeconds: 120,
+    sharedDirectories: ["node_modules", ".cache"],
+    include: [".env", "config/local.yaml", ".env.local"],
+  });
+  assert.equal(config.projects.find((project) => project.id === "chat")?.worktree, undefined);
+
+  // 未配置 worktree 时不生成字段；worktree: {} 使用默认值。
+  fs.writeFileSync(
+    file,
+    [
+      "listen: 127.0.0.1:8787",
+      "projects:",
+      "  - id: plain",
+      "    name: Plain",
+      "    path: .",
+      "  - id: app",
+      "    name: App",
+      "    path: .",
+      "    worktree: {}",
+      "",
+    ].join("\n"),
+  );
+  const defaulted = loadConfig(file, {});
+  assert.equal(defaulted.projects[0]?.worktree, undefined);
+  assert.deepEqual(defaulted.projects[1]?.worktree, {
+    setup: undefined,
+    setupTimeoutSeconds: 300,
+    sharedDirectories: [],
+    include: [],
+  });
+});
+
+test("项目 worktree 配置会拒绝非法字段和路径", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-coder-config-"));
+  const write = (name: string, lines: string[]): string => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, ["listen: 127.0.0.1:8787", "projects:", "  - id: app", "    name: App", "    path: .", ...lines, ""].join("\n"));
+    return file;
+  };
+  assert.throws(() => loadConfig(write("not-map.yaml", ["    worktree: hello"]), {}), /worktree 必须是映射/);
+  assert.throws(() => loadConfig(write("setup-type.yaml", ["    worktree:", "      setup: 123"]), {}), /worktree\.setup/);
+  assert.throws(() => loadConfig(write("setup-empty.yaml", ["    worktree:", "      setup: ''"]), {}), /worktree\.setup 不能为空/);
+  for (const value of ["0", "3601", "1.5", "'300'"]) {
+    assert.throws(
+      () => loadConfig(write(`timeout-${value.replace(/\W/g, "")}.yaml`, [
+        "    worktree:",
+        `      setupTimeoutSeconds: ${value}`,
+      ]), {}),
+      /setupTimeoutSeconds/,
+    );
+  }
+  assert.throws(
+    () => loadConfig(write("shared-type.yaml", ["    worktree:", "      sharedDirectories: node_modules"]), {}),
+    /sharedDirectories 必须是字符串数组/,
+  );
+  assert.throws(
+    () => loadConfig(write("shared-absolute.yaml", ["    worktree:", "      sharedDirectories: [/srv/cache]"]), {}),
+    /相对路径/,
+  );
+  assert.throws(
+    () => loadConfig(write("include-escape.yaml", ["    worktree:", "      include: ['../.env']"]), {}),
+    /不能包含 \.\./,
+  );
+  assert.throws(
+    () => loadConfig(write("include-drive.yaml", ["    worktree:", "      include: ['C:\\env']"]), {}),
+    /相对路径/,
+  );
+  assert.throws(
+    () => loadConfig(write("include-empty.yaml", ["    worktree:", "      include: ['']"]), {}),
+    /include\[0\] 必须是非空字符串/,
+  );
+});

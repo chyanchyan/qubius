@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { getGitStatus, runGitAction, type GitAction, type GitStatus } from "../api-git";
+import { PullRequestPanel } from "./PullRequestPanel";
 import "./GitPanel.css";
 
 const MAX_DIRTY_SHOWN = 100;
@@ -150,6 +151,7 @@ export const GitPanel = memo(function GitPanel({ sessionId, git, onError }: {
       {busy && <p className="git-panel-hint" role="status">正在执行…</p>}
       {error && <p className="error git-error">{error}</p>}
       {output && <pre className="git-output">{output}</pre>}
+      <PullRequestPanel sessionId={sessionId} />
     </section>
   );
 });

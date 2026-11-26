@@ -32,6 +32,7 @@ import { ComposerConfig } from "./components/ComposerConfig";
 import { Composer } from "./components/Composer";
 import { DiscussionPanel } from "./components/DiscussionPanel";
 import { GitPanel } from "./components/GitPanel";
+import { MultiModelRun } from "./components/MultiModelRun";
 import { ProjectsPage } from "./components/ProjectsPage";
 import { SchedulesPanel } from "./components/SchedulesPanel";
 import { QueuePanel, SessionActionsMenu, sendContinue, useSessionActions } from "./components/SessionTools";
@@ -48,6 +49,7 @@ import { projectDraftKey, sessionDraftKey } from "./drafts";
 import { useGlobalAttention } from "./global-attention";
 import { isTouchPointer } from "./pointer";
 import { runMeta } from "./run-meta";
+import type { RunSelection } from "./run-selection";
 import { mergeTextAttachments } from "./text-attachments";
 import {
   beginPendingSession,
@@ -1743,6 +1745,26 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     }
   }, [attachments, draft.clearDraft, effort, model, projectId, prompt, providerId, reportActionError, setPrompt, workflowMode]);
 
+  /* 多模型对比：同一个 prompt/附件，按用户选的模型各建一个独立会话。
+     这里只负责“建一个”，选择、逐个调用和汇总由 MultiModelRun 负责。 */
+  const createRunOne = useCallback(async (selection: RunSelection) => {
+    const detected = detectWorkflowSkill(prompt);
+    const workflow = detected ?? (workflowMode || undefined);
+    const text = mergeTextAttachments(prompt, attachments.texts);
+    const created = await createSession(projectId, {
+      prompt: text,
+      providerId: selection.providerId,
+      model: selection.model,
+      effort: selection.effort,
+      images: attachments.images.length > 0 ? attachments.images : undefined,
+      workflow,
+      title: `多模型 · ${selection.model}`.slice(0, 80),
+    });
+    sseTouchedAt.current.set(created.session.id, Date.now());
+    setSessions((current) => upsertSession(current, created.session));
+    return created.session;
+  }, [attachments, projectId, prompt, workflowMode]);
+
   const provider = settings?.providers.find((item) => item.id === providerId);
   const canSend = Boolean(
     (prompt.trim() || attachments.images.length > 0 || attachments.texts.length > 0)
@@ -2203,6 +2225,23 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
         voiceDisabled={busy}
         attachDisabled={busy || attachments.busy}
         onError={reportActionError}
+      />
+      <MultiModelRun
+        projectId={projectId}
+        providers={settings?.providers ?? []}
+        defaults={{ providerId, model, effort }}
+        disabled={
+          busy
+          || attachments.busy
+          || (!prompt.trim() && attachments.images.length === 0 && attachments.texts.length === 0)
+        }
+        createOne={createRunOne}
+        onError={reportActionError}
+        onDone={() => {
+          draft.clearDraft();
+          attachments.clear();
+        }}
+        onOpen={(id) => go(`/sessions/${id}`)}
       />
     </section>
   );
@@ -3182,6 +3221,7 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
           diff={diff}
           patch={diffLoading ? "" : patch}
           cwd={session.cwd}
+          sessionId={session.id}
           loaded={diffLoaded}
           loading={diffLoading}
           onToggle={onDiffToggle}
