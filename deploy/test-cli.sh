@@ -51,4 +51,27 @@ PATH="$TMP/fakebin:$PATH" \
 grep -q 'args=.*--restart' "$RESTART_LOG" || fail "restart 应调用 start-all --restart：$(cat "$RESTART_LOG")"
 grep -q '^restart=1$' "$RESTART_LOG" || fail "restart 应注入 QUBIUS_DEPLOY_RESTART=1：$(cat "$RESTART_LOG")"
 
+# make help 在 Windows 上也要能跑：帮助文本放在 cli.mjs 里，Makefile 的命令行
+# 只能是 ASCII。Windows 的 make/cmd 按本地代码页解码命令行，内联中文会乱码，
+# 混进引号时还会把 node -e 的脚本拆成语法错误。
+QUBIUS_CONFIG_DIR="$TMP/config" node "$HERE/cli.mjs" help >"$TMP/help.txt" \
+  || fail "cli.mjs help 应成功"
+grep -q 'deploy-wan' "$TMP/help.txt" || fail "cli.mjs help 缺少部署目标"
+grep -q 'node deploy/cli.mjs help' "$HERE/../Makefile" || fail "make help 应调用 cli.mjs help"
+
+node - "$HERE/../Makefile" <<'NODE' || fail "Makefile 的命令行里有非 ASCII 字符，Windows 上会乱码或语法错误"
+const fs = require("node:fs");
+const lines = fs.readFileSync(process.argv[2], "utf8").split(/\r?\n/);
+const bad = lines
+  .map((line, index) => ({ line, index }))
+  .filter(({ line }) => line.startsWith("\t") && /[^\x00-\x7F]/.test(line));
+for (const { line, index } of bad) console.error(`${index + 1}: ${line}`);
+if (bad.length) process.exit(1);
+NODE
+
+if command -v make >/dev/null 2>&1; then
+  QUBIUS_CONFIG_DIR="$TMP/config" make -C "$HERE/.." help >/dev/null 2>&1 \
+    || fail "make help 失败"
+fi
+
 echo "deploy/cli.mjs 退出码透传测试通过"

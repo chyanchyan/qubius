@@ -5,7 +5,7 @@
 // Windows/macOS 上用 Node 完成同样的启动/停止，部署则交给 deploy-job.mjs。
 // 只使用 Node 内置模块，不依赖 bash。
 //
-// 用法：node deploy/cli.mjs <start|stop|restart|status|install|pull|deploy|deploy-lan|deploy-wan>
+// 用法：node deploy/cli.mjs <help|start|stop|restart|status|install|pull|deploy|deploy-lan|deploy-wan>
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -29,6 +29,39 @@ function fail(message, code = 1) {
 function say(message) {
   console.log(message);
 }
+
+// make help 的文本放在这里而不是 Makefile 的 node -e 里：Windows 的 make/cmd 会把
+// 命令行里的 UTF-8 字节按本地代码页（如 GBK）解码，中文会变成乱码，内联脚本还会
+// 因此出现语法错误。文件按 UTF-8 读入，输出走控制台，命令行保持纯 ASCII。
+const HELP_TEXT = [
+  "用法：make <目标>",
+  "",
+  "开发：",
+  "  run / dev      启动服务端 + Vite 开发服务器",
+  "  quickstart     首次启动：选择 npm 源、配置/数据目录和端口",
+  "  build          构建 server + web",
+  "  test           服务端 + 前端测试",
+  "  test-deploy    部署脚本测试",
+  "",
+  "运行：",
+  "  start          启动启用的实例（缺构建先构建）",
+  "  restart        重启启用的实例",
+  "  stop           停止实例和局域网入口",
+  "  status         显示配置目录、健康状态和局域网凭据文件",
+  "  install        Linux：渲染配置/systemd/logrotate 并构建",
+  "  pull           从 origin 快进当前 checkout",
+  "",
+  "部署：",
+  "  deploy         本地部署：构建并重启，只保证 127.0.0.1",
+  "  deploy-lan     本地部署 + 局域网入口（缺凭据时生成并打印一次）",
+  "  deploy-wan     局域网部署 + 公网入口（交互确认）",
+  "",
+  "备份/恢复：",
+  "  backup         备份配置和数据目录",
+  "  restore        从备份恢复：make restore BACKUP=<备份目录>",
+  "",
+  "npm 等方式仍然可用：npm start / npm run quickstart / npm run dev:all",
+].join("\n");
 
 function expandHome(value) {
   const text = String(value ?? "").trim();
@@ -574,6 +607,11 @@ async function applyEdge(jobEnv, entries) {
 
 async function main() {
   switch (ACTION) {
+    case "help":
+    case "-h":
+    case "--help":
+      say(HELP_TEXT);
+      return;
     case "start":
       if (isLinux) return run("bash", [path.join(scriptDir, "start-all.sh")]);
       await startAll();
@@ -615,7 +653,7 @@ async function main() {
     }
     default:
       fail(
-        "用法：node deploy/cli.mjs <start|stop|restart|status|install|pull|deploy|deploy-lan|deploy-wan>",
+        "用法：node deploy/cli.mjs <help|start|stop|restart|status|install|pull|deploy|deploy-lan|deploy-wan>",
       );
   }
 }
