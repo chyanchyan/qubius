@@ -154,7 +154,15 @@ export function otherRole(role: WizardRole): WizardRole {
 export function browserHostSuggestion(hostname: string | undefined): string | undefined {
   const value = (hostname ?? "").trim().toLowerCase();
   if (!value || isLoopbackHost(value)) return undefined;
+  // 局域网 IP 不参与预填：局域网入口经 lan-proxy 转发后 Host 已经是 127.0.0.1，
+  // 把网卡地址写进 allowedHosts 没有意义，反而让用户以为要用 IP 访问。
+  if (isIpLiteral(value)) return undefined;
   return HOST_RE.test(value) ? value : undefined;
+}
+
+/** 字面量 IP（IPv4 点分十进制或任意带冒号的 IPv6）；域名不会含冒号。 */
+function isIpLiteral(host: string): boolean {
+  return host.includes(":") || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
 }
 
 /** 首次部署时把向导最可能需要改的默认值对齐到当前 checkout。 */
@@ -163,7 +171,7 @@ export function prepareWizardForm(
     repoDir: string;
     role: WizardRole;
     detectedRepoUrl?: string;
-    /** 浏览器当前访问的主机名；通过域名/局域网 IP 打开时直接作为访问域名。 */
+    /** 浏览器当前访问的主机名；通过域名打开时直接作为访问域名，IP 不预填。 */
     browserHost?: string;
   },
   form: DeployForm,
@@ -178,7 +186,7 @@ export function prepareWizardForm(
   next[keys.dir] = input.repoDir;
   const currentHost = next[keys.host].trim();
   if (!currentHost || isLoopbackHost(currentHost)) {
-    // 默认 localhost 只是本机入口；通过域名/局域网 IP 打开页面时换成当前地址。
+    // 默认 localhost 只是本机入口；通过域名打开页面时换成当前域名。
     const suggested = browserHostSuggestion(input.browserHost);
     if (suggested) next[keys.host] = suggested;
     else if (!currentHost) next[keys.host] = "localhost";
@@ -193,7 +201,9 @@ export function prepareWizardForm(
 export function initialScenario(form: DeployForm, role: WizardRole): WizardScenario {
   if (form.startPrimary && form.startSecondary) return "dual";
   const host = form[roleKeys(role).host].trim();
-  if (!host || host === "localhost" || host === "127.0.0.1") return "local";
+  // 局域网模式的默认访问域名是 127.0.0.1（lan-proxy 转发后的 Host），
+  // 所以只有空值和 localhost 才算本机模式，否则重新打开向导会跳回本机模式。
+  if (!host || host === "localhost") return "local";
   return "remote";
 }
 
@@ -240,12 +250,14 @@ export function scenarioPatch(
   }
   if (scenario === "remote") {
     // 远程模式要填浏览器实际访问的域名；用当前页面地址补上，省得手写。
-    // 页面本身就是通过回环地址打开的，没有可用的建议值，保留 localhost 作为
-    // 可编辑的默认值，避免必填项直接空着、下一步才报错。
+    // 页面本身是通过回环地址或局域网 IP 打开的，没有可用的建议域名，默认填
+    // 127.0.0.1：局域网入口经 lan-proxy 转发后 Host 就是这个地址。
+    // 表单里已经存着 IP 字面量（旧版本预填的网卡地址）时也换成 127.0.0.1，
+    // 只有真实域名保持原样。
     const keys = roleKeys(role);
     const currentHost = form[keys.host].trim();
-    if (!currentHost || isLoopbackHost(currentHost)) {
-      patch[keys.host] = suggestedHost ?? "localhost";
+    if (!currentHost || isLoopbackHost(currentHost) || isIpLiteral(currentHost)) {
+      patch[keys.host] = suggestedHost ?? "127.0.0.1";
     }
     return patch;
   }

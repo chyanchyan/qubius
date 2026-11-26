@@ -257,7 +257,7 @@ export function DeployWizard({
   const scenarios = scenarioOptions(state.platform);
   const placeholders = wizardPlaceholders(state.platform, role);
   const peerPlaceholders = wizardPlaceholders(state.platform, otherRole(role));
-  /* 通过域名/局域网 IP 打开页面时，直接把当前主机名作为访问域名候选。 */
+  /* 通过域名打开页面时把当前主机名作为访问域名候选；IP 不预填。 */
   const suggestedHost = browserHostSuggestion(window.location.hostname);
   const [scenario, setScenario] = useState<WizardScenario>(() => initialScenario(form, role));
   const [stepIndex, setStepIndex] = useState(0);

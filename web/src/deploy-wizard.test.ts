@@ -70,9 +70,10 @@ test("重新部署向导的文案不再说「第一次运行」", () => {
   assert.equal(redeploy.switchLabel, "返回完整部署表单");
 });
 
-test("通过域名或局域网 IP 打开时自动预填访问域名", () => {
+test("通过域名打开时自动预填访问域名，局域网 IP 不预填", () => {
   assert.equal(browserHostSuggestion("code.example.com"), "code.example.com");
-  assert.equal(browserHostSuggestion("192.168.0.41"), "192.168.0.41");
+  assert.equal(browserHostSuggestion("192.168.0.41"), undefined);
+  assert.equal(browserHostSuggestion("[::1]"), undefined);
   assert.equal(browserHostSuggestion("127.0.0.1"), undefined);
   assert.equal(browserHostSuggestion("localhost"), undefined);
   assert.equal(browserHostSuggestion("bad host"), undefined);
@@ -84,11 +85,12 @@ test("通过域名或局域网 IP 打开时自动预填访问域名", () => {
   assert.equal(domain.publicHost, "code.example.com");
   assert.equal(initialScenario(domain, "primary"), "remote");
 
+  // 通过局域网 IP 打开部署页时不把网卡地址写进访问域名。
   const lan = prepareWizardForm(
     { repoDir: "/srv/qubius", role: "primary", browserHost: "192.168.0.41" },
     form(),
   );
-  assert.equal(lan.publicHost, "192.168.0.41");
+  assert.equal(lan.publicHost, "localhost");
 
   const loopback = prepareWizardForm(
     { repoDir: "/srv/qubius", role: "primary", browserHost: "127.0.0.1" },
@@ -119,6 +121,8 @@ test("prepareWizardForm 尊重已显式配置的仓库地址和域名", () => {
 test("initialScenario 按现有表单推断", () => {
   assert.equal(initialScenario(form(), "primary"), "local");
   assert.equal(initialScenario(form({ publicHost: "localhost" }), "primary"), "local");
+  // 局域网模式的默认访问域名是 127.0.0.1：重新打开向导时仍算局域网模式。
+  assert.equal(initialScenario(form({ publicHost: "127.0.0.1" }), "primary"), "remote");
   assert.equal(initialScenario(form({ publicHost: "code.example.com" }), "primary"), "remote");
   assert.equal(initialScenario(form({ startSecondary: true }), "primary"), "dual");
 });
@@ -136,15 +140,24 @@ test("scenarioPatch 只启用当前角色，本机模式使用 localhost", () =>
   assert.equal(secondaryOnly.publicHostSecondary, "localhost");
 });
 
-test("scenarioPatch 远程模式没有可用建议时保留 localhost 默认值", () => {
-  // 通过回环地址打开页面时拿不到建议域名：不能把必填项清空。
+test("scenarioPatch 远程模式没有可用建议时默认 127.0.0.1", () => {
+  // 通过回环地址或局域网 IP 打开页面时拿不到建议域名：默认填 127.0.0.1，
+  // 局域网入口经 lan-proxy 转发后的 Host 就是这个地址。
   const patch = scenarioPatch(form({ publicHost: "localhost" }), "primary", "remote");
-  assert.equal(patch.publicHost, "localhost");
+  assert.equal(patch.publicHost, "127.0.0.1");
   assert.equal(patch.startSecondary, false);
 
-  // 空表单（例如重新部署时旧配置没有域名）同样补 localhost。
+  // 空表单（例如重新部署时旧配置没有域名）同样补 127.0.0.1。
   const empty = scenarioPatch(form(), "primary", "remote");
-  assert.equal(empty.publicHost, "localhost");
+  assert.equal(empty.publicHost, "127.0.0.1");
+
+  // 通过局域网 IP 打开页面：浏览器建议值已经被忽略，同样落到 127.0.0.1。
+  const lan = scenarioPatch(form({ publicHost: "localhost" }), "primary", "remote", undefined);
+  assert.equal(lan.publicHost, "127.0.0.1");
+
+  // 旧版本预填进表单的网卡 IP 也换成 127.0.0.1。
+  const prefilledIp = scenarioPatch(form({ publicHost: "192.168.0.41" }), "primary", "remote");
+  assert.equal(prefilledIp.publicHost, "127.0.0.1");
 
   // 当前页面就是通过域名打开的：直接补上，不用手写。
   const suggested = scenarioPatch(
