@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { PERMISSIONS, PERMISSION_LABEL, writeApiToken } from "../api";
 import {
   applyDeploy,
@@ -31,7 +30,7 @@ import {
   type WizardMode,
 } from "../deploy-wizard";
 import { pathIsAbsolute } from "../deploy-path";
-import { Notice, useDialogs } from "../ui";
+import { Dialog, Notice, useDialogs } from "../ui";
 import { DeployWizard } from "./DeployWizard";
 import { EdgePanel } from "./EdgePanel";
 import { Hint } from "./FieldHint";
@@ -299,39 +298,37 @@ interface ResetSecret {
 }
 
 function SecretDialog({ secret, onDismiss }: { secret: ResetSecret; onDismiss: () => void }) {
-  return createPortal(
-    <div className="dialog-backdrop">
-      <section
-        className="dialog dialog-wide deploy-once-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="deploy-reset-title"
-      >
-        <div className="deploy-once-head">
-          <h2 id="deploy-reset-title">{secret.title}</h2>
-          <button type="button" className="btn" onClick={onDismiss}>关闭</button>
-        </div>
-        <p className="deploy-once-hint">{secret.hint}</p>
-        {secret.urls && secret.urls.length > 0 && (
-          <dl className="deploy-once-list">
-            {secret.urls.map((url) => (
-              <div key={url}>
-                <dt>访问地址</dt>
-                <dd>
-                  <code className="mono">{url}</code>
-                  <CopyButton value={url} label="访问地址" />
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
-        <div className="deploy-once-token">
-          <code className="mono">{secret.value}</code>
-          <CopyButton value={secret.value} label={secret.title} />
-        </div>
-      </section>
-    </div>,
-    document.body,
+  return (
+    <Dialog
+      open
+      wide
+      showActions={false}
+      title={secret.title}
+      description={secret.hint}
+      onConfirm={() => {}}
+      onClose={onDismiss}
+    >
+      {secret.urls && secret.urls.length > 0 && (
+        <dl className="deploy-once-list">
+          {secret.urls.map((url) => (
+            <div key={url}>
+              <dt>访问地址</dt>
+              <dd>
+                <code className="mono">{url}</code>
+                <CopyButton value={url} label="访问地址" />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <div className="deploy-once-token">
+        <code className="mono">{secret.value}</code>
+        <CopyButton value={secret.value} label={secret.title} />
+      </div>
+      <div className="dialog-actions">
+        <button type="button" className="btn" onClick={onDismiss}>关闭</button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -447,23 +444,22 @@ function OneTimeCredentials({
   onDismiss: () => void;
 }) {
   const token = info.authToken;
-  return createPortal(
-    <div className="dialog-backdrop">
-      <section
-        className="dialog dialog-wide deploy-once-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="deploy-once-title"
-      >
-      <div className="deploy-once-head">
-        <h2 id="deploy-once-title">部署凭据（只显示这一次）</h2>
-        <button type="button" className="btn" onClick={onDismiss}>我已保存，关闭</button>
-      </div>
-      <p className="deploy-once-hint">
-        部署完成后生效。密码和访问令牌不会再次弹出；关闭后如需找回，请查看配置目录的
-        <span className="mono"> lan-proxy.credentials</span>，以及 env 文件或数据目录的
-        <span className="mono"> auth-token</span>。
-      </p>
+  return (
+    <Dialog
+      open
+      wide
+      showActions={false}
+      title="部署凭据（只显示这一次）"
+      description={(
+        <>
+          部署完成后生效。密码和访问令牌不会再次弹出；关闭后如需找回，请查看配置目录的
+          <span className="mono"> lan-proxy.credentials</span>，以及 env 文件或数据目录的
+          <span className="mono"> auth-token</span>。
+        </>
+      )}
+      onConfirm={() => {}}
+      onClose={onDismiss}
+    >
       {info.lan && (
         <dl className="deploy-once-list">
           {info.lan.urls.map((url) => (
@@ -498,9 +494,10 @@ function OneTimeCredentials({
           <CopyButton value={token} label="API 访问令牌" />
         </div>
       )}
-      </section>
-    </div>,
-    document.body,
+      <div className="dialog-actions">
+        <button type="button" className="btn" onClick={onDismiss}>我已保存，关闭</button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -984,9 +981,12 @@ export function DeployPage() {
       } catch (reason) {
         if (!isDataDirChangeError(reason) || controller.signal.aborted) throw reason;
         // 数据目录变化且旧目录有会话：二次确认后再带 confirm 重试。
-        const confirmed = window.confirm(
-          `${reason.message}\n\n仍要切换数据目录并重新部署吗？旧目录会原样保留，不会被删除。`,
-        );
+        const confirmed = await dialogs.confirm({
+          title: "切换数据目录？",
+          message: `${reason.message}\n\n仍要切换数据目录并重新部署吗？旧目录会原样保留，不会被删除。`,
+          confirmLabel: "仍要切换",
+          danger: true,
+        });
         if (!confirmed) throw reason;
         result = await applyDeploy({ ...payload, confirmDataDirChange: true }, controller.signal);
       }

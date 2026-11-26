@@ -5,8 +5,8 @@ import type { PendingSession } from "./pending-session";
  * 项目页列表行的关键词过滤。
  *
  * 列表行要么是真实会话，要么是发送后还在创建的占位行。过滤只按用户能看到的
- * 标题、摘要和分支名匹配，大小写不敏感；等待确认和运行中的会话始终显示，
- * 避免用户搜索时把需要处理的行藏起来。
+ * 标题、摘要和分支名匹配，大小写不敏感；排队中、等待确认和运行中的会话始终
+ * 显示，避免用户搜索时把需要处理或马上要跑的行藏起来。
  */
 
 /** 列表行：真实会话，或发送后还在创建的本地占位行。 */
@@ -34,19 +34,26 @@ export function boardEntryMatches(entry: BoardEntry, query: string): boolean {
 }
 
 /**
- * 即使不匹配也必须保留的行：创建中的占位行、等待确认的会话、正在运行的会话。
+ * 即使不匹配也必须保留的行：创建中的占位行、排队中、等待确认、正在运行的会话。
  * 搜索时它们不会消失，但会在提示里单独计数。
+ *
+ * needs_input 可能没有 pending（例如等待用户输入而不是工具确认），只按 phase
+ * 判断也能保留；queued 还没开始跑，但已经在队列里，同样不能藏起来。
  */
 export function isBoardEntryAlwaysVisible(entry: BoardEntry): boolean {
   if (entry.kind === "pending") return true;
-  return Boolean(entry.session.pending) || entry.session.phase === "running";
+  const { session } = entry;
+  return Boolean(session.pending)
+    || session.phase === "queued"
+    || session.phase === "running"
+    || session.phase === "needs_input";
 }
 
 /**
  * 按关键词过滤列表行。
  *
- * 空查询返回原列表的副本；创建中、等待确认和运行中的行始终保留，其余行
- * 按标题、摘要、分支名做大小写不敏感的子串匹配。
+ * 空查询返回原列表的副本；创建中、排队中、等待确认和运行中的行始终保留，
+ * 其余行按标题、摘要、分支名做大小写不敏感的子串匹配。
  */
 export function filterBoardEntries(
   entries: readonly BoardEntry[],

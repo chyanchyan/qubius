@@ -581,6 +581,8 @@ export function App() {
 
   return (
     <div className="app">
+      {/* 键盘/读屏用户跳过顶栏导航，直接进入路由内容；聚焦时才显示。 */}
+      <a className="skip-link" href="#main">跳到主要内容</a>
       <header className={compact ? "bar compact" : "bar"}>
         <button
           className="brand"
@@ -599,13 +601,13 @@ export function App() {
           {/* 极窄宽度下只有这层导航滚动；字号组和「更多」菜单留在滚动层外面，
               前者始终可见，后者弹层不会被裁剪。 */}
           <div className="bar-scroll">
-            <button className="nav-btn bar-secondary" data-on={path === "/overview"} onClick={() => go("/overview")}>总览</button>
+            <button className="nav-btn bar-secondary" data-on={path === "/overview"} aria-current={path === "/overview" ? "page" : undefined} onClick={() => go("/overview")}>总览</button>
             {terminalEnabled === true && (
-              <button className="nav-btn bar-secondary" data-on={path === "/terminal"} onClick={openTerminal}>命令行</button>
+              <button className="nav-btn bar-secondary" data-on={path === "/terminal"} aria-current={path === "/terminal" ? "page" : undefined} onClick={openTerminal}>命令行</button>
             )}
-            <button className="nav-btn bar-secondary" data-on={path === "/skills"} onClick={() => go("/skills")}>技能</button>
-            <button className="nav-btn bar-secondary" data-on={path === "/deploy"} onClick={() => go("/deploy")}>部署</button>
-            <button className="nav-btn bar-secondary" data-on={path === "/settings"} onClick={() => go("/settings")}>设置</button>
+            <button className="nav-btn bar-secondary" data-on={path === "/skills"} aria-current={path === "/skills" ? "page" : undefined} onClick={() => go("/skills")}>技能</button>
+            <button className="nav-btn bar-secondary" data-on={path === "/deploy"} aria-current={path === "/deploy" ? "page" : undefined} onClick={() => go("/deploy")}>部署</button>
+            <button className="nav-btn bar-secondary" data-on={path === "/settings"} aria-current={path === "/settings" ? "page" : undefined} onClick={() => go("/settings")}>设置</button>
           </div>
           {/* 字号按钮常驻在滚动层外：任何宽度/字号下都不隐藏，也不随导航横向滚动。
              缩小/放大保留长按连发。 */}
@@ -659,21 +661,25 @@ export function App() {
           </button>
         </nav>
       </header>
-      {lazyRoute ? (
-        <RouteErrorBoundary key={path}>
-          <Suspense fallback={<RouteFallback />}>
+      {/* 路由内容的可聚焦地标：skip link 的目标，也是页面滚动容器（.page/.chat）
+          的 flex 父级。放在 header 之后保持原有「顶栏固定、内容占满剩余高度」布局。 */}
+      <main id="main" tabIndex={-1} className="app-main">
+        {lazyRoute ? (
+          <RouteErrorBoundary key={path}>
+            <Suspense fallback={<RouteFallback />}>
+              {page}
+              {/* 停留在 /terminal 时实例信息迟到、页面从 TerminalPage 换成
+                  TerminalDisabledPage：path 没变，靠 focusKey 变化重新聚焦新标题。 */}
+              <RouteFocus path={path} focusKey={path === "/terminal" && terminalEnabled === false} />
+            </Suspense>
+          </RouteErrorBoundary>
+        ) : (
+          <>
             {page}
-            {/* 停留在 /terminal 时实例信息迟到、页面从 TerminalPage 换成
-                TerminalDisabledPage：path 没变，靠 focusKey 变化重新聚焦新标题。 */}
             <RouteFocus path={path} focusKey={path === "/terminal" && terminalEnabled === false} />
-          </Suspense>
-        </RouteErrorBoundary>
-      ) : (
-        <>
-          {page}
-          <RouteFocus path={path} focusKey={path === "/terminal" && terminalEnabled === false} />
-        </>
-      )}
+          </>
+        )}
+      </main>
       {needsToken && <TokenPrompt onClose={() => setNeedsToken(false)} />}
     </div>
   );
@@ -2196,7 +2202,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
           {trimmedBoardQuery && (
             <span className="archive-path">
               匹配 {boardEntries.length - alwaysVisibleCount} 个
-              {alwaysVisibleCount > 0 && ` · ${alwaysVisibleCount} 个待确认/运行中始终显示`}
+              {alwaysVisibleCount > 0 && ` · ${alwaysVisibleCount} 个排队/待确认/运行中始终显示`}
             </span>
           )}
         </div>

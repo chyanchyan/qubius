@@ -45,7 +45,7 @@ Claude Agent SDK ──► 每个对话一个 git worktree（或独立目录）
 
 ## 安全须知
 
-- **它不是沙箱。** 默认的项目权限 `acceptEdits` 会自动放行工作区内的编辑和大多数 Bash 命令。是否放行靠的是命令文本的启发式判断：`npm run ...`、`make ...`、`sh script.sh`、`curl -d @.env ...` 这类命令会直接执行，agent 也可以先改 `package.json` 或 `Makefile` 再执行。只要仓库内容、网页或依赖里藏着提示词注入，就可能在当前用户权限下执行任意代码或外传数据。
+- **它不是沙箱。** 默认的项目权限 `acceptEdits` 会自动放行工作区内的编辑和大多数 Bash 命令。是否放行靠的是命令文本的启发式判断：`npm run ...`、`make ...`、`sh script.sh`、`curl -d @.env ...` 这类命令会直接执行，agent 也可以先改 `package.json` 或 `Makefile` 再执行。只要仓库内容、网页或依赖里藏着提示词注入，就可能在当前用户权限下执行任意代码或外传数据。启发式判断有边界：`find -exec sh -c`、`awk 'BEGIN{system()}'`、`tsx`/`npx`、`make -f`/`make -C`、`git -C <other> commit` 等更复杂的写法仍可能被放行；husky、git-lfs 等 hook 也可能让 commit/push 每次都触发确认。
 - **处理不可信内容时：** 把项目权限改成 `default`（每条命令都要确认），并用专用的系统用户或容器运行 qubius。不要在这个用户下放 SSH key、云凭据或浏览器 cookie。
 - **不要把端口直接暴露到公网。** qubius 只监听回环地址，Host 白名单默认也只允许本机访问。远程访问请通过 SSH 隧道，或者带 HTTPS 和认证的反向代理（见 [远程访问](#远程访问)）。
 - **多用户机器或通过代理访问时，开启访问令牌**（`QUBIUS_AUTH=1`，见下文）。它能挡住其他本地用户和配置失误导致的暴露。

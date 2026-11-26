@@ -121,6 +121,27 @@ test("运行中的会话始终保留", () => {
   assert.deepEqual(ids(filterBoardEntries(entries, "zzz")), ["running"]);
 });
 
+test("排队中的会话不匹配也保留", () => {
+  const queued = entry({ id: "queued", title: "排队中", phase: "queued" });
+  const entries: BoardEntry[] = [entry({ id: "other", title: "其他" }), queued];
+  assert.equal(boardEntryMatches(queued, "zzz"), false);
+  assert.equal(isBoardEntryAlwaysVisible(queued), true);
+  assert.deepEqual(ids(filterBoardEntries(entries, "zzz")), ["queued"]);
+});
+
+test("普通结束的会话不匹配时隐藏", () => {
+  const done = entry({ id: "done", title: "已完成", phase: "completed" });
+  const entries: BoardEntry[] = [entry({ id: "other", title: "其他" }), done];
+  assert.equal(isBoardEntryAlwaysVisible(done), false);
+  assert.deepEqual(ids(filterBoardEntries(entries, "zzz")), []);
+  assert.deepEqual(ids(filterBoardEntries(entries, "已完成")), ["done"]);
+});
+
+test("等待确认但没有 pending 的会话也保留", () => {
+  const waiting = entry({ id: "waiting", title: "等待输入", phase: "needs_input", pending: null });
+  assert.equal(isBoardEntryAlwaysVisible(waiting), true);
+});
+
 test("boardEntryMatches 只判断元数据，不包含始终可见规则", () => {
   const waiting = entry({
     id: "waiting",
