@@ -70,18 +70,19 @@ maxConcurrent: 4
 # 或用专用系统用户 / 容器运行。页面上改过的级别写在 dataDir，优先于这里。
 # isolated 只对非 git 目录生效：每个对话在 path 下使用独立子目录
 #（<path>/<对话 id>），可以并行，删除对话时连子目录一起删掉。
-projects:
-  - id: sample
-    name: Sample
-    path: /absolute/path/to/project
-    # permission: default
-    # 新 worktree 是干净 checkout；这里声明要带过去的内容。
-    # include 会与仓库根的 .worktreeinclude（每行一个相对路径，空行和 # 注释忽略）合并。
-    # 只复制存在且被 .gitignore 忽略的文件/目录；sharedDirectories 只建链接，不复制。
-    # setup 在 worktree 目录里用 shell 执行，超时（默认 300 秒）或失败会让对话创建失败。
-    # 所有路径必须是仓库内的相对路径，不能写绝对路径或 ..。
-    # worktree:
-    #   setup: npm ci
-    #   setupTimeoutSeconds: 300
-    #   sharedDirectories: [node_modules, .cache]
-    #   include: [.env, .env.local]
+# 项目列表可以留空（只有内置的「普通对话」）。下面是写法示例，取消注释后把 path 换成真实目录：
+# projects:
+#   - id: sample
+#     name: Sample
+#     path: /absolute/path/to/project
+#     # permission: default
+#     # 新 worktree 是干净 checkout；这里声明要带过去的内容。
+#     # include 会与仓库根的 .worktreeinclude（每行一个相对路径，空行和 # 注释忽略）合并。
+#     # 只复制存在且被 .gitignore 忽略的文件/目录；sharedDirectories 只建链接，不复制。
+#     # setup 在 worktree 目录里用 shell 执行，超时（默认 300 秒）或失败会让对话创建失败。
+#     # 所有路径必须是仓库内的相对路径，不能写绝对路径或 ..。
+#     # worktree:
+#     #   setup: npm ci
+#     #   setupTimeoutSeconds: 300
+#     #   sharedDirectories: [node_modules, .cache]
+#     #   include: [.env, .env.local]
