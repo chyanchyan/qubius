@@ -22,7 +22,7 @@
 
 ## 版本号
 
-版本号的唯一来源是仓库根 `package.json` 的 `version` 字段（semver）。构建时 `deploy/build.sh`（Windows 是部署任务）把它和提交 sha、构建时间一起写进 `server/dist/build.json`；运行中的服务通过 `/api/health` 和 `/api/instance` 报告这些值。
+版本号的唯一来源是仓库根 `package.json` 的 `version` 字段（semver）。构建时 `deploy/build.sh`（Windows 是部署任务）和 `npm run build`（quickstart、`make build`、手工构建）都会把它和提交 sha、构建时间一起写进 `server/dist/build.json`；运行中的服务通过 `/api/health` 和 `/api/instance` 报告这些值。用 quickstart 重新构建会刷新这个文件，不会沿用上一次部署留下的旧版本号。
 
 - 发版时改 `version`：先把开发分支合入 main，再在最新 main 上直接编辑根 `package.json`，或在仓库根执行 `npm version patch|minor|major --no-git-tag-version --workspaces=false`，然后正常构建部署。不要在开发分支里改版本号，分支落后 main 时会拿到过期版本。
 - 版本号和更新说明只在收尾工作流（`tt` / `ttb` / `ttbm`）触发时更新，且发生在合入 main 之后、推送 main 之前；普通开发不提前递增，也不在 `CHANGELOG.md` 里写未发布条目。每个版本在 `CHANGELOG.md` 记录一句摘要和改动列表。

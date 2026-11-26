@@ -16,7 +16,7 @@
     "test:deploy": "bash deploy/test-lib.sh && bash deploy/test-install.sh && bash deploy/test-locks.sh && bash deploy/test-start-all.sh && bash deploy/test-deploy.sh && bash deploy/test-pull.sh && bash deploy/ops-lock.test.sh && npx tsx --test deploy/test-lan-consistency.test.ts && node --test deploy/*.test.mjs && bash deploy/test-build-stage.sh && bash deploy/test-deploy-job.sh && bash deploy/test-cli.sh",
     "test:deploy-lib": "node --test deploy/deploy-lib.test.mjs",
     "quickstart": "node deploy/quickstart.mjs",
-    "build": "npm run build -w server && npm run build -w web",
+    "build": "npm run build -w server && npm run build -w web && node deploy/build-info.mjs",
     "start": "npm start -w server",
     "qubius": "node tools/qubius.mjs",
     "qubius:mcp": "node tools/qubius-mcp.mjs",
