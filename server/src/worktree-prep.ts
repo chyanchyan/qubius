@@ -151,6 +151,7 @@ function runGit(projectPath: string, args: string[]): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["-C", projectPath, ...args], {
       stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
     });
     let stderr = "";
     child.stderr?.on("data", (chunk: Buffer) => {
@@ -331,6 +332,7 @@ function runSetup(command: string, cwd: string, timeoutSeconds: number): Promise
       cwd,
       env: process.env,
       detached,
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output: Buffer = Buffer.alloc(0);

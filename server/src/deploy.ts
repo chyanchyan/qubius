@@ -322,6 +322,9 @@ export function detectRepoUrl(repoDir: string): string | undefined {
       encoding: "utf8",
       timeout: 3000,
       stdio: ["ignore", "pipe", "ignore"],
+      /* 部署页每次刷新都会探测 origin；后台运行的服务没有控制台，不隐藏
+         子进程控制台时 Windows 会闪一下黑窗口。 */
+      windowsHide: true,
     }).trim();
     if (!URL_RE.test(remote)) return undefined;
     // origin 里可能带 user:token；这个值会显示在浏览器里，不能原样透出。

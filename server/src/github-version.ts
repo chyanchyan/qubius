@@ -81,6 +81,9 @@ function readGithubRemote(repoRoot: string): string | undefined {
       encoding: "utf8",
       timeout: 3000,
       stdio: ["ignore", "pipe", "ignore"],
+      /* 服务本身可能没有控制台窗口（后台部署/任务计划程序启动）；不隐藏
+         子进程控制台时，Windows 会为每次 git 调用闪一个黑窗口。 */
+      windowsHide: true,
     }).trim() || undefined;
   } catch {
     return undefined;
@@ -95,6 +98,7 @@ function readRemotes(repoRoot: string): Array<{ name: string; url: string }> {
       encoding: "utf8",
       timeout: 3000,
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     });
   } catch {
     return [];

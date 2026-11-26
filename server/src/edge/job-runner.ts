@@ -262,6 +262,7 @@ export const defaultSpawnJob: SpawnJobFn = (options) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       detached: true,
+      windowsHide: true,
       stdio: ["ignore", fd, fd],
       env: options.env,
     });
@@ -331,6 +332,7 @@ export const defaultPlanRunner: PlanRunner = (options) => {
     const child = spawn(process.execPath, args, {
       cwd: options.cwd,
       env,
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

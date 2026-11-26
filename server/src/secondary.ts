@@ -114,6 +114,7 @@ function currentHead(repoRoot: string): string {
       cwd: repoRoot,
       encoding: "utf8",
       timeout: 3000,
+      windowsHide: true,
     }).trim();
   } catch {
     value = "";
@@ -177,6 +178,7 @@ function runGit(repo: string, args: string[], maxBuffer = 1024 * 1024): GitResul
       maxBuffer,
       // 探测性命令（cat-file -e、merge-base）失败是正常分支，不要把 git 的 stderr 写进服务日志。
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
     });
     return { ok: true, stdout };
@@ -412,6 +414,7 @@ export function startSecondaryAction(
     child = spawn("bash", [script, action], {
       cwd: repoRoot,
       detached: true,
+      windowsHide: true,
       stdio: "ignore",
       env: {
         ...process.env,
