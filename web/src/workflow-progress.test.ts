@@ -99,14 +99,42 @@ test("deriveWorkflow：只统计当前 workflowAt 的子任务", () => {
     ],
   }), Date.parse(STARTED) + 5000);
   assert.ok(view);
-  assert.equal(view.unitTotal, 2);
-  assert.equal(view.units.length, 2);
+  // prl 只展示实际出现的单元，不再按标签总数补齐占位行。
+  assert.equal(view.unitTotal, 1);
+  assert.equal(view.units.length, 1);
   assert.equal(view.units[0]?.title, "登录接口");
-  assert.equal(view.units[1]?.state, "pending");
   assert.equal(view.stage, "并行开发");
   assert.equal(view.current, "子任务1 开发中");
   assert.equal(view.percent, 0);
   assert.equal(view.stageIndex, 1);
+});
+
+test("deriveWorkflow：prl 标签总数偏大时不多出没有工作的单元", () => {
+  const view = deriveWorkflow(session({
+    workflow: { skill: "prl", startedAt: STARTED },
+    subagents: [
+      scoped("[wf:prl:1/4:dev] 登录接口", "running", { taskId: "d1" }),
+      scoped("[wf:prl:2/4:dev] 会话存储", "running", { taskId: "d2" }),
+    ],
+  }), Date.parse(STARTED));
+  assert.ok(view);
+  assert.equal(view.unitTotal, 2);
+  assert.equal(view.units.length, 2);
+  assert.equal(view.units[1]?.title, "会话存储");
+  assert.equal(view.stepsTotal, 4);
+});
+
+test("deriveWorkflow：ser 串行队列保留还没轮到的占位单元", () => {
+  const view = deriveWorkflow(session({
+    workflow: { skill: "ser", startedAt: STARTED },
+    subagents: [
+      scoped("[wf:ser:1/3:dev] 登录接口", "running", { taskId: "d1" }),
+    ],
+  }), Date.parse(STARTED));
+  assert.ok(view);
+  assert.equal(view.unitTotal, 3);
+  assert.equal(view.units.length, 3);
+  assert.equal(view.units[2]?.state, "pending");
 });
 
 test("deriveWorkflow：评审完成后开发又跑起来是修复轮", () => {

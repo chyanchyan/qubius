@@ -136,6 +136,9 @@ export function WorkflowDock({ session }: { session: Session }) {
   const prl = view.skill === "prl";
   const stageDefs = view.skill === "plan" ? PLAN_STAGES : prl ? PRL_STAGES : null;
   const numericUnits = view.units.filter((unit) => typeof unit.unit === "number");
+  /* 还没有子任务落地的占位单元（例如 ser 队列里还没轮到的单元）只在轨道和
+     单元队列里体现规划，不在明细列表里显示成没有工作的“子任务 N”。 */
+  const listedUnits = view.units.filter((unit) => unit.dev || unit.review || unit.agent);
   /* 有 `[wf:...]` 标签时单元按开发/评审两格展示；无标签回退成一个子任务一格。 */
   const labeled = view.units.some((unit) => unit.agent === undefined);
   const trackCells: WorkflowTrackState[] = prl
@@ -240,9 +243,9 @@ export function WorkflowDock({ session }: { session: Session }) {
           {view.skill === "ser" && view.focusUnit && typeof view.focusUnit.unit === "number" && (
             <p className="wf-focus">当前单元 {view.focusUnit.unit}/{view.unitTotal} · {view.focusUnit.title}</p>
           )}
-          {view.units.length > 0 && (
+          {listedUnits.length > 0 && (
             <div className="wf-units">
-              {view.units.map((unit) => {
+              {listedUnits.map((unit) => {
                 const agent = runningAgent(unit);
                 const devLabel = view.skill === "plan" ? "计划" : "开发";
                 const stages = prl ? unitStages(unit, view.skill) : [];
@@ -287,7 +290,7 @@ export function WorkflowDock({ session }: { session: Session }) {
               })}
             </div>
           )}
-          {view.units.length === 0 && view.extras.length === 0 && (
+          {listedUnits.length === 0 && view.extras.length === 0 && (
             <p className="wf-empty">等待子任务</p>
           )}
           {view.extras.length > 0 && (

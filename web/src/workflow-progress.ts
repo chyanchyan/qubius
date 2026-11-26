@@ -152,9 +152,21 @@ export function deriveWorkflow(session: Session, now: number): WorkflowView | nu
       if (!group.title && tag.title) group.title = tag.title;
       if (tag.unit !== "final") group.total = Math.max(group.total, tag.total);
     }
-    for (const group of groups.values()) unitTotal = Math.max(unitTotal, group.total);
-    for (let index = 1; index <= unitTotal; index += 1) {
-      units.push(makeUnit(index, groups.get(index), index, now));
+    if (workflow.skill === "prl") {
+      // prl 的单元在同一条消息里并行启动，标签里的总数只是声明值：
+      // 只按真正出现的子任务建单元，避免标签总数偏大时多出没有工作的
+      // “单元 N”占位行，和子任务列表里的实际数量对不上。
+      const started = [...groups.keys()]
+        .filter((unit): unit is number => unit !== "final")
+        .sort((a, b) => a - b);
+      unitTotal = started.length;
+      for (const unit of started) units.push(makeUnit(unit, groups.get(unit), unit, now));
+    } else {
+      // ser / plan 是串行队列，还没轮到的单元保留占位行，展示整体排队进度。
+      for (const group of groups.values()) unitTotal = Math.max(unitTotal, group.total);
+      for (let index = 1; index <= unitTotal; index += 1) {
+        units.push(makeUnit(index, groups.get(index), index, now));
+      }
     }
     const final = groups.get("final");
     if (final) units.push(makeUnit("final", final, unitTotal + 1, now));
