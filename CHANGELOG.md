@@ -2,6 +2,13 @@
 
 每个版本包含一句摘要和改动列表，规则见 `CLAUDE.md`。
 
+## [0.10.4] - 2026-11-27
+
+修复 Windows 上 `make help` 因命令行编码出现乱码和语法错误的问题。
+
+- Windows 的 `make help` 正常显示中文目标说明，不再出现乱码或 `SyntaxError`。
+- `make restore` 不带 `BACKUP` 时仍然提示用法，校验改由 `deploy/restore.mjs` 完成。
+
 ## [0.10.3] - 2026-11-27
 
 修复 iPhone 上输入框离屏幕底部过远、弹出键盘后与键盘之间留有空隙的问题。
