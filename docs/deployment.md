@@ -225,7 +225,16 @@ npm ci && npm run build && npm start
 
 ## Windows 部署
 
-Windows 没有 bash/systemd/flock，部署页改走 Node 任务 `deploy/deploy-job.mjs`（`server/src/deploy.ts` 按 `process.platform` 选择）。首次部署向导同样可用：会使用 `C:\...` 形式的路径占位符，提示需要 Node.js 22+ 和 git 在 PATH 中，并说明 Windows 不支持副实例同步/回滚和公网入口。它完成和 Linux 脚本等价的工作：
+Windows 没有 bash/systemd/flock，部署页改走 Node 任务 `deploy/deploy-job.mjs`（`server/src/deploy.ts` 按 `process.platform` 选择）。首次部署向导同样可用：会使用 `C:\...` 形式的路径占位符，提示需要 Node.js 22+ 和 git 在 PATH 中，并说明 Windows 不支持副实例同步/回滚和公网入口。
+
+在页面点「保存并部署」时，服务端会打开一个新的终端窗口运行这个任务（`cmd /c start` + 临时 `.cmd` 启动器），不再以无窗口的后台进程执行：
+
+- 窗口里先检查各实例端口：被运行中的 qubius 占用时确认是否停止当前实例；被其他进程占用时列出 PID 和命令，询问是否强制停止，拒绝就取消部署。
+- 构建日志和 `deploy.log` 同时输出到窗口；构建完成、切换产物后，新服务在这个窗口前台启动，stdout/stderr 同时写入 `<dataDir>/qubius.log`。关闭窗口或按 Ctrl+C 会停止服务。
+- 页面本身由旧实例提供，切换产物时会短暂断开；新服务启动后页面恢复，部署状态仍从 `deploy.json` 读取。
+- 任务启动器写在系统临时目录（`qubius-deploy-<hash>.cmd`），不往仓库或配置目录里写脚本；非 Windows 平台和 `make deploy` 仍使用原来的后台启动方式。
+
+它完成和 Linux 脚本等价的工作：
 
 1. 读取 `<configDir>/env` 和 `projects.yaml`，为每个启用的角色渲染 `config.yaml` / `config-secondary.yaml`（旧文件内容不同时备份 `*.bak.<时间戳>`）。
 2. 副实例目录缺失且启用了 `clonePeer` 时 `git clone`。
@@ -233,6 +242,7 @@ Windows 没有 bash/systemd/flock，部署页改走 Node 任务 `deploy/deploy-j
 4. 与 Linux 一样用 staging 构建：需要安装依赖时先停旧进程并把 `node_modules` 备份为 `node_modules.prev`，再 `npm ci`；随后 server 用 `tsc --outDir dist.next`、web 先 `tsc --noEmit` 再 `vite build --outDir dist.next`，写 `server/dist.next/build.json`。不需要安装依赖时旧服务继续运行，live 完全不动。
 5. 停止前再检查一次会话；停掉旧的服务进程（当前服务根据 server 传入的 PID 和 `process.argv[1]` 判断，其它实例按 `<dataDir>/qubius.pid`）。Windows 上 `process.kill` 是硬杀，所以 server 启动时会在 `<dataDir>/shutdown-token` 写一个随机令牌；部署任务先请求 `POST /api/internal/shutdown` 让它 flush 会话并优雅退出，15 秒未退出才强制结束。等端口释放后把 `dist.next` 原子切换为 live（旧产物留作 `.prev`），再启动 `node server/dist/index.js`。
 6. 用 `/api/health` 校验端口、pid 和 `head`；失败时停止新进程、用 `.prev` 回滚、恢复 `node_modules.prev`，再启动旧版本。只有成功后才写部署 stamp。`QUBIUS_START_LAN=1` 且配置目录里有 `lan-proxy.credentials` 时顺带重启 `deploy/lan-proxy.mjs`。部署页勾选局域网入口会自动写入凭据，并在部署响应里一次性返回用户名/密码/访问令牌。
+7. 终端模式（页面部署）下，成功后任务不退出，而是等前台的服务进程结束；窗口里能看到服务日志，关闭窗口即停止服务。回滚时旧版本也在该窗口前台拉起，失败信息会留在窗口里。
 
 默认目录和 Linux 一致：配置、env、数据和日志都在当前 checkout 的 `.qubius/`（整个目录已 gitignore），不再使用 `%APPDATA%` / `%LOCALAPPDATA%`。`QUBIUS_CONFIG_DIR` 等 env 仍然优先。手工 `npm start` 时会自动读取 `.qubius/` 里的配置和 env，不需要额外设置 `QUBIUS_CONFIG`。
 

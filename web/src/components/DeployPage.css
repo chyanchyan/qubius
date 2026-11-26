@@ -17,6 +17,15 @@
 
 .deploy-setup .text-btn { color: inherit; font-weight: 600; }
 
+/* 纯说明文字没有操作按钮，不能沿用 .deploy-setup 的行内 flex：那会把每段
+   文字和 <span class="mono"> 当成独立 flex item，被 gap 撑成断断续续的
+   短句。这里只保留黄色提示框的外观，正文按普通段落排版。 */
+.deploy-setup-note {
+  display: block;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
 /* 已有配置时的「重新部署」入口：放在页头，不必滚到长表单底部。 */
 .deploy-redeploy {
   display: flex;

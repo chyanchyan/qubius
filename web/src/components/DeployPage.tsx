@@ -1223,10 +1223,14 @@ export function DeployPage() {
       )}
 
       {isWindows && (
-        <div className="deploy-setup" role="status">
-          Windows 部署会生成配置、构建并重启本机的 Node 服务（<span className="mono">deploy/deploy-job.mjs</span>），
-          不需要 bash 或 systemd。实例日志在数据目录的 <span className="mono">qubius.log</span>，
-          部署日志在配置目录的 <span className="mono">deploy.log</span>。开机自启请用「任务计划程序」自行登记。
+        <div className="deploy-setup deploy-setup-note" role="status">
+          {"点「保存并部署」会在新终端窗口中执行（"}
+          <span className="mono">deploy/deploy-job.mjs</span>
+          {"）：先检查端口，被占用时会询问是否停止占用进程；部署完成后服务在该窗口前台运行（页面切换时会短暂断开），关闭窗口或按 Ctrl+C 即停止。不需要 bash 或 systemd。实例日志在数据目录的 "}
+          <span className="mono">qubius.log</span>
+          {"，部署日志在配置目录的 "}
+          <span className="mono">deploy.log</span>
+          {"，同时也会打到窗口里。开机自启请用「任务计划程序」自行登记。"}
         </div>
       )}
 

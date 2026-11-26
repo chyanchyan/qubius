@@ -14,8 +14,10 @@
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import readline from "node:readline/promises";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { listenerPids, processInfo, stopProcess } from "./quickstart-lib.mjs";
 import {
   activeSessionsFromHealth,
   backupNodeModules,
@@ -52,6 +54,11 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const isWindows = process.platform === "win32";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/* 页面触发的部署会在新终端窗口里跑（QUBIUS_DEPLOY_CONSOLE=1）：日志要同时
+   打到控制台，端口冲突时要在窗口里询问，服务也在这个窗口前台运行。
+   say() 在读取 env 文件时就会用到，所以先用 let 占位，读完 env 再赋值。 */
+let deployConsole = false;
+
 const STATUS = process.env.QUBIUS_DEPLOY_STATUS;
 const LOG = process.env.QUBIUS_DEPLOY_LOG;
 if (!STATUS || !LOG) {
@@ -78,11 +85,14 @@ let finished = false;
 
 // ── 日志与状态（与 server/src/job-state.ts、deploy-job.sh 的格式一致）──────
 function say(text) {
+  const line = redactUrl(stripAnsi(text));
   try {
-    fs.appendFileSync(LOG, `${redactUrl(stripAnsi(text))}\n`);
+    fs.appendFileSync(LOG, `${line}\n`);
   } catch {
     // 日志写不了不影响部署本身。
   }
+  /* 终端模式下同时打到窗口；日志文件仍然保留一份，页面和设备排查都能看。 */
+  if (deployConsole) console.log(line);
 }
 
 function writeStatus(state, step, message) {
@@ -352,6 +362,8 @@ function runTry(label, command, args, options = {}) {
     } catch {
       // 日志写不了不影响命令结果。
     }
+    /* 终端模式：npm ci / 构建的输出也打给用户看，否则窗口里只有任务自己的进度。 */
+    if (deployConsole) console.log(output);
   }
   return { ok: !result.error && result.status === 0, result };
 }
@@ -392,6 +404,7 @@ const deployWait = deployWaitRaw === undefined
   ? undefined
   : (/^\d+$/.test(deployWaitRaw.trim()) ? Number(deployWaitRaw.trim()) : Number.NaN);
 const deployRestart = envBool("QUBIUS_DEPLOY_RESTART", false);
+deployConsole = envBool("QUBIUS_DEPLOY_CONSOLE", false);
 
 if (maxConcurrent < 1 || maxConcurrent > 256) {
   fail("prepare", `QUBIUS_MAX_CONCURRENT 必须在 1 到 256 之间：${maxConcurrent}`);
@@ -937,28 +950,49 @@ async function startRole(entry, options = {}) {
   const logFile = path.join(entry.dataDir, "qubius.log");
   const pidfile = path.join(entry.dataDir, "qubius.pid");
   say(`启动 ${entry.label}：${index}`);
-  const fd = fs.openSync(logFile, "a");
   let child;
-  try {
+  let logStream;
+  if (deployConsole) {
+    /* 终端模式：服务跟部署任务一起待在这个窗口里，stdout/stderr 同时透传到
+       控制台和 qubius.log；关闭窗口或 Ctrl+C 会连同服务一起停止。 */
     child = spawn(nodeBin, [index], {
       cwd: entry.repo,
       env: serverEnv(entry),
-      detached: true,
-      windowsHide: true,
-      stdio: ["ignore", fd, fd],
+      detached: false,
+      windowsHide: false,
+      stdio: ["ignore", "pipe", "pipe"],
     });
-  } finally {
-    fs.closeSync(fd);
+    logStream = fs.createWriteStream(logFile, { flags: "a" });
+    child.stdout?.pipe(logStream, { end: false });
+    child.stdout?.pipe(process.stdout, { end: false });
+    child.stderr?.pipe(logStream, { end: false });
+    child.stderr?.pipe(process.stderr, { end: false });
+  } else {
+    const fd = fs.openSync(logFile, "a");
+    try {
+      child = spawn(nodeBin, [index], {
+        cwd: entry.repo,
+        env: serverEnv(entry),
+        detached: true,
+        windowsHide: true,
+        stdio: ["ignore", fd, fd],
+      });
+    } finally {
+      fs.closeSync(fd);
+    }
   }
   let exited = false;
   child.on("exit", () => {
     exited = true;
+    if (logStream) logStream.end();
   });
   child.on("error", (error) => {
     exited = true;
     say(`${entry.label}启动失败：${error.message}`);
+    if (logStream) logStream.end();
   });
-  child.unref();
+  if (deployConsole) consoleServers.push(child);
+  else child.unref();
   fs.writeFileSync(pidfile, `${child.pid ?? ""}\n`);
 
   const deadline = Date.now() + 60_000;
@@ -1112,12 +1146,96 @@ async function startProxy(entry) {
   say(`${entry.label} LAN 入口已就绪：http://${host}:${entry.port}`);
 }
 
+// ── 终端模式：端口确认与前台服务 ────────────────────────────────────────────
+
+/** 在控制台里问一个 y/N 问题；非交互终端直接返回默认值，避免部署挂死。 */
+async function askYesNo(question, defaultYes) {
+  if (!process.stdin.isTTY) return defaultYes;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(question)).trim().toLowerCase();
+    if (!answer) return defaultYes;
+    return /^(y|yes)$/.test(answer);
+  } finally {
+    rl.close();
+  }
+}
+
+function describeListener(pid) {
+  const info = processInfo(pid);
+  const name = info?.name || "未知进程";
+  const command = info?.command ? `  ${info.command}` : "";
+  return `PID ${pid} ${name}${command}`;
+}
+
+/**
+ * 部署前检查每个实例的端口。当前 qubius 实例占着端口是正常的（部署会先优雅
+ * 停止它），只需要确认；别的进程占用则列出并询问是否强制停止。页面触发部署
+ * 时会先打开这个终端窗口，用户能在部署真正开始前决定要不要继续。
+ */
+async function confirmPorts() {
+  if (!deployConsole) return;
+  for (const entry of entries) {
+    const { pids } = listenerPids(entry.port);
+    if (pids.length === 0) continue;
+    const health = await fetchHealth(entry.port);
+    const healthPid = Number(health?.pid) || 0;
+    /* 局域网入口和当前实例都是部署流程自己会重启的进程，不算“外部占用”。 */
+    const proxyPid = readPid(path.join(entry.dataDir, "lan-proxy.pid"));
+    const ours = new Set([healthPid, PARENT_PID, proxyPid ?? 0].filter((pid) => pid > 0));
+    const known = pids.filter((pid) => ours.has(pid));
+    const unknown = pids.filter((pid) => !ours.has(pid));
+
+    if (unknown.length > 0) {
+      say(`端口 ${entry.port} 被其他进程占用：`);
+      for (const pid of unknown) say(`  ${describeListener(pid)}`);
+      const stop = await askYesNo("停止占用进程并继续部署？[y/N] ", false);
+      if (!stop) fail("port", `已取消部署：端口 ${entry.port} 被其他进程占用`);
+      for (const pid of unknown) {
+        try {
+          stopProcess(pid);
+          say(`已停止占用进程 PID ${pid}`);
+        } catch (error) {
+          say(`无法停止 PID ${pid}：${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      try {
+        await waitPortFree(entry.port, `端口 ${entry.port}`);
+      } catch (error) {
+        fail("port", error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    if (known.length > 0) {
+      say(`端口 ${entry.port} 由运行中的${entry.label}占用：`);
+      for (const pid of known) say(`  ${describeListener(pid)}`);
+      const proceed = await askYesNo("部署会先停止当前实例，继续？[Y/n] ", true);
+      if (!proceed) fail("port", "已取消部署：保留当前运行实例");
+    }
+  }
+}
+
+/** 终端模式下启动的服务进程：等服务退出后部署任务再结束，窗口保持在前台。 */
+const consoleServers = [];
+
+function waitForExit(child) {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve(child.exitCode ?? 1);
+      return;
+    }
+    child.once("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+  });
+}
+
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 async function main() {
   writeStatus("running", "prepare", "准备部署");
   say(`===== ${STARTED_AT} deploy ${JOB_ID}（${isWindows ? "Windows" : "macOS"} 部署任务）=====`);
   say(`部署仓库：${DEPLOY_REPO_ROOT}`);
   say(`部署配置：env=${ENV_FILE || "未指定"}`);
+
+  await confirmPorts();
 
   for (const entry of entries) ensureRepo(entry);
 
@@ -1301,6 +1419,16 @@ async function main() {
 
   finish("success", "done", "部署完成");
   say("部署完成");
+
+  if (deployConsole && consoleServers.length > 0) {
+    say("服务已在前台运行；按 Ctrl+C 或关闭此窗口即停止。");
+    const codes = await Promise.all(consoleServers.map((child) => waitForExit(child)));
+    const failed = codes.find((code) => code !== 0);
+    if (failed !== undefined) {
+      say(`服务进程已退出（退出码 ${failed}）`);
+      process.exitCode = failed || 1;
+    }
+  }
 }
 
 main().catch((error) => {

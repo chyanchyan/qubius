@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import { isIP } from "node:net";
@@ -1418,6 +1418,33 @@ export function deployJobSpec(options: {
   return { script, command: "bash", args: [script], windowsHide: false };
 }
 
+/**
+ * Windows 页面部署用的启动器内容：在一个新终端窗口里运行部署任务，跑完暂停，
+ * 方便看最后的错误；服务在终端模式下由任务前台拉起，窗口一直保留。
+ * 路径里的 % 会被 cmd 当成变量展开，转义成 %%。
+ */
+export function consoleLauncherScript(repoRoot: string, nodeBin: string, script: string): string {
+  const quote = (value: string) => `"${value.replace(/%/g, "%%")}"`;
+  return [
+    "@echo off",
+    "chcp 65001 >nul",
+    `cd /d ${quote(repoRoot)}`,
+    `${quote(nodeBin)} ${quote(script)}`,
+    "set QUBIUS_DEPLOY_EXIT=%ERRORLEVEL%",
+    "echo.",
+    "echo 部署进程已退出（退出码 %QUBIUS_DEPLOY_EXIT%）。按任意键关闭窗口。",
+    "pause >nul",
+    "exit /b %QUBIUS_DEPLOY_EXIT%",
+    "",
+  ].join("\r\n");
+}
+
+/** 启动器写到系统临时目录，同一 checkout 复用同一个文件，避免堆垃圾。 */
+export function consoleLauncherPath(repoRoot: string): string {
+  const digest = createHash("sha1").update(path.resolve(repoRoot)).digest("hex").slice(0, 10);
+  return path.join(os.tmpdir(), `qubius-deploy-${digest}.cmd`);
+}
+
 export interface StartDeployOptions {
   configDir: string;
   repoRoot: string;
@@ -1437,6 +1464,8 @@ export interface StartDeployOptions {
   parentDataDir?: string;
   /** 当前服务监听的端口；部署任务用它向旧进程发送优雅退出请求。 */
   parentPort?: number;
+  /** Windows 页面部署：在新终端窗口里运行任务，端口检查和启动都在窗口里可见。 */
+  consoleMode?: boolean;
 }
 
 /**
@@ -1446,6 +1475,9 @@ export interface StartDeployOptions {
 export function startDeployJob(options: StartDeployOptions): { jobId: string } | "busy" {
   const { configDir, repoRoot, values } = options;
   const platform = options.platform ?? process.platform;
+  /* 只有在真正的 Windows 上才开新终端：测试会用 platform="win32" 模拟，
+     但运行在 Linux 上，不能去调用 cmd.exe/start。 */
+  const consoleMode = options.consoleMode === true && platform === "win32" && process.platform === "win32";
   if (deployBusy(configDir)) return "busy";
   const spec = deployJobSpec({
     repoRoot,
@@ -1466,7 +1498,7 @@ export function startDeployJob(options: StartDeployOptions): { jobId: string } |
     jobId,
     state: "running",
     step: "prepare",
-    message: "部署任务已启动",
+    message: consoleMode ? "部署任务已在新终端窗口启动" : "部署任务已启动",
     pid: null,
     startedAt,
     finishedAt: null,
@@ -1494,6 +1526,7 @@ export function startDeployJob(options: StartDeployOptions): { jobId: string } |
     QUBIUS_DEPLOY_PARENT_DATA_DIR: options.parentDataDir ?? "",
     QUBIUS_DEPLOY_PARENT_PORT: options.parentPort ? String(options.parentPort) : "",
     QUBIUS_DEPLOY_REPO_ROOT: repoRoot,
+    ...(consoleMode ? { QUBIUS_DEPLOY_CONSOLE: "1" } : {}),
   };
   // Windows / macOS 的 Node 部署任务自己串行化（deploy.job.lock + deploy.json），
   // 不使用依赖 flock 的 shell ops lock。
@@ -1503,13 +1536,28 @@ export function startDeployJob(options: StartDeployOptions): { jobId: string } |
 
   let child;
   try {
-    child = spawn(spec.command, spec.args, {
-      cwd: repoRoot,
-      detached: true,
-      stdio: "ignore",
-      env: childEnv,
-      windowsHide: spec.windowsHide,
-    });
+    if (consoleMode) {
+      /* 用 cmd 的 start 打开一个新控制台窗口：服务端本身可能已经是无控制台
+         的后台进程，直接把 node 挂上去用户看不到输出，也收不到交互输入。
+         启动器负责设置 UTF-8 代码页、退出后暂停。 */
+      const launcher = consoleLauncherPath(repoRoot);
+      fs.writeFileSync(launcher, consoleLauncherScript(repoRoot, spec.command, spec.script));
+      child = spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "start", "", launcher], {
+        cwd: repoRoot,
+        detached: true,
+        stdio: "ignore",
+        env: childEnv,
+        windowsHide: false,
+      });
+    } else {
+      child = spawn(spec.command, spec.args, {
+        cwd: repoRoot,
+        detached: true,
+        stdio: "ignore",
+        env: childEnv,
+        windowsHide: spec.windowsHide,
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     writeDeployJob(configDir, {
@@ -1948,6 +1996,8 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
       parentRole: options.role,
       parentDataDir: options.dataDir,
       parentPort: options.port,
+      /* Windows 页面部署走可见终端：端口确认和启动都在窗口里完成。 */
+      consoleMode: platform === "win32",
     });
     if (result === "busy") return { code: "busy", kind: "deploy" };
     spawned = true;

@@ -525,9 +525,10 @@ export function DeployWizard({
             </dl>
             {windows && (
               <Notice tone="info">
-                Windows 部署会生成配置、按需 npm ci / build 并重启本机 Node 服务，不需要 bash 或 systemd，
-                但需要 Node.js 22+ 和 git 在 PATH 中。开机自启请用「任务计划程序」；
-                公网入口和副实例同步/回滚不在 Windows 部署范围内。
+                Windows 部署会在新终端窗口中执行：先检查端口（被占用时会询问是否停止），
+                再生成配置、按需 npm ci / build 并启动本机 Node 服务，不需要 bash 或 systemd，
+                但需要 Node.js 22+ 和 git 在 PATH 中。服务在该窗口前台运行，关闭窗口即停止；
+                开机自启请用「任务计划程序」；公网入口和副实例同步/回滚不在 Windows 部署范围内。
               </Notice>
             )}
             {state.platform === "darwin" && (

@@ -9,6 +9,8 @@ import {
   DeployDataDirChangeError,
   DeployValidationError,
   applyDeploy,
+  consoleLauncherPath,
+  consoleLauncherScript,
   deployBusy,
   deployEnvValues,
   deployJobSpec,
@@ -336,6 +338,31 @@ test("部署任务按平台选择 deploy-job：Windows / macOS 用 node + mjs", 
   assert.equal(linux.command, "bash");
   assert.deepEqual(linux.args, [path.join(repo, "deploy", "deploy-job.sh")]);
   assert.equal(linux.windowsHide, false);
+});
+
+test("Windows 终端启动器设置 UTF-8、转义 % 并在退出后暂停", () => {
+  const script = consoleLauncherScript(
+    "D:\\项目 100%\\qubius",
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\项目 100%\\qubius\\deploy\\deploy-job.mjs",
+  );
+  assert.match(script, /^@echo off\r\n/);
+  assert.match(script, /chcp 65001/);
+  assert.match(script, /cd \/d "D:\\项目 100%%\\qubius"/);
+  assert.match(
+    script,
+    /"C:\\Program Files\\nodejs\\node\.exe" "D:\\项目 100%%\\qubius\\deploy\\deploy-job\.mjs"/,
+  );
+  assert.match(script, /pause >nul/);
+  assert.match(script, /exit \/b %QUBIUS_DEPLOY_EXIT%/);
+});
+
+test("Windows 终端启动器放在临时目录，同一 checkout 复用同一个文件", () => {
+  const a = consoleLauncherPath("/srv/qubius");
+  const b = consoleLauncherPath("/srv/qubius/");
+  assert.equal(a, b);
+  assert.equal(path.dirname(a), os.tmpdir());
+  assert.match(path.basename(a), /^qubius-deploy-[0-9a-f]{10}\.cmd$/);
 });
 
 test("合法表单通过校验", () => {

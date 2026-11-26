@@ -156,15 +156,15 @@ make deploy-wan   # 公网：再应用 edgectl 公网入口（交互确认）
 
 ### Windows 图形化部署
 
-Windows 上没有 bash/systemd 时，`/deploy` 页面由 `deploy/deploy-job.mjs` 完成部署：生成 `config.yaml`、按需 `npm ci` 并 staging 构建、停掉旧进程、原子切换产物、按新配置启动，并用 `/api/health` 校验；启动失败会回滚到旧产物。需要 Node.js 22+ 和 git 在 PATH 里，也可以在页面「Node 路径」里填 `node.exe` 的绝对路径。
+Windows 上没有 bash/systemd 时，`/deploy` 页面由 `deploy/deploy-job.mjs` 完成部署：生成 `config.yaml`、按需 `npm ci` 并 staging 构建、停掉旧进程、原子切换产物、按新配置启动，并用 `/api/health` 校验；启动失败会回滚到旧产物。点「保存并部署」会打开一个新的终端窗口执行任务：先检查端口，被占用时询问是否停止占用进程；构建完成后服务在该窗口前台运行，关闭窗口或按 Ctrl+C 即停止。需要 Node.js 22+ 和 git 在 PATH 里，也可以在页面「Node 路径」里填 `node.exe` 的绝对路径。
 
 1. 在仓库目录运行 `npm run quickstart`（可选择 npm 源、配置目录和数据目录，默认都在当前 checkout 的 `.qubius/`），或手动运行 `npm ci && npm run build && npm start`。没有 `config.yaml` 时服务也会启动，并进入首次部署模式。
 2. 打开 `http://127.0.0.1:8787/deploy`。首次运行会进入部署向导，按步骤确认使用方式、Checkout 路径、数据目录和端口；只在本机使用时访问域名保持 `localhost` 即可。需要完整参数时可以切到「完整部署表单」。
-3. 点「保存并部署」。任务日志在 `<配置目录>\deploy.log`，实例日志在 `<数据目录>\qubius.log`，pid 写在 `<数据目录>\qubius.pid`。
+3. 点「保存并部署」。会打开新终端窗口执行部署：端口被占用时先询问；成功后服务在该窗口前台运行，页面在切换产物时短暂断开，服务就绪后自动恢复。任务日志同时打到窗口和 `<配置目录>\deploy.log`，实例日志在 `<数据目录>\qubius.log`，pid 写在 `<数据目录>\qubius.pid`。
 
 向导在 Windows 上会使用盘符路径的占位符，并提示不需要 bash/systemd。「主副双实例」可以在同一台机器运行两个 checkout，但副实例的同步/回滚按钮和公网入口仍不可用；开机自启仍要靠「任务计划程序」。
 
-Windows 和 Linux/macOS 的默认目录一致：配置、env、数据和日志都在当前 checkout 的 `.qubius/` 里（`config.yaml`、`env`、`data/`），整个目录已 gitignore；可以用 env 里的 `QUBIUS_CONFIG_DIR`、`QUBIUS_DATA_PRIMARY` 等覆盖。部署后要手工重启，直接 `npm start` 即可，它会自动读取 `.qubius/` 里生成的配置和 env；副实例要加 `QUBIUS_SECONDARY=1`。
+Windows 和 Linux/macOS 的默认目录一致：配置、env、数据和日志都在当前 checkout 的 `.qubius/` 里（`config.yaml`、`env`、`data/`），整个目录已 gitignore；可以用 env 里的 `QUBIUS_CONFIG_DIR`、`QUBIUS_DATA_PRIMARY` 等覆盖。页面部署成功后服务在前台终端窗口里运行；窗口关掉后要重新启动，直接 `npm start` 即可，它会自动读取 `.qubius/` 里生成的配置和 env；副实例要加 `QUBIUS_SECONDARY=1`。
 
 需要局域网 Basic 认证入口时，在部署页勾选「启用局域网入口」，填用户名、密码留空即可自动生成；部署成功后会一次性显示访问地址、用户名、登录密码和 API 访问令牌（关闭后不再显示）。凭据写在配置目录的 `lan-proxy.credentials`（`user:password`，`0600`），部署任务会顺带启动 `deploy/lan-proxy.mjs`。命令行用 `make deploy-lan`：缺少凭据时自动生成并在终端打印一次。
 
