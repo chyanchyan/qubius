@@ -1,0 +1,191 @@
+/* Markdown 代码块（仅在 react-markdown 的异步 chunk 里加载）。
+   注意只覆盖 .md-code 内部的 pre，不要影响 tool-body 等其它 pre。 */
+
+.md .md-code {
+  margin: 0.45em 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  overflow: hidden;
+}
+
+.md .md-code-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  min-height: calc(28px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(8px * var(--control-scale));
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.md .md-code-lang {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+}
+
+/* 头部右侧的操作区：Markdown 源码切换 + 复制。 */
+.md .md-code-actions {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  flex: none;
+  margin-left: auto;
+}
+
+.md .md-code-copy,
+.md .md-code-toggle {
+  flex: none;
+  min-height: calc(24px * var(--control-scale));
+  padding: calc(1px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+
+.md .md-code-copy:hover:not(:disabled),
+.md .md-code-toggle:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.md .md-code-copy[data-state="copied"] { color: var(--green); }
+.md .md-code-copy[data-state="failed"] { color: var(--error); }
+
+/* 复制结果的读屏播报，视觉上隐藏但保留在无障碍树里。 */
+.md .md-code-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 比 .md pre 的 (0,1,1) 更具体，覆盖边框/背景/内边距，同时不波及其它 pre。 */
+.md .md-code > .md-code-pre {
+  margin: 0;
+  padding: calc(8px * var(--control-scale));
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  max-height: 28rem;
+  overflow: auto;
+}
+
+.md .md-code > .md-code-pre > code {
+  display: block;
+  background: transparent;
+  padding: 0;
+}
+
+/* Markdown 围栏：正文按文档排版，容器与头部（复制）保留。
+   不限制高度，长文档直接铺开；里面的代码块仍走各自的可滚动容器。 */
+.md .md-code > .md-code-doc {
+  padding: calc(8px * var(--control-scale)) calc(12px * var(--control-scale));
+}
+
+.md .md-code-doc > :first-child { margin-top: 0; }
+.md .md-code-doc > :last-child { margin-bottom: 0; }
+
+/* highlight.js token 配色（深色为默认，浅色主题单独覆盖）。 */
+.md-code .hljs-comment,
+.md-code .hljs-quote { color: #7f9f7f; font-style: italic; }
+
+.md-code .hljs-keyword,
+.md-code .hljs-selector-tag,
+.md-code .hljs-literal,
+.md-code .hljs-doctag,
+.md-code .hljs-name { color: #ff7b72; }
+
+.md-code .hljs-string,
+.md-code .hljs-attr-value,
+.md-code .hljs-regexp { color: #a5d6ff; }
+
+.md-code .hljs-number,
+.md-code .hljs-symbol,
+.md-code .hljs-bullet { color: #79c0ff; }
+
+.md-code .hljs-title,
+.md-code .hljs-function,
+.md-code .hljs-section,
+.md-code .hljs-title.function_ { color: #d2a8ff; }
+
+.md-code .hljs-variable,
+.md-code .hljs-template-variable,
+.md-code .hljs-attr,
+.md-code .hljs-attribute,
+.md-code .hljs-selector-attr,
+.md-code .hljs-selector-class,
+.md-code .hljs-selector-id,
+.md-code .hljs-type,
+.md-code .hljs-class .hljs-title,
+.md-code .hljs-built_in,
+.md-code .hljs-builtin-name { color: #ffa657; }
+
+.md-code .hljs-meta,
+.md-code .hljs-meta .hljs-keyword { color: #79c0ff; }
+
+.md-code .hljs-addition { color: #aff5b4; background: #74c9911f; }
+.md-code .hljs-deletion { color: #ffdcd7; background: #c74e3926; }
+.md-code .hljs-emphasis { font-style: italic; }
+.md-code .hljs-strong { font-weight: 700; }
+
+@media (pointer: coarse) {
+  .md .md-code-copy,
+  .md .md-code-toggle { min-height: calc(36px * var(--control-scale)); padding: calc(4px * var(--control-scale)) calc(12px * var(--control-scale)); }
+}
+
+@media (prefers-color-scheme: light) {
+  .md-code .hljs-comment,
+  .md-code .hljs-quote { color: #6a737d; }
+
+  .md-code .hljs-keyword,
+  .md-code .hljs-selector-tag,
+  .md-code .hljs-literal,
+  .md-code .hljs-doctag,
+  .md-code .hljs-name { color: #cf222e; }
+
+  .md-code .hljs-string,
+  .md-code .hljs-attr-value,
+  .md-code .hljs-regexp { color: #0a3069; }
+
+  .md-code .hljs-number,
+  .md-code .hljs-symbol,
+  .md-code .hljs-bullet { color: #0550ae; }
+
+  .md-code .hljs-title,
+  .md-code .hljs-function,
+  .md-code .hljs-section,
+  .md-code .hljs-title.function_ { color: #8250df; }
+
+  .md-code .hljs-variable,
+  .md-code .hljs-template-variable,
+  .md-code .hljs-attr,
+  .md-code .hljs-attribute,
+  .md-code .hljs-selector-attr,
+  .md-code .hljs-selector-class,
+  .md-code .hljs-selector-id,
+  .md-code .hljs-type,
+  .md-code .hljs-class .hljs-title,
+  .md-code .hljs-built_in,
+  .md-code .hljs-builtin-name { color: #953800; }
+
+  .md-code .hljs-meta,
+  .md-code .hljs-meta .hljs-keyword { color: #0550ae; }
+
+  .md-code .hljs-addition { color: #116329; background: #2f7d4f1a; }
+  .md-code .hljs-deletion { color: #82071e; background: #cf222e1a; }
+}

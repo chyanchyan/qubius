@@ -1,0 +1,51 @@
+{
+	admin localhost:2019
+	auto_https off
+}
+
+http://:18080 {
+	bind 127.0.0.1
+	@site_0 host dev.example.com
+	handle @site_0 {
+		reverse_proxy http://127.0.0.1:5173 {
+			header_up Host {host}
+			header_up X-Forwarded-Proto {http.request.header.X-Forwarded-Proto}
+			header_up X-Forwarded-Host {http.request.header.X-Forwarded-Host}
+			flush_interval -1
+		}
+	}
+
+	@site_1 host app.example.com
+	handle @site_1 {
+		reverse_proxy http://127.0.0.1:9000 {
+			header_up Host {host}
+			header_up X-Forwarded-Proto {http.request.header.X-Forwarded-Proto}
+			header_up X-Forwarded-Host {http.request.header.X-Forwarded-Host}
+			flush_interval -1
+		}
+	}
+
+	@site_2 host qubius.example.com
+	handle @site_2 {
+		reverse_proxy http://127.0.0.1:8789 {
+			header_up Host {host}
+			header_up X-Forwarded-Proto {http.request.header.X-Forwarded-Proto}
+			header_up X-Forwarded-Host {http.request.header.X-Forwarded-Host}
+			flush_interval -1
+		}
+	}
+
+	@site_3 host co-qubius.example.com
+	handle @site_3 {
+		reverse_proxy http://127.0.0.1:8790 {
+			header_up Host {host}
+			header_up X-Forwarded-Proto {http.request.header.X-Forwarded-Proto}
+			header_up X-Forwarded-Host {http.request.header.X-Forwarded-Host}
+			flush_interval -1
+		}
+	}
+
+	handle {
+		respond "edgectl: no site for this host" 404
+	}
+}

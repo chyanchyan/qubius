@@ -1,0 +1,248 @@
+/* 项目页的加载/错误占位与副实例提示；颜色沿用全局主题变量。 */
+
+.projects-loading {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(8px * var(--control-scale));
+}
+
+.projects-loading .skeleton-line {
+  height: calc(20px * var(--control-scale));
+  border-radius: 6px;
+}
+
+/* ErrorState 自带整页布局；嵌进项目页时收成列表位置的一块内容。 */
+.projects-error .page {
+  flex: none;
+  min-height: 0;
+  overflow: visible;
+  padding: 0;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.projects-error .error {
+  margin: 0 0 calc(8px * var(--control-scale));
+}
+
+/* 重试期间用 fieldset 原生禁用重试按钮；去掉全局 fieldset 的边框/内边距。 */
+.projects-error-field {
+  display: block;
+  min-width: 0;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* 拿不到副实例信息时，错误提示单独占一行并保留原有间距。 */
+.maintenance-notice { margin-bottom: calc(16px * var(--control-scale)); }
+
+/* 主实例版本对比：比普通说明多一点层次，但不抢按钮的注意力。 */
+.maintenance-compare {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--control-scale));
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+  border-radius: 6px;
+  background: var(--input);
+}
+
+.maintenance-compare-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--control-scale));
+}
+
+.maintenance-compare[data-relation="behind"] .maintenance-compare-main strong { color: var(--warn); }
+.maintenance-compare[data-relation="diverged"] .maintenance-compare-main { color: var(--red); }
+
+.maintenance-compare-sub {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.maintenance-compare-meta {
+  color: var(--muted);
+  font-size: 0.92em;
+}
+
+.maintenance-commits summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.92em;
+}
+
+.maintenance-commits ul {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--control-scale));
+  margin: calc(4px * var(--control-scale)) 0 0;
+  padding-left: calc(16px * var(--control-scale));
+  color: var(--muted);
+}
+
+.maintenance-commits li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 重启会中断进行中的会话，用比普通说明更显眼的颜色提醒。 */
+.maintenance-impact { margin: 0; color: var(--warn); }
+
+/* 项目列表页标题行：右侧是「管理项目」入口。 */
+.projects-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--control-scale));
+  margin-bottom: calc(4px * var(--control-scale));
+}
+
+.projects-head h1 { margin: 0; }
+
+/* 项目管理弹窗：添加表单复用全局 .field / .btn 外观，只补布局。 */
+.project-manage {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  min-width: 0;
+}
+
+.project-manage-lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.project-manage-add {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  margin-bottom: calc(4px * var(--control-scale));
+}
+
+.project-manage-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.project-manage-add-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
+  gap: calc(8px * var(--control-scale));
+}
+/* 新建仓库只有仓库名称和母目录两个字段。 */
+.project-manage-create-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+}
+
+.project-manage-add-grid .field { min-width: 0; }
+
+.project-manage-add-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.project-manage-add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--control-scale));
+}
+
+.project-manage-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(8px * var(--control-scale));
+}
+
+/* 项目条目：和项目列表一样，内置项目在前；不可用的项目用红边框提示。 */
+.project-manage-list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.project-manage-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.project-manage-item[data-available="false"] {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--line));
+}
+
+.project-manage-main {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--control-scale));
+  min-width: 0;
+}
+
+.project-manage-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--control-scale));
+  min-width: 0;
+}
+
+.project-manage-path {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-manage-meta {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.project-manage-badge {
+  padding: 0 calc(8px * var(--control-scale));
+  border: 1px solid var(--red);
+  border-radius: 999px;
+  color: var(--red);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+.project-manage-loading {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(8px * var(--control-scale));
+}
+
+.project-manage-loading .skeleton-line {
+  height: calc(20px * var(--control-scale));
+  border-radius: 6px;
+}
+
+@media (max-width: 720px) {
+  .project-manage-add-grid { grid-template-columns: minmax(0, 1fr); }
+}

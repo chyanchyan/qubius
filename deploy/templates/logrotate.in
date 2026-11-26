@@ -1,0 +1,18 @@
+# qubius 日志轮转（由 deploy/install.sh 渲染，不要手工编辑）。
+# 安装（用 install -m 644，避免 group/other 可写导致 logrotate 忽略）：
+#   sudo install -m 644 <此文件> /etc/logrotate.d/qubius
+# 进程用 shell 重定向写日志，因此用 copytruncate 而不是让进程重开文件。
+# 注意：数据目录路径含空格时，logrotate 会按空白拆词，导致匹配不到文件、日志不轮转；
+# 请使用不含空格的 QUBIUS_DATA_PRIMARY / QUBIUS_DATA_SECONDARY。
+{{QUBIUS_DATA_PRIMARY}}/*.log {{QUBIUS_DATA_SECONDARY}}/*.log {
+    # 日志目录属于 QUBIUS_USER；root 运行 logrotate 时需要显式切换用户，
+    # 否则会因父目录权限被跳过，日志永远不轮转。
+    su {{QUBIUS_USER}} {{QUBIUS_USER}}
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

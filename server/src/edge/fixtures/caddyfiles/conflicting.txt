@@ -1,0 +1,7 @@
+# hand-written block for a domain we are about to manage
+qubius.example.com {
+	reverse_proxy 127.0.0.1:9999
+}
+
+# >>> edgectl managed block - do not edit (generated) >>>
+# <<< edgectl managed block - do not edit (generated) <<<

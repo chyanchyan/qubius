@@ -1,0 +1,116 @@
+.git-panel {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+  color: var(--fg);
+  font-size: var(--fs-12);
+}
+
+.git-head {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  min-width: 0;
+}
+
+.git-branch {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-state {
+  flex: none;
+  margin-left: auto;
+  padding: 0 calc(6px * var(--control-scale));
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.git-state.clean { color: var(--green); }
+.git-state.dirty { color: var(--warn); }
+
+.git-panel-hint {
+  margin: 0;
+  color: var(--muted);
+}
+
+.git-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+}
+
+.git-files li {
+  padding: calc(2px * var(--control-scale)) calc(8px * var(--control-scale));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-11);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-files li + li { border-top: 1px solid var(--line); }
+.git-files .git-more { color: var(--muted); }
+
+.git-form {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+}
+
+.git-message {
+  width: 100%;
+  padding: calc(5px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--fg);
+}
+
+.git-message::placeholder { color: var(--placeholder); }
+
+.git-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--control-scale));
+}
+
+.git-buttons button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+}
+
+.git-buttons button:hover:not(:disabled) { background: var(--hover); }
+
+.git-error {
+  margin: 0;
+  font-size: var(--fs-12);
+}
+
+.git-output {
+  margin: 0;
+  padding: calc(8px * var(--control-scale));
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--fg);
+  font-size: var(--fs-11);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

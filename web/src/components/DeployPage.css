@@ -1,0 +1,276 @@
+/* 部署页专用样式；颜色、字号和输入框外观都复用 styles.css 里的全局变量与 .field。 */
+
+.deploy-setup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(6px * var(--control-scale)) calc(12px * var(--control-scale));
+  margin: 0 0 calc(12px * var(--control-scale));
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.deploy-setup .text-btn { color: inherit; font-weight: 600; }
+
+/* 已有配置时的「重新部署」入口：放在页头，不必滚到长表单底部。 */
+.deploy-redeploy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--control-scale)) calc(10px * var(--control-scale));
+  margin: 0 0 calc(12px * var(--control-scale));
+}
+
+.deploy-redeploy .deploy-inline-hint { margin: 0; }
+
+.deploy-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  margin: 0 0 calc(12px * var(--control-scale));
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+/* 校验失败滚到区块时，scroll-margin-top 给顶部留一点呼吸空间。 */
+fieldset.deploy-section { padding: calc(8px * var(--control-scale)) calc(12px * var(--control-scale)) calc(12px * var(--control-scale)); scroll-margin-top: calc(8px * var(--control-scale)); }
+
+.deploy-section > h2 {
+  margin: 0;
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.deploy-section > legend {
+  padding: 0 calc(4px * var(--control-scale));
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.deploy-info,
+.deploy-card-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: calc(8px * var(--control-scale));
+  margin: 0;
+}
+
+.deploy-info > div,
+.deploy-card-info > div { min-width: 0; }
+
+.deploy-info dt,
+.deploy-card-info dt {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.deploy-info dd,
+.deploy-card-info dd {
+  margin: calc(2px * var(--control-scale)) 0 0;
+  overflow-wrap: anywhere;
+}
+
+/* GitHub 版本对照：一致用绿色，有差异用警示色，拉取失败保持中性。 */
+.deploy-version-note { font-size: var(--fs-11); }
+.deploy-version-note[data-status="same"] { color: var(--green); }
+.deploy-version-note[data-status="different"] { color: var(--warn); }
+.deploy-version-note[data-status="unknown"] { color: var(--muted); }
+
+.deploy-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: calc(8px * var(--control-scale));
+}
+
+.deploy-card {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  min-width: 0;
+  padding: calc(8px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.deploy-card-head,
+.deploy-status-head {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+}
+
+.deploy-badge {
+  margin-left: auto;
+  padding: 0 calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+.deploy-badge[data-on="true"] {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.deploy-status {
+  margin: 0 0 calc(12px * var(--control-scale));
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+.deploy-status[data-state="success"] { border-color: var(--green); }
+.deploy-status[data-state="failed"] { border-color: var(--red); }
+.deploy-status[data-state="restarting"],
+.deploy-status[data-state="unknown"],
+.deploy-status[data-state="relocated"] { border-color: var(--warn); }
+
+.deploy-status p { margin: calc(6px * var(--control-scale)) 0 0; }
+.deploy-status .deploy-message { overflow-wrap: anywhere; }
+
+.deploy-step {
+  margin: calc(6px * var(--control-scale)) 0 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.deploy-links {
+  margin: calc(6px * var(--control-scale)) 0 0;
+  padding-left: calc(18px * var(--control-scale));
+}
+
+.deploy-links li { overflow-wrap: anywhere; }
+.deploy-links a { color: var(--orange); }
+
+.deploy-log {
+  margin: calc(8px * var(--control-scale)) 0 0;
+  padding: calc(8px * var(--control-scale));
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-11);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.deploy-form { margin: 0; }
+
+.deploy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: calc(8px * var(--control-scale));
+}
+
+/* 主实例和副实例用同一套列网格：auto-fit 会按条目数收缩空列，
+   主实例 4 项、副实例 6 项时列宽不同，对应的 Checkout / 数据目录 /
+   端口 / 公网域名就对不齐。固定 4 列后两个区块逐列对齐。 */
+.deploy-grid-instance {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* 副实例多出的同步项放在第二行，各占两列，和上行边界保持一致。 */
+.deploy-span-2 { grid-column: span 2; }
+
+@media (max-width: 900px) {
+  .deploy-grid-instance { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .deploy-span-2 { grid-column: span 1; }
+}
+
+@media (max-width: 560px) {
+  .deploy-grid-instance { grid-template-columns: minmax(0, 1fr); }
+}
+
+.deploy-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--control-scale)) calc(14px * var(--control-scale));
+}
+
+.field.field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  color: var(--fg);
+}
+
+.field.field-check input { width: auto; }
+.field-check[data-disabled="true"] { opacity: 0.55; }
+
+.deploy-readonly-value {
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.deploy-inline-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.deploy-projects {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+}
+
+.deploy-project {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: calc(8px * var(--control-scale));
+}
+
+.deploy-project .field { min-width: 0; }
+.deploy-project-remove { min-height: calc(28px * var(--control-scale)); white-space: nowrap; }
+
+.deploy-actions { display: flex; flex-wrap: wrap; gap: calc(6px * var(--control-scale)); }
+
+/* 长表单的 sticky 提交栏：错误提示和提交按钮始终在视口底部。 */
+.deploy-submit {
+  position: sticky;
+  z-index: 5;
+  bottom: 0;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  margin: calc(4px * var(--control-scale)) calc(-14px * var(--control-scale)) 0;
+  padding: calc(8px * var(--control-scale)) calc(14px * var(--control-scale)) calc(8px * var(--control-scale) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.deploy-submit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+}
+
+/* 提交按钮旁的拉取提示：窄屏时换行，不挤压按钮。 */
+.deploy-submit-row .deploy-inline-hint {
+  flex: 1 1 16em;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .deploy-project { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .deploy-project-remove { grid-column: 2; justify-self: end; }
+}

@@ -1,0 +1,406 @@
+/* 工作流 chip 的配色在下拉组件里（ChipSelect.css 的 .wf-mode）。 */
+
+/* 对话详情页输入框上方常驻的工作流进度条。 */
+.wf-dock {
+  flex: none;
+  margin: 0 calc(8px * var(--control-scale)) calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 10px;
+  background: var(--menu);
+  overflow: hidden;
+}
+
+.wf-dock[data-state="running"] { border-left-color: var(--green); }
+.wf-dock[data-state="wait"] { border-left-color: var(--warn); }
+.wf-dock[data-state="done"] { border-left-color: var(--green); }
+.wf-dock[data-state="failed"] { border-left-color: var(--red); }
+.wf-dock[data-state="stopped"] { border-left-color: var(--muted); }
+.wf-dock[data-state="queued"] { border-left-color: var(--blue); }
+/* 还有单元在跑但已有失败时，左边条用红色提示。 */
+.wf-dock[data-failures="true"] { border-left-color: var(--red); }
+
+.wf-head { position: relative; }
+
+.wf-summary {
+  display: flex;
+  align-items: center;
+  gap: calc(7px * var(--control-scale));
+  width: 100%;
+  height: calc(34px * var(--control-scale));
+  padding: 0 calc(9px * var(--control-scale));
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--fs-12);
+  text-align: left;
+  /* 可展开的进度行只有文字/箭头可点，整行空白不再触发展开。 */
+  pointer-events: none;
+}
+
+.wf-summary > * { pointer-events: auto; }
+
+.wf-summary:hover:not(:disabled) { background: var(--hover); }
+/* 外描边会被 .wf-dock 的 overflow:hidden 裁掉，键盘焦点改用内描边。 */
+.wf-summary:focus-visible {
+  outline-offset: -2px;
+  background: var(--hover);
+}
+
+.wf-summary > * { flex: none; }
+
+/* 状态点：与 skill 色分开，只表达 running/wait/done/failed/stopped/queued。 */
+.wf-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.wf-dot[data-state="running"] { background: var(--green); animation: wf-blink 1s linear infinite; }
+.wf-dot[data-state="wait"] { background: var(--warn); }
+.wf-dot[data-state="done"] { background: var(--green); }
+.wf-dot[data-state="failed"] { background: var(--red); }
+.wf-dot[data-state="stopped"] { background: var(--muted); }
+.wf-dot[data-state="queued"] { background: var(--blue); }
+
+/* skill 徽标：进度条里用 skill 色，和发送区下拉的强调色保持一致。 */
+.wf-skill {
+  padding: 0 calc(6px * var(--control-scale));
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  /* 16px / 12px ≈ 1.33：改成无单位值，随 --fs-11 一起缩放。 */
+  line-height: 1.35;
+  text-transform: lowercase;
+}
+
+.wf-skill[data-skill="prl"] { color: var(--orange); }
+.wf-skill[data-skill="ser"] { color: var(--blue); }
+.wf-skill[data-skill="plan"] { color: var(--warn); }
+
+.wf-stage {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-current {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-elapsed {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wf-chevron {
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.wf-chevron[data-open="true"] { transform: rotate(180deg); }
+
+/* 3px 分段轨道：贴在折叠行底部，不额外占高。 */
+.wf-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: calc(1px * var(--control-scale));
+  height: 3px;
+  /* 纯展示元素，别挡住折叠行的点击。 */
+  pointer-events: none;
+}
+
+.wf-track-cell {
+  flex: 1 1 0;
+  min-width: 2px;
+  background: var(--line);
+}
+
+.wf-track-cell[data-state="done"] { background: var(--green); }
+.wf-track-cell[data-state="active"] { background: var(--warn); animation: wf-pulse 1.2s ease-in-out infinite; }
+.wf-track-cell[data-state="failed"] { background: var(--red); }
+.wf-track-cell[data-state="stopped"] { background: var(--muted); }
+.wf-track-cell[data-state="pending"] { background: var(--line); }
+
+.wf-panel {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  max-height: min(38vh, 320px);
+  overflow-y: auto;
+  padding: calc(8px * var(--control-scale)) calc(9px * var(--control-scale)) calc(9px * var(--control-scale));
+  border-top: 1px solid var(--line);
+}
+
+.wf-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(5px * var(--control-scale));
+}
+
+.wf-stage-chip {
+  padding: calc(1px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  /* 16px / 12px ≈ 1.33：改成无单位值，随 --fs-11 一起缩放。 */
+  line-height: 1.35;
+}
+
+.wf-stage-chip[data-stage="done"] {
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+  color: var(--green);
+}
+
+.wf-stage-chip[data-stage="active"] {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--fg);
+}
+
+.wf-queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(4px * var(--control-scale));
+}
+
+.wf-queue-dot {
+  min-width: calc(24px * var(--control-scale));
+  padding: 0 calc(5px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  /* 17px / 12px ≈ 1.42：无单位后大字号不再挤压文字。 */
+  line-height: 1.4;
+  text-align: center;
+}
+
+.wf-queue-dot[data-state="done"] { border-color: color-mix(in srgb, var(--green) 45%, transparent); color: var(--green); }
+.wf-queue-dot[data-state="active"] { border-color: var(--warn); color: var(--warn); }
+.wf-queue-dot[data-state="failed"] { border-color: color-mix(in srgb, var(--red) 55%, transparent); color: var(--red); }
+.wf-queue-dot[data-state="stopped"] { color: var(--muted); }
+.wf-queue-dot[data-focus="true"] { outline: 1px solid var(--blue); outline-offset: 1px; color: var(--fg); }
+
+.wf-focus {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--fs-12);
+}
+
+.wf-units {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3px * var(--control-scale));
+}
+
+.wf-unit {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+  padding: calc(3px * var(--control-scale)) calc(6px * var(--control-scale));
+  border-radius: 6px;
+  font-size: var(--fs-12);
+}
+
+.wf-unit[data-state="failed"] {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.wf-unit-id {
+  flex: none;
+  min-width: 20px;
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-11);
+}
+
+.wf-unit-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 子任务经历过的阶段：最多显示最近 3 个，更早的用左侧省略号代替。 */
+.wf-unit-stages {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: calc(3px * var(--control-scale));
+  overflow: hidden;
+}
+
+.wf-unit-stages .wf-pill { white-space: nowrap; }
+
+.wf-stage-more {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.wf-unit-elapsed {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wf-pill {
+  flex: none;
+  padding: 0 calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  /* 16px / 12px ≈ 1.33：改成无单位值，随 --fs-11 一起缩放。 */
+  line-height: 1.35;
+}
+
+.wf-pill[data-state="done"] { border-color: color-mix(in srgb, var(--green) 45%, transparent); color: var(--green); }
+.wf-pill[data-state="running"] { border-color: var(--warn); color: var(--warn); }
+.wf-pill[data-state="failed"] { border-color: color-mix(in srgb, var(--red) 55%, transparent); color: var(--red); }
+.wf-pill[data-state="stopped"] { color: var(--muted); }
+
+.wf-unit-state {
+  flex: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.wf-unit-tool {
+  flex: none;
+  max-width: 8rem;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-unit-runs {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.wf-extras {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--control-scale));
+}
+
+.wf-section-label {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.wf-extra {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.wf-extra-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-extra-state { flex: none; }
+
+.wf-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+@keyframes wf-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes wf-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* 窄屏隐藏“当前子任务”和明细，保留阶段、用时和轨道。 */
+@media (max-width: 430px) {
+  .wf-current,
+  .wf-detail { display: none; }
+}
+
+/* 窄屏上阶段胶囊放到子任务标题下面一行，标题和用时留在第一行。 */
+@media (max-width: 560px) {
+  .wf-unit-prl {
+    flex-wrap: wrap;
+    row-gap: calc(2px * var(--control-scale));
+  }
+
+  /* 标题占第一行剩余宽度，长标题截断而不是被挤到单独一行。 */
+  .wf-unit-prl .wf-unit-title {
+    flex: 1 1 0;
+  }
+
+  .wf-unit-prl .wf-unit-stages {
+    order: 4;
+    flex: 1 0 100%;
+    overflow: visible;
+  }
+
+  .wf-unit-prl .wf-unit-elapsed {
+    order: 3;
+    margin-left: auto;
+  }
+}
+
+/* 触屏折叠行至少 38px，方便点按。 */
+@media (pointer: coarse) {
+  .wf-summary {
+    min-height: calc(38px * var(--control-scale));
+    height: auto;
+    padding-top: calc(4px * var(--control-scale));
+    padding-bottom: calc(5px * var(--control-scale));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-dot[data-state="running"],
+  .wf-track-cell[data-state="active"] { animation: none; }
+  .wf-chevron { transition: none; }
+}

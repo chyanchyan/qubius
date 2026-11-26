@@ -1,0 +1,70 @@
+# 复制为 config.yaml 后再改。不要把 API key 写进这个文件。
+
+# primary（默认）或 secondary。secondary 会在页面顶部显示同步/回滚按钮，
+# 需要 secondary.primaryRepo 指向主实例的 checkout。
+# role: primary
+
+listen: 127.0.0.1:8787
+
+# 校验 /api 请求的 Host 头。未配置时默认 ["127.0.0.1", "localhost", "[::1]"]，
+# 只接受本机访问。通过局域网、反向代理或公网域名访问时必须显式列出实际主机名：
+# lan-proxy 会把 Host 改写成 127.0.0.1:<port>，edgectl 则转发原域名。
+# allowedHosts: [127.0.0.1, localhost, "[::1]", code.example.com]
+
+# 可选 API 访问令牌。配置后所有 /api 请求（/api/health 除外）都要带
+# X-Qubius-Token 头、Authorization: Bearer 或 qubius_token cookie。
+# 优先用环境变量 QUBIUS_AUTH_TOKEN，避免把密钥写进仓库文件。
+# QUBIUS_AUTH=1 时如果没有显式令牌，会在 dataDir/auth-token 生成一个。
+# auth: false 显式关闭认证（即使环境里还留着令牌）。
+# auth: true
+# authToken: "16 到 512 个字符"
+
+# 浏览器「命令行」页会打开运行服务那个用户的完整 shell。不需要时关掉：
+# 顶栏不再显示入口，/api/terminal 返回 404。也可以用环境变量 QUBIUS_TERMINAL=0。
+# terminal: false
+
+# 会话、worktree 和密钥都放在这里。相对路径相对于本文件所在目录。
+dataDir: ./data
+
+# 会话归档。会话列表里超过 retentionDays 的会话会先完整复制到 dir（含图片和 Claude
+# transcript），校验通过后再从 dataDir 删除。dir 里的归档不会按天数清理，只有
+# 手动永久删除才会消失。不配置时不会归档，也不会自动清理。
+# dir 的相对路径相对于本文件所在目录解析。
+# archive:
+#   dir: /archive/qubius
+#   retentionDays: 30
+#   # 默认主实例 main、副实例 bak；多个实例共用一个 dir 时靠它区分。
+#   # instance: main
+
+# 同时进行中的对话上限的初始默认值，多出来的会排队。
+# 之后在页面「设置 → 并发上限」里修改，立即生效；设置文件里没有该值时用这里的值。
+maxConcurrent: 4
+
+# 等待确认（提问/授权）多久没人回应就自动拒绝，单位分钟，默认 10。
+# 户外使用、手机可能很久才看到通知时，可以调大，例如 60。
+# approvalTimeoutMinutes: 10
+
+# 会话裁剪、请求体与历史分页上限；下面是默认值，可不写。
+# 也可用环境变量覆盖：QUBIUS_LIMIT_TRANSCRIPT_BYTES、QUBIUS_LIMIT_TRANSCRIPT_MESSAGES、
+# QUBIUS_LIMIT_MESSAGE_TEXT、QUBIUS_LIMIT_REQUEST_BODY、QUBIUS_HISTORY_PAGE。
+# limits:
+#   transcriptBytes: 8388608      # 64KB - 64MB
+#   transcriptMessages: 5000      # 50 - 20000
+#   messageText: 200000           # 1k - 1M
+#   requestBodyBytes: 28000000    # 1MB - 64MB
+#   historyPage: 200              # 50 - 2000
+
+# 浏览器只能在这些目录里开对话，不能自行提交路径。可以留空。
+# 页面顶部始终有内置的「普通对话」入口，目录是 <dataDir>/chat，不需要在这里配置；
+# 想换成自己的目录时，在下面定义一个 id: chat 的项目即可覆盖。
+# permission 可选：default、acceptEdits、plan、auto、bypassPermissions。
+# 不写时是 acceptEdits。acceptEdits 只是降低误操作的启发式规则，不是沙箱：
+# 工作区内的 npm / make / curl 等命令会直接执行，不可信仓库建议改成 default，
+# 或用专用系统用户 / 容器运行。页面上改过的级别写在 dataDir，优先于这里。
+# isolated 只对非 git 目录生效：每个对话在 path 下使用独立子目录
+#（<path>/<对话 id>），可以并行，删除对话时连子目录一起删掉。
+projects:
+  - id: sample
+    name: Sample
+    path: /absolute/path/to/project
+    # permission: default

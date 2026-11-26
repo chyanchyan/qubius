@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck tests
+        run: npm run typecheck:tests -w server
+
+      - name: Server tests
+        run: npm test
+
+      - name: Web tests
+        run: npm run test -w web
+
+      - name: Deploy lib tests
+        run: npm run test:deploy-lib
+
+      - name: Build
+        run: npm run build

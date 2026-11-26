@@ -1,0 +1,424 @@
+/* 发送区配置 chip 及其自绘下拉。
+   原生 select 的弹层颜色跟随系统，深色主题下选项发灰；手机上系统弹层
+   还会盖住整行 chips。这里统一成主题化浮层（桌面向上弹出）和底部面板
+   （触屏/窄屏），触发器沿用 .chip 的尺寸并加一个下拉箭头。 */
+
+button.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(2px * var(--control-scale));
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 calc(4px * var(--control-scale));
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 只在真正支持悬停的设备上给 hover 背景，触屏点完后不会留下粘住的底色。 */
+@media (hover: hover) {
+  button.chip:hover:not(:disabled) {
+    background: var(--hover);
+    color: var(--fg);
+  }
+}
+
+button.chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (pointer: coarse) {
+  /* 触屏 chip 的高度在 styles.css 里放大；这里补上被 button.chip 覆盖的内边距。 */
+  button.chip { padding: 0 calc(6px * var(--control-scale)); }
+}
+
+.chip-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-caret {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  color: var(--muted);
+  transition: transform 140ms ease;
+}
+
+.chip[aria-expanded="true"] {
+  color: var(--fg);
+}
+
+.chip[aria-expanded="true"] .chip-caret {
+  transform: rotate(180deg);
+}
+
+/* 工作流 chip：文字保持高对比，skill 颜色只放在边框和底色上。 */
+.chip.wf-mode[data-workflow="prl"] {
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--orange) 55%, transparent);
+  background: color-mix(in srgb, var(--orange) 14%, transparent);
+}
+.chip.wf-mode[data-workflow="ser"] {
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--blue) 55%, transparent);
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+}
+.chip.wf-mode[data-workflow="plan"] {
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.chip.wf-mode[data-workflow="discuss"] {
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--violet) 55%, transparent);
+  background: color-mix(in srgb, var(--violet) 14%, transparent);
+}
+.chip.wf-mode[data-workflow="dis-prl"] {
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--green) 55%, transparent);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+@media (hover: hover) {
+  .chip.wf-mode[data-workflow="prl"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--orange) 26%, transparent);
+  }
+  .chip.wf-mode[data-workflow="ser"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--blue) 26%, transparent);
+  }
+  .chip.wf-mode[data-workflow="plan"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--warn) 26%, transparent);
+  }
+  .chip.wf-mode[data-workflow="discuss"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--violet) 26%, transparent);
+  }
+  .chip.wf-mode[data-workflow="dis-prl"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--green) 26%, transparent);
+  }
+}
+
+.chip.wf-mode[data-workflow="prl"][aria-expanded="true"] {
+  background: color-mix(in srgb, var(--orange) 26%, transparent);
+}
+.chip.wf-mode[data-workflow="ser"][aria-expanded="true"] {
+  background: color-mix(in srgb, var(--blue) 26%, transparent);
+}
+.chip.wf-mode[data-workflow="plan"][aria-expanded="true"] {
+  background: color-mix(in srgb, var(--warn) 26%, transparent);
+}
+.chip.wf-mode[data-workflow="discuss"][aria-expanded="true"] {
+  background: color-mix(in srgb, var(--violet) 26%, transparent);
+}
+.chip.wf-mode[data-workflow="dis-prl"][aria-expanded="true"] {
+  background: color-mix(in srgb, var(--green) 26%, transparent);
+}
+
+.chip.wf-mode:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+}
+
+/* ---- 浮层 / 底部面板 ---- */
+
+.chip-pop-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: #00000066;
+  animation: chip-backdrop-in 140ms ease-out;
+}
+
+.chip-pop-dock {
+  position: fixed;
+  z-index: 81;
+  left: 0;
+  right: 0;
+  top: calc(var(--app-top, 0px) + var(--app-height, 100vh));
+  transform: translateY(-100%);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 默认形态：手机底部面板。 */
+.chip-pop {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: min(70vh, calc(var(--app-height, 100vh) * 0.7));
+  border-top: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  background: var(--menu);
+  box-shadow: 0 -10px 28px #00000066;
+  padding-bottom: env(safe-area-inset-bottom);
+  animation: chip-sheet-in 180ms ease-out;
+}
+
+.chip-pop-grip {
+  flex: none;
+  width: 36px;
+  height: 4px;
+  margin: calc(8px * var(--control-scale)) auto 0;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.chip-pop-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(8px * var(--control-scale)) calc(14px * var(--control-scale)) calc(4px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.chip-pop-head > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.chip-pop-close {
+  flex: none;
+  width: calc(32px * var(--control-scale));
+  height: calc(32px * var(--control-scale));
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: calc(20px * var(--control-scale));
+  line-height: 1;
+}
+
+@media (hover: hover) {
+  .chip-pop-close:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+}
+
+.chip-pop-list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--control-scale));
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: calc(4px * var(--control-scale)) calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+}
+
+.chip-pop-empty {
+  margin: calc(8px * var(--control-scale)) calc(4px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.chip-option {
+  display: flex;
+  align-items: center;
+  gap: calc(10px * var(--control-scale));
+  width: 100%;
+  min-height: calc(44px * var(--control-scale));
+  padding: calc(5px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--fs-13);
+  text-align: left;
+}
+
+@media (hover: hover) {
+  .chip-option:hover:not(:disabled) {
+    background: var(--hover);
+  }
+}
+
+.chip-option:focus-visible {
+  background: var(--hover);
+}
+
+.chip-option[data-selected="true"] {
+  background: color-mix(in srgb, var(--accent, var(--orange)) 14%, transparent);
+}
+
+.chip-option-tone {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent, var(--muted));
+}
+
+.chip-option[data-tone="prl"] { --accent: var(--orange); }
+.chip-option[data-tone="ser"] { --accent: var(--blue); }
+.chip-option[data-tone="plan"] { --accent: var(--warn); }
+.chip-option[data-tone="discuss"] { --accent: var(--violet); }
+.chip-option[data-tone="dis-prl"] { --accent: var(--green); }
+
+.chip-option-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(1px * var(--control-scale));
+}
+
+.chip-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-option-desc {
+  color: var(--muted);
+  font-size: var(--fs-11);
+  line-height: 1.35;
+}
+
+.chip-option-check {
+  flex: none;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--accent, var(--orange));
+}
+
+.chip-option-check svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- 窄屏「模型与授权」抽屉 ---- */
+
+/* 桌面用三个行内 chip；窄屏把它们收进一个触发器，避免 chips 换行拥堵。 */
+.composer-config-inline { display: contents; }
+.composer-config-drawer { display: none; }
+
+@media (max-width: 560px) {
+  .composer-config-inline { display: none; }
+  .composer-config-drawer { display: contents; }
+}
+
+.chip-config {
+  max-height: min(78vh, calc(var(--app-height, 100vh) * 0.78));
+}
+
+.chip-config-body {
+  gap: calc(14px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(12px * var(--control-scale)) calc(14px * var(--control-scale));
+}
+
+.chip-config-group {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3px * var(--control-scale));
+}
+
+.chip-config-title {
+  margin: 0;
+  padding: calc(2px * var(--control-scale)) calc(4px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-11);
+  font-weight: 600;
+}
+
+.chip-config-options {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--control-scale));
+}
+
+.chip-config .chip-option {
+  min-height: calc(40px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(10px * var(--control-scale));
+}
+
+/* 精确指针设备：在触发器上方/下方弹出一个紧凑浮层。 */
+@media (pointer: fine) and (min-width: 561px) {
+  /* 桌面浮层不需要遮罩：点外面即可收起，页面保持可见。 */
+  .chip-pop-backdrop { display: none; }
+
+  .chip-pop-dock {
+    right: auto;
+    left: var(--chip-pop-left);
+    top: auto;
+    transform: none;
+  }
+
+  .chip-pop-dock[data-side="up"] { bottom: var(--chip-pop-offset); }
+  .chip-pop-dock[data-side="down"] { top: var(--chip-pop-offset); }
+
+  .chip-pop {
+    min-width: 200px;
+    max-width: min(300px, calc(100vw - 16px));
+    max-height: var(--chip-pop-max, 320px);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--menu);
+    box-shadow: 0 10px 28px #00000088;
+    padding-bottom: 0;
+    animation: chip-pop-in 120ms ease-out;
+  }
+
+  .chip-pop-grip,
+  .chip-pop-close {
+    display: none;
+  }
+
+  .chip-pop-head {
+    padding: calc(8px * var(--control-scale)) calc(12px * var(--control-scale)) calc(3px * var(--control-scale));
+    font-size: var(--fs-11);
+  }
+
+  .chip-pop-list {
+    gap: calc(2px * var(--control-scale));
+    padding: calc(3px * var(--control-scale)) calc(4px * var(--control-scale)) calc(5px * var(--control-scale));
+  }
+
+  .chip-option {
+    min-height: calc(34px * var(--control-scale));
+    padding: calc(4px * var(--control-scale)) calc(8px * var(--control-scale));
+    border-radius: 6px;
+    font-size: var(--fs-13);
+  }
+
+  .chip-option-desc {
+    font-size: var(--fs-11);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .chip-pop { box-shadow: 0 -8px 24px #0000001f; }
+}
+
+@media (prefers-color-scheme: light) and (pointer: fine) and (min-width: 561px) {
+  .chip-pop { box-shadow: 0 8px 24px #00000026; }
+}
+
+@keyframes chip-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes chip-sheet-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes chip-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chip-pop,
+  .chip-pop-backdrop { animation: none; }
+  .chip-caret { transition: none; }
+}

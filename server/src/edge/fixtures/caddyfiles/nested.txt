@@ -1,0 +1,7 @@
+other.example.com {
+	reverse_proxy qubius.example.com {
+	}
+	handle {
+		header X-Test qubius.example.com
+	}
+}

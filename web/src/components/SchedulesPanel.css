@@ -1,0 +1,121 @@
+.schedules {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  margin-top: calc(16px * var(--control-scale));
+  padding-top: calc(12px * var(--control-scale));
+  border-top: 1px solid var(--line);
+}
+
+.sched-head {
+  display: flex;
+  align-items: baseline;
+  gap: calc(8px * var(--control-scale));
+  flex-wrap: wrap;
+}
+
+.sched-list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+}
+
+.sched-item {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  padding: calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+.sched-item[data-off="true"] {
+  opacity: 0.6;
+}
+
+.sched-item-head {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+}
+
+.sched-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sched-toggle {
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--control-scale));
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.sched-toggle input {
+  width: auto;
+  margin: 0;
+}
+
+.sched-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.sched-error {
+  margin: 0;
+  font-size: var(--fs-12);
+  word-break: break-word;
+}
+
+/* 常用间隔预设：按钮排成一行，选中项用主题色描边。 */
+.sched-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--control-scale));
+}
+
+.sched-preset {
+  min-height: calc(28px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+
+.sched-preset[data-on="true"] {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.sched-interval-hint {
+  margin: calc(-2px * var(--control-scale)) 0 0;
+}
+
+.sched-form {
+  margin-top: calc(4px * var(--control-scale));
+  padding: calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+.sched-form .field textarea,
+.sched-form .field input,
+.sched-form .field select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+}
+
+.sched-textarea {
+  resize: vertical;
+  min-height: calc(64px * var(--control-scale));
+}

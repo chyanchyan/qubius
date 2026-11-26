@@ -1,0 +1,8 @@
+legacy.example.net {
+	reverse_proxy 127.0.0.1:3000
+}
+
+# >>> edgectl managed block - do not edit (generated) >>>
+old.example.com {
+}
+# <<< edgectl managed block - do not edit (generated) <<<

@@ -1,0 +1,16 @@
+# keep this comment
+legacy.example.net {
+	reverse_proxy 127.0.0.1:3000
+}
+
+# >>> edgectl managed block - do not edit (generated) >>>
+old.example.com {
+	encode zstd gzip
+	reverse_proxy 172.17.0.1:18080
+}
+# <<< edgectl managed block - do not edit (generated) <<<
+
+# footer stays
+tail.example.org {
+	respond "ok"
+}

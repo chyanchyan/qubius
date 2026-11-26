@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+/config.yaml
+deploy/env
+deploy/env.bak.*
+deploy/env.*.local
+*.log
+.DS_Store
+web/dist/
+server/dist/
+*.tsbuildinfo
+scripts/push-github-squashed.sh
+projects.yaml

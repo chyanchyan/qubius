@@ -1,0 +1,28 @@
+# qubius systemd user unit（由 deploy/install.sh 渲染，不要手工编辑）。
+# 可选：复制到 ~/.config/systemd/user/ 后 systemctl --user daemon-reload。
+[Unit]
+Description={{QUBIUS_UNIT_DESCRIPTION}}
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# WorkingDirectory 不要加引号：systemd 249 会把双引号当成路径的一部分。
+# Value 里的 % 已由 install.sh 转义成 %%，避免被当作 specifier。
+WorkingDirectory={{QUBIUS_UNIT_WORKDIR}}
+Environment="QUBIUS_SECONDARY={{QUBIUS_SECONDARY}}"
+Environment="QUBIUS_REPO_DIR={{QUBIUS_UNIT_WORKDIR}}"
+Environment="QUBIUS_CONFIG_DIR={{QUBIUS_UNIT_CONFIG_DIR}}"
+ExecStart="{{QUBIUS_UNIT_EXEC}}"
+Restart=on-failure
+RestartSec=2
+# 副实例的 sync/rollback 脚本由服务器 spawn，仍在 unit cgroup 内。
+# 副实例用 KillMode=process，让 systemctl stop 只停 node，不 SIGKILL 正在执行的维护脚本；
+# 主实例和 LAN 入口用 mixed。
+KillMode={{QUBIUS_UNIT_KILLMODE}}
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

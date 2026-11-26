@@ -1,0 +1,335 @@
+/* 共享 UI 原语：对话框、提示条、骨架屏、菜单、图片查看层。 */
+
+/* 统一表单占位符颜色；浏览器默认在深浅两种主题下都可能对比不足。 */
+input::placeholder,
+textarea::placeholder {
+  color: var(--placeholder);
+  opacity: 1;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- 对话框 ---- */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(16px * var(--control-scale));
+  background: #00000099;
+  animation: dialog-fade 120ms ease-out;
+}
+
+.dialog {
+  width: min(440px, 100%);
+  max-height: min(80vh, 640px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--control-scale));
+  padding: calc(16px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--elev);
+  color: var(--fg);
+  box-shadow: 0 18px 48px #00000088;
+  animation: dialog-pop 140ms ease-out;
+}
+
+/* 内容自带表单/列表的管理类对话框，440px 放不下多列字段。 */
+.dialog-wide { width: min(720px, 100%); }
+
+.dialog-title {
+  margin: 0;
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+
+.dialog-description {
+  color: var(--muted);
+  font-size: var(--fs-13);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 确认框里的勾选项；状态随确认结果返回。 */
+.dialog-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(7px * var(--control-scale));
+  font-size: var(--fs-13);
+  cursor: pointer;
+  user-select: none;
+}
+
+.dialog-checkbox input {
+  flex: none;
+  width: calc(15px * var(--control-scale));
+  height: calc(15px * var(--control-scale));
+  margin: calc(2px * var(--control-scale)) 0 0;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+.dialog-checkbox-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dialog-checkbox-hint {
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.dialog-field { margin: 0; }
+.dialog-field input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  padding: calc(7px * var(--control-scale)) calc(9px * var(--control-scale));
+}
+.dialog-counter {
+  align-self: flex-end;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+.dialog-error { margin: 0; font-size: var(--fs-12); }
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(8px * var(--control-scale));
+  margin-top: calc(2px * var(--control-scale));
+}
+.dialog-actions .btn,
+.dialog-actions .btn-primary,
+.dialog-actions .btn-danger { min-height: calc(34px * var(--control-scale)); padding: calc(4px * var(--control-scale)) calc(14px * var(--control-scale)); }
+.btn-danger {
+  border: 0;
+  background: var(--red);
+  color: var(--ivory);
+}
+.btn-danger:hover:not(:disabled) { background: var(--red); filter: brightness(1.08); }
+
+@keyframes dialog-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dialog-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---- 提示条 ---- */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(7px * var(--control-scale)) calc(9px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+}
+
+.notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notice-error { border-color: color-mix(in srgb, var(--error) 50%, var(--line)); background: color-mix(in srgb, var(--error) 12%, transparent); color: var(--error); }
+.notice-warn { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); }
+.notice-info { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); background: color-mix(in srgb, var(--blue) 10%, transparent); color: var(--fg); }
+.notice-success { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); background: color-mix(in srgb, var(--green) 10%, transparent); color: var(--green); }
+
+.notice-action { color: inherit; flex: none; }
+.notice-close {
+  flex: none;
+  width: calc(24px * var(--control-scale));
+  height: calc(24px * var(--control-scale));
+  padding: 0;
+  border-radius: 50%;
+  color: inherit;
+  font-size: var(--fs-15);
+  line-height: 1;
+}
+.notice-close:hover:not(:disabled) { background: color-mix(in srgb, currentColor 14%, transparent); }
+
+.connection-banner { margin: 0 calc(10px * var(--control-scale)) calc(6px * var(--control-scale)); flex: none; }
+
+.inline-loading {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  margin: calc(4px * var(--control-scale)) 0;
+}
+
+/* ---- 骨架屏 ---- */
+
+.skeleton { display: flex; flex-direction: column; gap: calc(8px * var(--control-scale)); }
+.skeleton-page { width: min(420px, 80vw); margin-top: calc(14px * var(--control-scale)); }
+
+.skeleton-line {
+  height: calc(12px * var(--control-scale));
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--input) 25%, var(--hover) 37%, var(--input) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+.skeleton-line:nth-child(2) { width: 86%; }
+.skeleton-line:nth-child(3) { width: 64%; }
+.skeleton-line:nth-child(4) { width: 74%; }
+
+@keyframes skeleton-shimmer {
+  from { background-position: 100% 50%; }
+  to { background-position: 0 50%; }
+}
+
+/* ---- 下拉菜单 ---- */
+
+.menu { position: relative; display: inline-flex; }
+
+.menu-popup {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  min-width: 160px;
+  max-width: min(300px, calc(100vw - 24px));
+  max-height: min(70vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: calc(4px * var(--control-scale));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--menu);
+  box-shadow: 0 10px 28px #00000088;
+  animation: menu-pop 110ms ease-out;
+}
+.menu-popup[data-align="right"] { right: 0; }
+.menu-popup[data-align="left"] { left: 0; }
+
+.menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(7px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font-size: var(--fs-13);
+}
+.menu-item:hover:not(:disabled),
+.menu-item:focus-visible { background: var(--hover); }
+.menu-item.danger { color: var(--error); }
+.menu-item:disabled { opacity: 0.4; }
+
+.menu-sep {
+  height: 1px;
+  margin: calc(4px * var(--control-scale)) calc(2px * var(--control-scale));
+  background: var(--line);
+}
+
+@keyframes menu-pop {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---- 图片查看 ---- */
+
+.lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: #000000e6;
+  color: #ffffff;
+}
+
+.lightbox-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(12px * var(--control-scale));
+}
+
+.lightbox-body img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.lightbox-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(10px * var(--control-scale));
+  flex-wrap: wrap;
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale)) calc(10px * var(--control-scale) + env(safe-area-inset-bottom));
+  background: #00000080;
+  font-size: var(--fs-12);
+}
+
+.lightbox-btn {
+  min-width: calc(38px * var(--control-scale));
+  min-height: calc(34px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 1px solid #ffffff44;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: var(--fs-15);
+}
+.lightbox-btn:hover:not(:disabled) { background: #ffffff22; }
+
+.lightbox-link { color: #f1c9b8; }
+.lightbox-count { color: #dddddd; font-variant-numeric: tabular-nums; }
+.lightbox-close { margin-left: auto; }
+
+@media (pointer: coarse) {
+  .dialog-actions .btn,
+  .dialog-actions .btn-primary,
+  .dialog-actions .btn-danger { min-height: calc(40px * var(--control-scale)); }
+  .lightbox-btn {
+    min-width: calc(40px * var(--control-scale));
+    min-height: calc(40px * var(--control-scale));
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  /* styles.css 里的浅色覆盖与这里的深色阴影同优先级，但本文件后加载；
+     在 ui.css 里再覆盖一次，确保浅色主题不会用重黑影。 */
+  .dialog { box-shadow: 0 18px 48px #00000033; }
+  .menu-popup { box-shadow: 0 8px 24px #00000026; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-backdrop,
+  .dialog,
+  .menu-popup,
+  .skeleton-line { animation: none; }
+}

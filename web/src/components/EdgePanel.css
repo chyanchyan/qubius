@@ -1,0 +1,306 @@
+/* 公网入口面板样式；全部以 .edge- 前缀命名，复用全局变量和 .field。 */
+
+.edge-panel {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--control-scale));
+  margin: calc(16px * var(--control-scale)) 0 0;
+  padding: calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+.edge-panel > h2 {
+  margin: 0;
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+
+.edge-block {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.edge-hint {
+  margin: 0;
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  overflow-wrap: anywhere;
+}
+
+.edge-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: calc(8px * var(--control-scale));
+}
+
+.edge-card {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+  padding: calc(8px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.edge-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--control-scale));
+}
+
+.edge-label {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.edge-badge {
+  margin-left: auto;
+  padding: 0 calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+.edge-badge[data-on="true"] {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.edge-badge[data-on="false"] {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.edge-muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.edge-warn {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.edge-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.edge-command {
+  padding: calc(1px * var(--control-scale)) calc(5px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--input);
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-11);
+  overflow-wrap: anywhere;
+}
+
+.edge-sites {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.edge-sites > li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--control-scale));
+}
+
+.edge-site-name { font-weight: 600; }
+
+.edge-domains {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(4px * var(--control-scale));
+}
+
+.edge-domain {
+  padding: calc(1px * var(--control-scale)) calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--elev);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-11);
+  overflow-wrap: anywhere;
+}
+
+.edge-status {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.edge-status[data-state="success"] { border-color: var(--green); }
+.edge-status[data-state="failed"] { border-color: var(--red); }
+.edge-status[data-state="unknown"] { border-color: var(--warn); }
+
+.edge-status-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--control-scale));
+}
+
+.edge-status p { margin: 0; overflow-wrap: anywhere; }
+
+.edge-step {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.edge-message { overflow-wrap: anywhere; }
+
+.edge-log,
+.edge-diff {
+  margin: 0;
+  padding: calc(8px * var(--control-scale));
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--elev);
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-11);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.edge-diff { max-height: 220px; }
+
+.edge-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--control-scale));
+}
+
+.edge-plan {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--control-scale));
+  padding: calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.edge-plan-head {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+}
+
+.edge-plan-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: calc(8px * var(--control-scale));
+  margin: 0;
+}
+
+.edge-plan-info > div { min-width: 0; }
+
+.edge-plan-info dt {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.edge-plan-info dd {
+  margin: calc(2px * var(--control-scale)) 0 0;
+  overflow-wrap: anywhere;
+}
+
+.edge-hash { font-size: var(--fs-11); word-break: break-all; }
+
+.edge-diff-block { display: flex; flex-direction: column; gap: calc(4px * var(--control-scale)); }
+
+.edge-diff-block > h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.edge-warnings {
+  margin: 0;
+  padding-left: calc(18px * var(--control-scale));
+  color: var(--warn);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.edge-apply {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+}
+
+.edge-form-block {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  margin: 0;
+  padding: calc(8px * var(--control-scale)) calc(10px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.edge-form-block > legend {
+  padding: 0 calc(4px * var(--control-scale));
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.edge-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: calc(8px * var(--control-scale));
+}
+
+.edge-mono {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .edge-overview { grid-template-columns: minmax(0, 1fr); }
+  .edge-plan-info { grid-template-columns: minmax(0, 1fr); }
+  .edge-form-grid { grid-template-columns: minmax(0, 1fr); }
+}

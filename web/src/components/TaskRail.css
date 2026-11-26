@@ -1,0 +1,251 @@
+/* 后台任务栏（TaskRail）与工具行“转到后台”按钮。
+   视觉与 SubagentRail / 工作流面板保持一致：次级信息为主，运行中才用彩色点缀。 */
+
+.task-rail {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--control-scale));
+  margin: calc(2px * var(--control-scale)) 0 calc(4px * var(--control-scale));
+}
+
+/* 标题行本身是展开/收起按钮：默认收起，只显示运行中/已完成/失败数量。 */
+.task-rail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(6px * var(--control-scale));
+  width: 100%;
+  min-height: calc(22px * var(--control-scale));
+  padding: 0 0 0 calc(22px * var(--control-scale));
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.task-rail-head:hover { color: var(--fg); }
+
+.task-rail-chevron {
+  flex: none;
+  align-self: center;
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+.task-rail-head[aria-expanded="true"] .task-rail-chevron { transform: rotate(180deg); }
+
+.task-rail-title {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.task-rail-running,
+.task-rail-completed,
+.task-rail-failed,
+.task-rail-more {
+  white-space: nowrap;
+}
+
+.task-rail-running { color: var(--muted); }
+.task-rail-running[data-active="true"] { color: var(--orange); }
+.task-rail-completed { color: var(--muted); }
+.task-rail-completed[data-completed="true"] { color: var(--green); }
+.task-rail-failed { color: var(--red); }
+
+.task-rail-more {
+  padding-left: calc(22px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.task-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--control-scale));
+}
+
+/* 左侧圆点沿用工具行的位置和语义，但任务不是 .tool，单独定义。 */
+.task-rail-item {
+  position: relative;
+  padding-left: calc(22px * var(--control-scale));
+}
+
+.task-rail-item::before {
+  content: "";
+  position: absolute;
+  left: calc(4px * var(--control-scale));
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.task-rail-item[data-status="running"]::before {
+  background: var(--orange);
+  animation: blink 1s linear infinite;
+}
+.task-rail-item[data-status="completed"]::before { background: var(--green); }
+.task-rail-item[data-status="failed"]::before { background: var(--red); }
+.task-rail-item[data-status="stopped"]::before { background: var(--muted); }
+
+.task-rail-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(2px * var(--control-scale)) calc(6px * var(--control-scale));
+  min-height: calc(22px * var(--control-scale));
+  padding: calc(1px * var(--control-scale)) calc(4px * var(--control-scale)) calc(1px * var(--control-scale)) 0;
+  border-radius: 4px;
+  list-style: none;
+  cursor: pointer;
+  /* 只有行内文字/按钮可点，行尾空白不再展开任务详情。 */
+  pointer-events: none;
+}
+
+.task-rail-summary::-webkit-details-marker { display: none; }
+.task-rail-summary > * { pointer-events: auto; }
+.task-rail-summary:hover { background: var(--hover); }
+
+.task-rail-status {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.82em;
+  white-space: nowrap;
+}
+.task-rail-item[data-status="running"] .task-rail-status { color: var(--orange); }
+.task-rail-item[data-status="completed"] .task-rail-status { color: var(--green); }
+.task-rail-item[data-status="failed"] .task-rail-status { color: var(--red); }
+
+.task-rail-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: 0.85em;
+}
+
+.task-rail-percent {
+  flex: none;
+  color: var(--blue);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.task-rail-duration {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.task-rail-stop {
+  flex: none;
+  align-self: center;
+  min-height: calc(18px * var(--control-scale));
+  padding: 0 calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78em;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.task-rail-stop:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+.task-rail-stop:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 折叠状态下的最新一行输出：单独占一行，单行省略。 */
+.task-rail-latest {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: 0.78em;
+}
+.task-rail-latest-empty { opacity: 0.7; }
+
+/* 进度条在 summary 内独占一行；flex-basis 100% 保证窄屏换行且不横向溢出。 */
+.task-rail-progress {
+  display: block;
+  flex: 1 1 100%;
+  align-self: center;
+  min-width: 0;
+  height: calc(3px * var(--control-scale));
+  margin: calc(1px * var(--control-scale)) 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  overflow: hidden;
+}
+
+.task-rail-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--blue);
+  transition: width 240ms ease;
+}
+
+.task-rail-error {
+  display: block;
+  flex: 1 1 100%;
+  min-width: 0;
+  margin: calc(1px * var(--control-scale)) 0;
+  color: var(--red);
+  font-size: 0.82em;
+  overflow-wrap: anywhere;
+}
+
+.task-rail-body {
+  padding: calc(4px * var(--control-scale)) 0 calc(6px * var(--control-scale));
+}
+
+.task-rail-output {
+  margin: 0;
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 0.5px solid var(--line);
+  border-radius: 5px;
+  background: var(--elev);
+  color: var(--fg);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 16rem;
+}
+
+.task-rail-empty {
+  padding: calc(4px * var(--control-scale)) 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.task-rail-meta {
+  margin-top: calc(4px * var(--control-scale));
+  color: var(--muted);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-rail-item[data-status="running"]::before { animation: none; }
+  .task-rail-progress-fill { transition: none; }
+  .task-rail-chevron { transition: none; }
+}

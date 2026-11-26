@@ -1,0 +1,73 @@
+# Test fixture for edge render parity. Mirrors the structure of a real
+# edgectl.yaml but uses example IPs/users; do not copy to a real server.
+version: 1
+
+edge:
+  vps:
+    ssh: ubuntu@203.0.113.10
+    ssh_key: ~/.ssh/edgectl_vps
+    ssh_port: 22
+    tunnel_bind: 172.17.0.1
+    gateway_port: 18080
+    caddy_container: example-caddy
+    caddyfile: /opt/example/deploy/Caddyfile
+    caddyfile_container: /etc/caddy/Caddyfile
+
+  local:
+    root: /opt/edgectl
+    gateway_image: caddy:2-alpine
+    gateway_container: edgectl-gateway
+    tunnel_service: edgectl-tunnel
+    tunnel_user: deploy
+    ssh_bin: /usr/bin/ssh
+
+  auth:
+    dev:
+      username: example
+      cookie_name: edgectl_dev
+      password_hash_env: EDGECTL_DEV_PASSWORD_HASH
+      cookie_secret_env: EDGECTL_DEV_COOKIE_SECRET
+
+gitlab:
+  url: http://gitea.example.com
+
+sites:
+  # dev site with Basic auth + cookie for HMR websockets.
+  - name: example-dev
+    domains: [dev.example.com]
+    env: dev
+    upstream: http://127.0.0.1:5173
+    auth: dev
+    sse: true
+
+  # production site, public (Supabase auth on the app).
+  - name: app
+    domains: [app.example.com]
+    env: prod
+    upstream: http://127.0.0.1:9000
+    auth: none
+    sse: true
+    deploy:
+      repo: /srv/apps/app
+      compose_file: docker-compose.yml
+      project: app
+      branch: main
+      health_url: http://127.0.0.1:9000/health
+      pre_build:
+        - [npm, --prefix, web, ci]
+        - [npm, --prefix, web, run, build]
+
+  # managed by the deploy page (edge.upsertManagedSites).
+  - name: qubius
+    domains: [qubius.example.com]
+    env: dev
+    upstream: http://127.0.0.1:8789
+    auth: dev
+    sse: true
+
+  - name: co-qubius
+    domains: [co-qubius.example.com]
+    env: dev
+    upstream: http://127.0.0.1:8790
+    auth: dev
+    sse: true

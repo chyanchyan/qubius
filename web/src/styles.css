@@ -1,0 +1,2181 @@
+:root {
+  color-scheme: dark;
+  --bg: #181818;
+  --elev: #1e1e1e;
+  --input: #313131;
+  --menu: #252526;
+  --fg: #cccccc;
+  --muted: #9d9d9d;
+  --line: #3c3c3c;
+  --hover: #2a2d2e;
+  --orange: #d97757;
+  --clay: #c6613f;
+  --ivory: #faf9f5;
+  --green: #74c991;
+  --red: #c74e39;
+  --error: #f48771;
+  --warn: #e1c08d;
+  --blue: #3b82f6;
+  --violet: #a78bfa;
+  --placeholder: #a8a8a8;
+  /* Readability scale set from the 小/大 buttons in the header. Range is
+     0.6 (60%) to 3 (300%); 1 = normal. Every explicit font size multiplies by
+     it so the whole UI grows together. --control-scale tracks the exact same
+     value: control boxes, line heights and vertical rhythm scale in proportion
+     with the text instead of keeping a fixed floor. */
+  --font-scale: 1;
+  --control-scale: var(--font-scale);
+  /* 11px 档历史上被 12px 下限兜底，所以 100% 的实际基准是 12px。
+     现在从 12px 基准严格按比例缩放：100% 外观不变，60% 时约 7.2px，
+     300% 时约 36px，不再保留固定下限。 */
+  --fs-11: calc(12px * var(--font-scale));
+  --fs-12: calc(12px * var(--font-scale));
+  --fs-13: calc(13px * var(--font-scale));
+  --fs-15: calc(15px * var(--font-scale));
+  --fs-16: calc(16px * var(--font-scale));
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+button, input, textarea, select { font: inherit; color: inherit; }
+
+button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: calc(4px * var(--control-scale)) calc(8px * var(--control-scale));
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { background: var(--hover); }
+
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+}
+
+.app {
+  /* --app-height/--app-top come from visualViewport so the composer stays
+     above the on-screen keyboard, even when the browser pans the visible
+     area. 100% is the fallback when that API is unavailable.
+     定位用 fixed 而不是普通文档流：安卓浏览器为了让输入框露出来会滚动
+     文档，文档流里的整页会跟着滚走——顶栏被顶出屏幕、键盘收起后页面停在
+     滚过的位置（body 又禁止滚动，用户自己拉不回来）。fixed 不受文档滚动
+     影响，位置只由可见视口决定。 */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: var(--app-height, 100%);
+  transform: translateY(var(--app-top, 0px));
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* 独立网页模式（viewport-fit=cover）会铺满整屏，顶栏因此会顶到状态栏/
+     灵动岛下面。这里补回顶部安全区；--app-top 已经把整个 app 下移过的
+     部分不重复补，桌面窗口和普通标签页里 env() 为 0，不改变原布局。 */
+  --app-safe-top: max(0px, calc(env(safe-area-inset-top, 0px) - var(--app-top, 0px)));
+  padding-top: var(--app-safe-top);
+  /* 横屏时刘海在左右两侧，同样要让开。 */
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* 顶栏紧贴状态栏时再留一点空隙，看起来不像被状态栏压住。
+   桌面窗口没有状态栏，保持顶栏贴顶。 */
+@media (display-mode: standalone), (pointer: coarse) {
+  .app {
+    padding-top: calc(var(--app-safe-top) + 10px);
+  }
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  min-height: calc(35px * var(--control-scale));
+  padding: 0 calc(8px * var(--control-scale)) 0 calc(12px * var(--control-scale));
+  border-bottom: 1px solid var(--line);
+  flex: none;
+  background: var(--bg);
+}
+
+.brand {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  line-height: 1.1;
+  min-width: 0;
+  /* 空间不足时品牌名优先让位，把宽度留给常驻的导航/字号/badge/「更多」；
+     权重有限，避免极端窄屏+大字号时品牌名被完全挤没。 */
+  flex-shrink: 4;
+  padding: 0;
+  min-height: 0;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* 两行内容各自截断，避免 flex 容器上的 text-overflow 失效。 */
+.brand-name,
+.brand-version {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 品牌名下方的小字版本号：手机上也显示，字号跟随全局缩放但始终保持很小。 */
+.brand-version {
+  color: var(--muted);
+  font-size: calc(9px * var(--font-scale));
+  font-weight: 400;
+  line-height: 1.1;
+}
+
+.brand:hover { background: transparent; color: var(--fg); }
+
+.bar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(2px * var(--control-scale));
+  /* 允许整体收缩，极窄分屏时让内部滚动而不是把「更多」挤出屏幕。 */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* 只让按钮区滚动；Menu 弹层挂在滚动容器外，不会被 overflow 裁剪。
+   隐藏滚动条，鼠标滚轮/触控横滑或键盘 Tab 都能到达被挡住的按钮。 */
+.bar-scroll {
+  display: flex;
+  align-items: center;
+  gap: calc(2px * var(--control-scale));
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.bar-scroll::-webkit-scrollbar { display: none; }
+
+.bar-scroll > * { flex: none; }
+
+.nav-btn {
+  min-height: calc(26px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(8px * var(--control-scale));
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.nav-btn[data-on="true"] { color: var(--fg); }
+
+/* 顶栏自适应：字号放大（.compact）或窄屏时，总览/命令行/技能/部署/设置收进「更多」。
+   首页入口是左上角的品牌按钮；待处理 badge 始终保留，避免任何宽度下裁掉可操作入口。
+   字号组常驻顶栏、不在 .bar-scroll 内、也不带 .bar-secondary，因此不受下列隐藏规则影响。 */
+/* 提高选择器优先级：ui.css 的 .menu 也是 display:inline-flex，且后加载。 */
+.bar .bar-more { display: none; }
+.bar.compact .bar-secondary { display: none; }
+.bar.compact .bar-more { display: inline-flex; }
+
+/* 字号组整体常驻在滚动层外，任何宽度/字号下都不被隐藏或横向滚动裁掉。
+   注意：下面顶栏紧凑规则里的固定 gap/padding 是为极窄屏+大字号刻意保持的
+   例外，不参与比例缩放，优先给常驻入口留出宽度。 */
+.bar .font-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+/* 大字号下常驻入口总宽可能超过视口。允许操作区换行并留出 2px 列间距。
+   导航滚动区用 flex-basis:0 参与折行：它不会因自身最大宽度触发换行，
+   折行只由字号组/badge/「更多」的实际宽度决定；同时 grow 吃掉整行余量。
+   常规宽度和 100% 字号下仍保持一行。 */
+.bar.compact .bar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 2px;
+  column-gap: 2px;
+  /* 宽松时占满剩余宽度，配合 basis:0 的导航区，导航不会被挤没。 */
+  flex-grow: 1;
+}
+
+.bar.compact .bar-scroll { flex: 1 1 0; }
+
+/* 放大字号后按钮本身也更宽；固定内边距是为极窄屏+大字号刻意保留的例外。 */
+.bar.compact .nav-btn { padding: 2px 6px; }
+
+.attention-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3px * var(--control-scale));
+  flex: none;
+  min-height: calc(26px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.attention-badge:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warn) 26%, transparent);
+}
+
+/* 紧凑顶栏只留数字，完整含义由 aria-label / title 提供。 */
+.bar.compact .attention-badge { gap: 0; padding: 1px 6px; }
+.bar.compact .attention-label { display: none; }
+
+/* 顶栏左上角：运行中的 agent 总数 / 上限。超过上限时用警告色提醒。 */
+.agent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4px * var(--control-scale));
+  flex: none;
+  min-height: calc(26px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.agent-badge-count { font-weight: 600; color: var(--fg); }
+
+/* 实时输出速度：跟在 agent 计数后面，用细分隔线区分；空闲时整段不渲染。 */
+.agent-badge-speed {
+  padding-left: calc(6px * var(--control-scale));
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-badge[data-over="true"] {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.agent-badge[data-over="true"] .agent-badge-count { color: var(--warn); }
+
+/* 窄屏和大字号时只留「3/8」，免得顶栏被挤爆。 */
+.bar.compact .agent-badge { gap: 0; padding: 1px 6px; }
+.bar.compact .agent-badge-label { display: none; }
+
+@media (max-width: 560px) {
+  /* 窄屏顶栏的固定 padding/gap 同样是为极窄屏+大字号刻意保留的例外。 */
+  .bar {
+    padding: 0 6px;
+    gap: 4px;
+  }
+
+  .bar-actions { gap: 0; }
+  .bar-scroll { gap: 0; }
+  .bar .bar-secondary { display: none; }
+  .bar .bar-more { display: inline-flex; }
+
+  /* 窄屏上只留「3/8」，给品牌和导航留出宽度。 */
+  .agent-badge-label { display: none; }
+
+  /* 窄屏上配置 chips 换行后全部可见，不再藏在很窄的横向滚动区里。
+     操作按钮单独占下一行，避免 chips 被右侧按钮挤成三四层。 */
+  .composer-actions {
+    flex-wrap: wrap;
+    row-gap: calc(2px * var(--control-scale));
+  }
+
+  .composer .chips {
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    row-gap: calc(2px * var(--control-scale));
+  }
+
+  .composer-end { margin-left: auto; }
+}
+
+.font-btn {
+  white-space: nowrap;
+  /* 和 .bar.compact .nav-btn 一样：内边距固定，高度仍由 min-height 随字号缩，
+     避免 300% 时字号按钮过宽把 badge/「更多」挤出顶栏。 */
+  padding: 2px 6px;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.chat, .page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.page {
+  overflow: auto;
+  padding: calc(12px * var(--control-scale)) calc(14px * var(--control-scale)) calc(28px * var(--control-scale));
+  /* 触控板横向 overscroll 不应触发浏览器后退；纵向照常滚动。 */
+  overscroll-behavior-x: contain;
+}
+
+.chat-head,
+.provider-head {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(6px * var(--control-scale)) calc(10px * var(--control-scale));
+  flex: none;
+  min-width: 0;
+}
+
+/* 详情页头部的「更多」菜单不能随标题收缩。 */
+.session-menu { flex: none; }
+
+.provider-head { padding: 0; }
+.provider-head .text-btn { margin-left: auto; }
+
+.chat-title {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* RouteFocus 在进入会话列表/详情页时会把焦点放到这个标题容器上（tabindex="-1"），
+   方便键盘和读屏用户从内容开始。它不可交互，不该画出浏览器默认的焦点框，
+   否则看起来像一个被自动选中的输入框。 */
+.chat-title:focus {
+  outline: none;
+}
+
+.chat-title strong,
+.convo-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-title span,
+.convo-sub,
+.muted,
+.convo-meta,
+.phase-label,
+.rail-label {
+  color: var(--muted);
+}
+
+.chat-title span,
+.convo-sub {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-12);
+}
+
+/* 会话分支的小标签：列表、总览和详情页共用。 */
+.branch-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0 calc(4px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  color: var(--muted);
+  font-size: var(--fs-11);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* 分支的改动已经在基准分支（通常是 main）上：用绿色底提示可以安全归档。
+   未合入保持默认底色；合入状态未知（没有加载到 / 找不到 main）时不着色。 */
+.branch-badge[data-state="merged"] {
+  border-color: color-mix(in srgb, var(--green) 45%, var(--line));
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: var(--green);
+}
+
+/* 分支创建后从未改过代码：灰灯。它虽然停在基准分支上，但没有可归档的
+   改动，「全部归档」也会跳过。 */
+.branch-badge[data-state="untouched"] {
+  border-color: color-mix(in srgb, var(--muted) 35%, var(--line));
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
+}
+
+/* 标题行：分支标签放在标题左侧，与标题同一行，不额外占一行高度。 */
+.convo-head,
+.chat-title .chat-title-head {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+}
+
+.convo-head .convo-title,
+.chat-title .chat-title-head strong {
+  min-width: 0;
+}
+
+/* 标签不参与收缩，标题在剩余宽度里省略。 */
+.convo-head .branch-badge,
+.chat-title .chat-title-head .branch-badge {
+  flex: none;
+  max-width: 45%;
+}
+
+/* 覆盖 .chat-title span 的 block 布局和字号，详情页里仍显示为行内小标签。 */
+.chat-title .chat-title-head .branch-badge {
+  display: inline-flex;
+  font-size: var(--fs-11);
+}
+
+.chat-title .chat-sub {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+}
+
+.chat-title .chat-sub .chat-sub-project {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phase-label { font-size: var(--fs-12); white-space: nowrap; }
+.phase-label[data-phase="running"],
+.phase-label[data-phase="completed"] { color: var(--green); }
+.phase-label[data-phase="failed"] { color: var(--error); }
+.phase-label[data-phase="stopped"] { color: var(--muted); }
+.phase-label[data-phase="needs_input"] { color: var(--warn); }
+.phase-label[data-phase="setup"] { color: var(--violet); }
+.phase-label[data-phase="queued"] { color: var(--blue); }
+
+.text-btn {
+  padding: calc(2px * var(--control-scale)) calc(4px * var(--control-scale));
+  min-height: calc(26px * var(--control-scale));
+  color: var(--muted);
+  flex: none;
+}
+
+.text-btn.danger { color: var(--red); }
+
+.banner {
+  margin: 0 calc(8px * var(--control-scale)) calc(6px * var(--control-scale));
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.maintenance {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  margin: 0 0 calc(16px * var(--control-scale));
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+.maintenance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8px * var(--control-scale));
+}
+
+.maintenance-actions { display: flex; gap: calc(6px * var(--control-scale)); }
+
+.maintenance-btn {
+  padding: calc(4px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  color: var(--fg);
+}
+
+.maintenance-log {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-11);
+  white-space: pre-wrap;
+}
+
+.thread {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: calc(12px * var(--control-scale));
+  /* 顶部内边距单独提出来：吸顶行要按同高度向上补一条底色，遮住滚进这段
+     内边距的内容（见下方吸顶规则）。 */
+  --thread-pad-top: calc(8px * var(--control-scale));
+  padding: var(--thread-pad-top) calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  /* 触控板横向 overscroll 不应触发浏览器后退；纵向照常滚动。 */
+  overscroll-behavior-x: contain;
+}
+
+/* Positions the floating "back to bottom" control over the transcript without
+   becoming part of its scrollable content. */
+.thread-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.jump-bottom {
+  position: absolute;
+  right: calc(10px * var(--control-scale));
+  bottom: calc(10px * var(--control-scale));
+  z-index: 3;
+  min-height: calc(30px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--menu);
+  color: var(--fg);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+  box-shadow: 0 4px 12px #00000066;
+}
+
+.jump-bottom:hover:not(:disabled) { background: var(--hover); }
+
+.empty {
+  margin: auto;
+  color: var(--muted);
+  text-align: center;
+  padding: calc(24px * var(--control-scale)) calc(12px * var(--control-scale));
+}
+
+.exchange { display: flex; flex-direction: column; align-items: flex-start; gap: calc(4px * var(--control-scale)); }
+
+/* 用户消息框限高并在框内滚动：整条用户消息会吸顶固定在记录区顶部，
+   附件说明较多时也可能变高，不限高就会把下面的对话全挡住。上限
+   再砍 65%，吸顶时只占一条窄带（14vh / 11.2rem），把对话区留给当前回复。
+   正文本身在非编辑态只有一行，编辑态由 textarea 自己控制高度，不套用这个
+   上限。 */
+.user-msg {
+  display: inline-block;
+  max-width: 100%;
+  max-height: min(14vh, 11.2rem);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  padding: calc(4px * var(--control-scale)) calc(6px * var(--control-scale));
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.user-msg.user-msg-editing {
+  max-height: none;
+  overflow: visible;
+}
+
+/* 可编辑的消息点气泡直接进入编辑；悬停给一点可点击提示。 */
+.user-msg[data-editable="true"] {
+  cursor: pointer;
+}
+
+.user-msg[data-editable="true"]:hover {
+  border-color: var(--blue);
+}
+
+/* 发送后的正文只保留一行摘要（参考 Cursor）：省略号截断，鼠标悬停可通过
+   title 看全文；完整内容进入编辑态再看。附件说明是独立块，不参与这一行
+   截断；图片缩略图在气泡外上方单独渲染。 */
+.user-msg:not(.user-msg-editing) .user-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 发送中的用户消息：先本地渲染，虚线边框 + 下方状态表示尚未收到服务端确认。 */
+.exchange[data-sending="true"] .user-msg {
+  border-style: dashed;
+  opacity: 0.82;
+}
+
+.msg-status {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.msg-status-dot {
+  width: calc(6px * var(--control-scale));
+  height: calc(6px * var(--control-scale));
+  border-radius: 50%;
+  background: currentColor;
+  animation: msg-status-pulse 1s ease-in-out infinite;
+}
+
+@keyframes msg-status-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+.user-attachments {
+  display: block;
+  margin-bottom: calc(2px * var(--control-scale));
+  color: var(--muted);
+  font-size: 0.92em;
+}
+
+/* 图片缩略图在气泡外上方独立成行；点开看大图走共享 Lightbox。 */
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(4px * var(--control-scale));
+  max-width: 100%;
+}
+
+.msg-image {
+  display: block;
+  line-height: 0;
+  cursor: zoom-in;
+}
+
+.msg-image img {
+  display: block;
+  max-width: min(200px, 100%);
+  max-height: 140px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  object-fit: contain;
+  background: #00000022;
+}
+
+.assistant {
+  word-break: break-word;
+  padding: calc(2px * var(--control-scale)) 0;
+}
+
+/* 多模型讨论：每条发言上方标注发言者和阶段。 */
+.discussion-speaker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(2px * var(--control-scale)) calc(8px * var(--control-scale));
+  margin-bottom: calc(3px * var(--control-scale));
+}
+
+.discussion-speaker-name {
+  color: var(--violet);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.discussion-speaker-kind,
+.discussion-speaker-round,
+.discussion-speaker-subtask {
+  padding: 0 calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  line-height: 1.35;
+}
+
+.discussion-speaker-round {
+  border-color: color-mix(in srgb, var(--violet) 40%, transparent);
+  color: var(--violet);
+}
+
+/* 并行讨论的子任务标签：和普通阶段标签区分开。 */
+.discussion-speaker-subtask {
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  color: var(--green);
+}
+
+/* assistant 正文下方的元信息：小号 muted，允许换行避免窄屏溢出。 */
+.msg-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+  max-width: 100%;
+  margin-top: calc(2px * var(--control-scale));
+  font-size: var(--fs-11);
+  color: var(--muted);
+}
+
+.msg-meta time,
+.msg-meta span {
+  white-space: nowrap;
+}
+
+/* 思考条目沿用 .tool 的圆点和摘要布局，正文按普通文本排版并限制高度。 */
+.thinking {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  max-width: 100%;
+}
+
+/* 收起/展开的视觉提示，避免用户不知道摘要可以点。用空内容画三角形，
+   避免装饰字符被读屏算进摘要名称。 */
+.thinking > summary::after {
+  content: "";
+  width: 0;
+  height: 0;
+  margin-left: auto;
+  flex: none;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s ease;
+}
+.thinking[open] > summary::after { transform: rotate(90deg); }
+
+.thinking-body {
+  margin: calc(6px * var(--control-scale)) 0 calc(8px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(10px * var(--control-scale));
+  border-left: 2px solid var(--line);
+  max-height: 24rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.thinking-body:focus-visible {
+  outline: 1px solid var(--orange);
+  outline-offset: 1px;
+}
+
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+
+/* Markdown 组件按需加载期间的纯文本占位，保留换行，避免整块空白带来的高度跳动。 */
+.md-pending {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.md p,
+.md ul,
+.md ol,
+.md pre,
+.md blockquote,
+.md table { margin: 0.45em 0; }
+
+.md ul,
+.md ol { padding-left: 1.3em; }
+
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  margin: 0.7em 0 0.3em;
+}
+
+.md a { color: var(--orange); }
+
+.md blockquote {
+  margin-left: 0;
+  padding-left: calc(8px * var(--control-scale));
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+
+.md code {
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-12);
+}
+
+.md :not(pre) > code {
+  background: var(--input);
+  border-radius: 4px;
+  padding: 0 calc(4px * var(--control-scale));
+}
+
+.md pre {
+  overflow: auto;
+  padding: calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+}
+
+.md table { border-collapse: collapse; display: block; overflow: auto; }
+.md th,
+.md td { border: 1px solid var(--line); padding: calc(4px * var(--control-scale)) calc(6px * var(--control-scale)); text-align: left; }
+
+.md img { max-width: 100%; }
+
+.md input[type="checkbox"] { margin-right: calc(6px * var(--control-scale)); }
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  color: var(--muted);
+  padding: calc(4px * var(--control-scale)) 0;
+}
+
+.loading-dots { display: inline-flex; gap: calc(4px * var(--control-scale)); }
+
+.loading-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--orange);
+  animation: blink 1s ease-in-out infinite;
+}
+
+.loading-dots i:nth-child(2) { animation-delay: 0.15s; }
+.loading-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+/* 简要档的运行指示：旋转的星号，接近 Cursor 的进行中状态。 */
+.loading-asterisk {
+  display: inline-block;
+  color: var(--orange);
+  animation: loading-spin 1.2s linear infinite;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 精简档运行指示里的实时 token 计数；数字等宽，流式刷新时不抖动。 */
+.loading-usage {
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+}
+
+.caret {
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: calc(2px * var(--control-scale));
+  background: var(--orange);
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+.rail { display: flex; flex-direction: column; gap: calc(2px * var(--control-scale)); }
+.rail-label {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  font-size: var(--fs-12);
+  padding: calc(2px * var(--control-scale)) 0 calc(2px * var(--control-scale)) calc(22px * var(--control-scale));
+}
+.rail-summary {
+  width: 100%;
+  min-height: calc(24px * var(--control-scale));
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  /* 同对话里的可展开行：只有标题文字和箭头可点，行内空白不响应。 */
+  pointer-events: none;
+}
+.rail-summary > * { pointer-events: auto; }
+.rail-summary:hover:not(:disabled) { background: transparent; color: var(--fg); }
+.rail-chevron {
+  flex: none;
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+.rail-summary[aria-expanded="true"] .rail-chevron { transform: rotate(180deg); }
+.rail-body { display: flex; flex-direction: column; gap: calc(2px * var(--control-scale)); }
+.rail-body .rail-toggle { align-self: flex-start; margin-left: 0; }
+.rail-toggle { margin-left: auto; }
+
+/* 子任务行：折叠时右侧显示 token 量和运行时间，展开后给出完整记录。 */
+.subagent-metrics {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78em;
+}
+.subagent-detail {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+  margin: calc(4px * var(--control-scale)) 0 calc(8px * var(--control-scale));
+}
+.subagent-stats {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+.subagent-summary {
+  max-height: 12rem;
+  overflow: auto;
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 0.5px solid var(--line);
+  border-radius: 5px;
+  background: var(--elev);
+  font-size: var(--fs-12);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.subagent-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--control-scale));
+  min-width: 0;
+}
+.subagent-prompt { display: flex; flex-direction: column; gap: calc(2px * var(--control-scale)); }
+.subagent-label { color: var(--muted); font-size: 0.78em; }
+.subagent-prompt pre {
+  max-height: 12rem;
+  overflow: auto;
+  margin: 0;
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 0.5px solid var(--line);
+  border-radius: 5px;
+  background: var(--elev);
+  color: var(--fg);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-12);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.subagent-text { min-width: 0; }
+.subagent-empty { color: var(--muted); font-size: var(--fs-12); }
+.subagent-error { color: var(--red); }
+
+.tool {
+  position: relative;
+  padding-left: calc(22px * var(--control-scale));
+}
+
+.tool::before {
+  content: "";
+  position: absolute;
+  left: calc(4px * var(--control-scale));
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.tool[data-tone="ok"]::before { background: var(--green); }
+.tool[data-tone="bad"]::before { background: var(--red); }
+.tool[data-tone="wait"]::before { background: var(--warn); }
+.tool[data-tone="queue"]::before { background: var(--blue); }
+.tool[data-tone="run"]::before {
+  background: var(--orange);
+  animation: blink 1s linear infinite;
+}
+
+.tool summary,
+.tool-line {
+  display: flex;
+  align-items: baseline;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+  min-height: calc(22px * var(--control-scale));
+}
+
+.tool summary { cursor: pointer; list-style: none; }
+.tool summary::-webkit-details-marker { display: none; }
+
+/* 可展开行只有文字本身响应点击：整行空白不再展开/收起，翻看或选中时
+   不会误触。summary 自身不接收指针事件，内容子元素和右侧箭头恢复。 */
+.tool summary { pointer-events: none; }
+.tool summary > *,
+.tool summary::after { pointer-events: auto; }
+
+/* 记录区按层级吸顶：用户消息固定在顶部（最高层），工具行 / 活动组 / Diff
+   排在它下面，精简档组内展开的子行再往下叠一行。层级越高 z-index 越大，下
+   层收起时从上层底下滑出，不会盖住「上级」行。
+   用户消息的高度随内容变化，CSS 算不出来：脚本在滚动时测量当前吸住的那条
+   消息，把高度写进 --pinned-user-h，下层摘要据此排在它下面；下一条用户消息
+   升上来时，脚本再从下沿把整条吸顶气泡向上推出去（内联 transform），两层
+   不会叠在一起。
+   背景用记录区底色遮住底下滚过的内容；左侧留出圆点/三角的缩进。 */
+.thread > .exchange {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg);
+}
+
+/* 展开「⋯」菜单的那条消息要盖住后面的消息：每个 exchange 都是同层级的
+   sticky 元素，后面的兄弟按 DOM 顺序画在上面，会把菜单下半部分（「编辑并
+   重新发送」「分叉新对话」）挡住，点击实际落在下一条消息上。只在菜单展开
+   期间抬高这一层，菜单收起后吸顶顺序恢复原样。 */
+.thread > .exchange:has(.menu-popup) {
+  z-index: 4;
+}
+
+.thread > .tool[open] > summary {
+  position: sticky;
+  top: var(--pinned-user-h, 0px);
+  z-index: 2;
+  background: var(--bg);
+}
+
+/* 精简档组摘要的高度固定为 20px * --control-scale（见下方 min-height 规则），
+   子行正好贴着它的下沿叠放。 */
+.tool-group-body .tool[open] > summary {
+  position: sticky;
+  top: calc(var(--pinned-user-h, 0px) + 20px * var(--control-scale));
+  z-index: 1;
+  background: var(--bg);
+}
+
+/* 滚动内容会画进记录区的顶部内边距；吸顶行向上补一条等高的底色，避免吸顶
+   行上方漏出一条正在滚过的内容。 */
+.thread > .exchange,
+.thread > .tool[open] > summary,
+.tool-group-body .tool[open] > summary {
+  box-shadow: 0 calc(-1 * var(--thread-pad-top, 0px)) 0 var(--bg);
+}
+
+.tool-name { font-weight: 700; flex: none; }
+.tool-extra {
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.tool-body {
+  margin: calc(6px * var(--control-scale)) 0 calc(8px * var(--control-scale));
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 0.5px solid var(--line);
+  border-radius: 5px;
+  background: var(--elev);
+  color: var(--fg);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 18rem;
+}
+
+.tool-body .path { color: var(--muted); }
+
+/* ---- 对话记录密度与层级 ---- */
+/* 全部用 data-kind / data-density 收紧作用域，diff、subagent、patch 与
+   SubagentRail 沿用原样式；新增规则放在通用 .tool 规则之后覆盖。 */
+
+/* 工具徽标：小号等宽标识，后面的命令/路径才是主文本。diff / subagent 也输出
+   .tool-name.tool-badge，但必须保持原外观，因此按 data-kind 收敛；普通工具行
+   当前不带 data-kind，用 :not([data-kind]) 一并覆盖。 */
+.tool[data-kind="tool"] .tool-badge,
+.tool[data-kind="thinking"] .tool-badge,
+.tool[data-kind="group"] .tool-badge,
+.tool:not([data-kind]) .tool-badge {
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: 0.82em;
+  font-weight: 600;
+  padding: 0 calc(5px * var(--control-scale));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  color: var(--muted);
+  flex: none;
+  line-height: 1.6;
+}
+
+/* 徽标退为次级信息后，工具摘要里的命令/路径回到默认前景色。 */
+.tool[data-kind="tool"] .tool-extra,
+.tool:not([data-kind]) .tool-extra { color: var(--fg); }
+
+/* 思考行降噪：去掉圆点，只弱化摘要，展开正文保持正常对比度。 */
+.tool[data-kind="thinking"]::before { display: none; }
+.tool[data-kind="thinking"] > summary {
+  opacity: 0.7;
+  min-height: calc(20px * var(--control-scale));
+}
+.tool[data-kind="thinking"] .tool-extra { font-size: 0.82em; }
+
+/* 耗时靠右，等宽数字避免状态切换时左右抖动。 */
+.tool[data-kind="tool"] .tool-duration,
+.tool:not([data-kind]) .tool-duration {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78em;
+  flex: none;
+}
+
+/* 失败状态用红色强调耗时和附加信息；放在主文本规则之后，优先级更高。 */
+.tool[data-kind="tool"][data-status="error"] .tool-duration,
+.tool[data-kind="tool"][data-status="error"] .tool-extra,
+.tool:not([data-kind])[data-status="error"] .tool-duration,
+.tool:not([data-kind])[data-status="error"] .tool-extra {
+  color: var(--red);
+}
+
+/* 分组行用可旋转三角代替圆点，展开体缩进收拢，形成活动层级。 */
+.tool[data-kind="group"]::before {
+  width: 0;
+  height: 0;
+  border-radius: 0;
+  background: transparent;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  animation: none;
+  transition: transform 0.15s ease;
+}
+/* 三角沿用原圆点的 tone 颜色，失败/进行中的分组仍有颜色指示。 */
+.tool[data-kind="group"][data-tone="ok"]::before { border-left-color: var(--green); }
+.tool[data-kind="group"][data-tone="bad"]::before { border-left-color: var(--red); }
+.tool[data-kind="group"][data-tone="wait"]::before { border-left-color: var(--warn); }
+.tool[data-kind="group"][data-tone="queue"]::before { border-left-color: var(--blue); }
+.tool[data-kind="group"][data-tone="run"]::before { border-left-color: var(--orange); }
+.tool[data-kind="group"][open]::before { transform: rotate(90deg); }
+
+.tool-group-body {
+  margin-left: calc(10px * var(--control-scale));
+  padding-left: calc(10px * var(--control-scale));
+  border-left: 1px solid var(--line);
+}
+
+/* 简要/精简档压缩行高与工具附加信息；附加信息不小于徽标字号，避免层级倒挂。 */
+.thread:is([data-density="brief"], [data-density="compact"]) .tool summary { min-height: calc(20px * var(--control-scale)); }
+.thread:is([data-density="brief"], [data-density="compact"]) .tool[data-kind="tool"] .tool-extra,
+.thread:is([data-density="brief"], [data-density="compact"]) .tool:not([data-kind]) .tool-extra { font-size: 0.82em; }
+
+/* 工具结果独立成块并限制高度，避免长输出挤占记录。 */
+.tool-body.tool-result {
+  border-top: 1px solid var(--line);
+  margin-top: calc(4px * var(--control-scale));
+  max-height: 14rem;
+}
+
+/* 展开程度三档切换：整体与 .chat-head 现有按钮同高，宽度由内容决定。
+   选中档用更亮的前景色和浅底，未选中的保持次级信息色。 */
+.density-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+  padding: 1px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.density-option {
+  min-height: calc(22px * var(--control-scale));
+  padding: calc(1px * var(--control-scale)) calc(6px * var(--control-scale));
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+
+.density-option[data-on="true"] {
+  color: var(--fg);
+  background: var(--hover);
+}
+
+.patch .add { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.patch .del { color: var(--error); background: color-mix(in srgb, var(--error) 12%, transparent); }
+.patch div { padding: 0 calc(4px * var(--control-scale)); }
+
+/* 会话行 + 行内回答表单为一组：列表的 12px 间距只落在组之间。 */
+.board-session { display: flex; flex-direction: column; }
+
+/* 左滑删除：横向拖动时正文层左移，露出右侧的红色删除按钮。静止时这一行
+   既没有红色底也没有按钮节点，所以正文层即使被浏览器漏画也不会冒出红色
+   块（iOS Safari 对频繁更新的合成层出现过这个问题）。 */
+.convo-swipe {
+  /* 左滑删除按钮的完整宽度：CSS 与 App.tsx 的手势距离共用这一个公式。 */
+  --swipe-delete-width: calc(76px * var(--control-scale));
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.convo-swipe-body {
+  position: relative;
+  z-index: 1;
+  background: var(--bg);
+  border-radius: 6px;
+  transition: transform 160ms ease;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.convo-swipe.dragging .convo-swipe-body { transition: none; }
+
+.convo-del {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--swipe-delete-width);
+  padding: 0 calc(8px * var(--control-scale));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+  background: var(--red);
+  color: var(--ivory);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.convo-del:hover:not(:disabled) { background: color-mix(in srgb, #ffffff 14%, var(--red)); }
+
+.convo {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(8px * var(--control-scale));
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  padding: calc(7px * var(--control-scale)) calc(8px * var(--control-scale));
+  border-radius: 6px;
+  min-height: 0;
+}
+
+/* 发送后、服务端建好 worktree/会话之前的占位行：不可点击，圆点脉冲表示进行中。 */
+.convo-creating {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.convo-creating .dot {
+  animation: msg-status-pulse 1s ease-in-out infinite;
+}
+
+.convo-text { min-width: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.convo-meta { flex: none; font-size: var(--fs-12); padding-top: calc(1px * var(--control-scale)); }
+/* 项目会话列表右侧：运行时长/结束时间；子 agent 计数另起一行，避免挤占标题。 */
+.convo-run-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: calc(1px * var(--control-scale));
+  white-space: nowrap;
+}
+.convo-run-meta .convo-meta-sub { font-size: var(--fs-11); }
+.convo .error { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 会话行的内容层：给右侧「继续」按钮提供定位基准。正文本身是 button，
+   不能在其中嵌套按钮，所以「继续」作为兄弟节点浮在行尾。 */
+.convo-row { position: relative; }
+
+/* 中断/失败的会话：直接在当前页继续，不跳详情页。 */
+.convo-continue {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: calc(6px * var(--control-scale));
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(24px * var(--control-scale));
+  padding: 0 calc(8px * var(--control-scale));
+  border: 1px solid color-mix(in srgb, var(--blue) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+  color: var(--fg);
+  font-size: var(--fs-11);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.convo-continue:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--blue) 24%, transparent);
+}
+
+/* 右侧有「继续」时，标题和右侧状态给它让出位置。 */
+.convo-row.has-continue .convo { padding-right: calc(64px * var(--control-scale)); }
+
+/* 多选态的勾选指示：整行可点，选中后标题加底色。 */
+.convo-check {
+  flex: none;
+  position: relative;
+  width: calc(14px * var(--control-scale));
+  height: calc(14px * var(--control-scale));
+  margin-top: calc(3px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--input);
+}
+
+.convo-check.on {
+  border-color: var(--blue);
+  background: var(--blue);
+}
+
+.convo-check.on::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  width: 35%;
+  height: 60%;
+  border: solid var(--ivory);
+  border-width: 0 2px 2px 0;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.convo.selected { background: color-mix(in srgb, var(--blue) 14%, transparent); }
+
+/* 桌面/笔等精确指针的可见删除入口，替代触摸端的隐藏左滑手势。
+   默认不显示；只有同时具备 hover 和精细指针时才出现，触摸端维持原行为。 */
+.convo-del-inline {
+  display: none;
+  position: absolute;
+  z-index: 2; /* 高于 .convo-swipe-body(1)，低于不相关浮层 */
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  width: auto;
+  height: calc(26px * var(--control-scale));
+  min-width: calc(26px * var(--control-scale));
+  min-height: calc(26px * var(--control-scale));
+  padding: 0 calc(6px * var(--control-scale));
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.convo-del-inline:hover:not(:disabled) {
+  color: var(--ivory);
+  background: var(--red);
+}
+
+@media (any-hover: hover) and (any-pointer: fine) {
+  .convo-del-inline { display: flex; }
+
+  /* 给右侧按钮让出空间，文字不会被压住。限定在滑动行内，避免误伤 ProjectsPage 的 .convo。 */
+  .convo-swipe .convo { padding-right: calc(52px * var(--control-scale)); }
+
+  /* 默认不可见也不可命中。特异性 (0,2,0) 压过全局 button:disabled 的 opacity。 */
+  .convo-swipe .convo-del-inline { opacity: 0; pointer-events: none; }
+
+  /* 悬停整行或键盘聚焦到行内元素时才露出按钮，并恢复命中。 */
+  .convo-swipe:hover .convo-del-inline,
+  .convo-swipe:focus-within .convo-del-inline { opacity: 1; pointer-events: auto; }
+
+  /* 触摸滑开或正在拖动时，红色 .convo-del 已占据右侧，隐藏行内按钮。 */
+  .convo-swipe[data-open] .convo-del-inline { display: none; }
+
+  /* 已有「继续」入口时，归档按钮左移，两个按钮并排不重叠。 */
+  .convo-swipe.has-continue .convo-del-inline { right: calc(62px * var(--control-scale)); }
+  .convo-swipe.has-continue .convo { padding-right: calc(112px * var(--control-scale)); }
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 0.45em;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+
+.dot[data-tone="ok"] { background: var(--green); }
+.dot[data-tone="idle"] { background: var(--muted); }
+.dot[data-tone="bad"] { background: var(--red); }
+.dot[data-tone="stop"] { background: var(--muted); }
+.dot[data-tone="wait"] { background: var(--warn); }
+.dot[data-tone="queue"] { background: var(--blue); }
+.dot[data-tone="run"] { background: var(--green); animation: blink 1s linear infinite; }
+
+/* 完成会话的对勾：占位宽度和圆点一致，列表标题不会因此左右跳动。 */
+.phase-check {
+  width: 11px;
+  height: 11px;
+  margin: 0.3em calc(-2px * var(--control-scale)) 0;
+  flex: none;
+  color: var(--green);
+}
+
+.composer { margin: 0 calc(8px * var(--control-scale)) calc(8px * var(--control-scale)); flex: none; }
+
+/* 左滑切换语音输入模式：上方文字编辑框 + 下方整宽大语音按钮。
+   两套底部面板交叉滑动，外层高度由 Composer 量出来平滑过渡；
+   竖向滑动留给页面滚动，横向才由 Composer 接管。 */
+.composer-bottom {
+  position: relative;
+  overflow: hidden;
+  /* 高度由 Composer 内联量出并直接设置；这里不 transition height：
+     动画布局属性会让整层每帧重排。两套面板自己的 transform/opacity
+     过渡已经提供了模式切换的视觉反馈。 */
+}
+
+.composer-bottom-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  transition: transform 220ms ease, opacity 160ms ease;
+}
+
+.composer-bottom-panel[data-active="false"] {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px);
+}
+
+.composer-voice-pad {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  padding: calc(6px * var(--control-scale));
+}
+
+.voice-mode-hint {
+  align-self: flex-end;
+  padding: 0 calc(2px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-11);
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+
+/* 语音模式切换按钮：默认隐藏，触摸端继续用滑动。精准指针设备在下方
+   any-hover/any-pointer 媒体查询里显示，替换掉滑动提示。 */
+.voice-mode-toggle {
+  display: none;
+  flex: none;
+  height: calc(26px * var(--control-scale));
+  padding: 0 calc(6px * var(--control-scale));
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.voice-mode-toggle:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+
+.composer-voice-pad .voice-mode-toggle { align-self: flex-end; }
+
+@media (any-hover: hover) and (any-pointer: fine) {
+  .voice-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .voice-mode-hint { display: none; }
+}
+
+.composer-box {
+  display: flex;
+  flex-direction: column;
+  touch-action: pan-y;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  box-shadow: 0 1px 2px #0000001a;
+}
+
+.composer-box:focus-within {
+  border-color: var(--orange);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 12%, transparent), 0 1px 2px #00000033;
+}
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--control-scale));
+  padding: calc(8px * var(--control-scale)) calc(8px * var(--control-scale)) 0;
+}
+
+.attachment {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  margin: 0;
+}
+
+.attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--elev);
+}
+
+.attachment-remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: calc(18px * var(--control-scale));
+  height: calc(18px * var(--control-scale));
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--menu);
+  color: var(--fg);
+  font-size: var(--fs-12);
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attach-btn {
+  width: calc(34px * var(--control-scale));
+  height: calc(34px * var(--control-scale));
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+}
+
+.attach-btn:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--hover);
+}
+
+.attach-btn:disabled { opacity: 0.5; }
+
+.attach-btn svg {
+  width: calc(19px * var(--control-scale));
+  height: calc(19px * var(--control-scale));
+}
+
+.voice-wrap { position: relative; display: inline-flex; }
+
+.voice-btn {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.voice-btn[data-recording="true"],
+.voice-btn[data-recording="true"]:hover:not(:disabled) {
+  color: var(--ivory);
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.voice-btn[data-recording="true"] svg { animation: voice-pulse 1s ease-in-out infinite; }
+
+.voice-live {
+  position: absolute;
+  right: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  padding: calc(2px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--menu);
+  color: var(--fg);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px #00000055;
+}
+
+/* 语音模式里的大号按钮：整宽、够高，按住录音松手出字。 */
+.voice-wrap-big {
+  display: flex;
+  width: 100%;
+}
+
+.voice-btn-big {
+  width: 100%;
+  height: auto;
+  min-height: calc(64px * var(--control-scale));
+  flex-direction: row;
+  gap: calc(8px * var(--control-scale));
+  border: 0;
+  border-radius: 8px;
+  background: var(--clay);
+  color: var(--ivory);
+  font-size: var(--fs-15);
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.voice-btn-big:hover:not(:disabled) {
+  background: var(--clay);
+  filter: brightness(1.1);
+}
+
+.voice-btn-big:active:not(:disabled) { filter: brightness(0.92); }
+
+.voice-btn-big svg {
+  width: 28px;
+  height: 28px;
+}
+
+.voice-btn-label {
+  font-size: var(--fs-15);
+  font-weight: 600;
+  /* 按钮被挤窄时宁可溢出也别一个字一行，形状别变竖条。 */
+  white-space: nowrap;
+}
+
+.composer-error {
+  margin: calc(4px * var(--control-scale)) calc(2px * var(--control-scale)) 0;
+  font-size: var(--fs-12);
+}
+
+.composer-box textarea {
+  resize: none;
+  width: 100%;
+  min-height: calc(62px * var(--control-scale));
+  max-height: calc(180px * var(--control-scale));
+  border: 0;
+  outline: none;
+  background: transparent;
+  padding: calc(10px * var(--control-scale)) calc(10px * var(--control-scale)) 0;
+  line-height: 1.45;
+}
+
+.composer-box textarea::placeholder { color: var(--placeholder); }
+.composer-box textarea:focus-visible { outline: none; }
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--control-scale));
+  padding: calc(6px * var(--control-scale));
+}
+
+.chips {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* 当前轮在跑时的发送语义提示：桌面显示键盘快捷键，触摸端显示长按。
+   空间不够时省略号截断，绝不把发送按钮挤出去。 */
+.composer-hint {
+  flex: none;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+
+.composer-hint-coarse { display: none; }
+
+@media (pointer: coarse) {
+  .composer-hint-fine { display: none; }
+  .composer-hint-coarse { display: inline; }
+}
+
+.chip {
+  max-width: 9rem;
+  height: calc(26px * var(--control-scale));
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  padding: 0 calc(2px * var(--control-scale));
+}
+
+.chip:hover { color: var(--fg); }
+
+.chip-label {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  padding: 0 calc(4px * var(--control-scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-end { display: flex; align-items: center; gap: calc(6px * var(--control-scale)); margin-left: auto; }
+
+.send {
+  width: calc(34px * var(--control-scale));
+  height: calc(34px * var(--control-scale));
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: var(--clay);
+  color: var(--ivory);
+  font-size: var(--fs-16);
+  line-height: 1;
+}
+
+.send:hover:not(:disabled) { background: var(--clay); filter: brightness(1.1); }
+.send:active:not(:disabled) { filter: brightness(0.92); }
+
+/* 当前轮在跑：发送按钮把「排队」语义带出来；长按触发插话时给一圈蓝色提示。 */
+.send[data-active="true"] { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--blue) 55%, transparent); }
+.send[data-holding="true"] { filter: brightness(1.25); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 45%, transparent); }
+
+.send.stop {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  font-size: var(--fs-11);
+}
+
+.send.stop:hover:not(:disabled) { background: var(--hover); filter: none; }
+
+.permit {
+  margin: 0 calc(8px * var(--control-scale)) calc(6px * var(--control-scale));
+  padding: calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  /* 屏幕很矮/字号很大时允许面板收缩，内容自己滚动，而不是把输入框顶出屏幕。 */
+  flex: 0 1 auto;
+  min-height: 0;
+  /* 长问题/长 JSON 只让面板内部滚动，输入框始终留在屏幕内。 */
+  max-height: min(45vh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 会话列表里的内联回答：紧贴所属行，和详情页输入区上方的面板区分开。 */
+.permit-inline {
+  margin: calc(4px * var(--control-scale)) 0 calc(2px * var(--control-scale));
+  max-height: min(50vh, 420px);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+
+.permit h2 { margin: 0; font-size: var(--fs-13); }
+.permit p { margin: 0; }
+
+.permit-title:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.permit-countdown {
+  color: var(--warn);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+
+.permit-countdown.expired { color: var(--muted); }
+
+.permit .tool-body { max-height: 12rem; }
+
+.permit input:not([type="checkbox"]):not([type="radio"]) {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--elev);
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+}
+
+.actions { display: flex; gap: calc(6px * var(--control-scale)); flex-wrap: wrap; }
+
+.btn {
+  border: 1px solid var(--line);
+  background: var(--elev);
+  min-height: calc(28px * var(--control-scale));
+}
+
+.btn-primary {
+  border: 0;
+  background: var(--clay);
+  color: var(--ivory);
+  min-height: calc(28px * var(--control-scale));
+}
+
+.btn-primary:hover:not(:disabled) { background: var(--clay); filter: brightness(1.1); }
+
+fieldset {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin: 0;
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+}
+
+.choice {
+  display: flex;
+  gap: calc(6px * var(--control-scale));
+  align-items: flex-start;
+  margin: calc(4px * var(--control-scale)) 0;
+}
+
+.choice input { width: auto; margin-top: calc(2px * var(--control-scale)); }
+
+.custom-answer {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--control-scale));
+  margin: calc(4px * var(--control-scale)) 0;
+}
+
+.dock-error { margin: 0 calc(12px * var(--control-scale)) calc(4px * var(--control-scale)); flex: none; }
+
+/* 页内提示条（错误、草稿恢复、失败后继续）；沿用 ui.css 的 Notice 外观。 */
+.dock-notice,
+.failure-notice,
+.draft-notice {
+  margin: 0 calc(10px * var(--control-scale)) calc(6px * var(--control-scale));
+  flex: none;
+}
+
+.thread > .inline-loading { margin: calc(8px * var(--control-scale)); }
+
+.error { color: var(--error); }
+.note { color: var(--green); }
+
+.center-note { align-items: center; justify-content: center; }
+
+h1 { font-size: var(--fs-15); font-weight: 600; margin: calc(4px * var(--control-scale)) 0 calc(8px * var(--control-scale)); }
+.lead { margin: 0 0 calc(12px * var(--control-scale)); color: var(--muted); }
+
+.stack { display: flex; flex-direction: column; gap: calc(8px * var(--control-scale)); }
+
+.provider {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+/* 设置页里的独立区块（推送通知）与上方表单留出间距。 */
+.page > .provider { margin-top: calc(12px * var(--control-scale)); }
+
+.field { display: flex; flex-direction: column; gap: calc(4px * var(--control-scale)); color: var(--muted); }
+
+.field input,
+.field select,
+.model-row input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+}
+
+.model-row { display: flex; gap: calc(6px * var(--control-scale)); align-items: center; }
+.model-row input { min-width: 0; }
+.model-row .btn { flex: none; white-space: nowrap; }
+
+.mono { font-family: Consolas, "Cascadia Mono", ui-monospace, monospace; }
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot[data-tone="run"],
+  .tool[data-tone="run"]::before,
+  .loading-dots i,
+  .caret,
+  .voice-btn[data-recording="true"] svg { animation: none; }
+  .thinking > summary::after,
+  .tool[data-kind="group"]::before { transition: none; }
+  .composer-bottom-panel,
+  .convo-swipe-body,
+  .rail-chevron { transition: none; }
+}
+
+/* Mobile Safari zooms the page when a focused control's text is under 16px.
+   Keep form text at least 16px on touch screens; pinch zoom still works.
+   Touch targets are also enlarged here: 26px controls are hard to hit with a
+   thumb, especially in the dense chat header and composer. */
+@media (pointer: coarse) {
+  /* 刻意不随字号缩小的例外：iOS 聚焦小于 16px 的控件会自动放大页面，
+     所以这里保留 16px 下限（字号放大时仍按 --font-scale 增长）。
+     语义等价于对 --fs-16 再取 16px 下限，只是不直接引用 --fs-* 变量。 */
+  input,
+  textarea,
+  select { font-size: max(16px, calc(16px * var(--font-scale))); }
+
+  .text-btn,
+  .nav-btn,
+  .attention-badge {
+    min-height: calc(40px * var(--control-scale));
+    padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+  }
+
+  /* 字号沿用 .chip 的 12px：手机上 chips 变多后小一档更清爽。 */
+  .chip {
+    height: calc(36px * var(--control-scale));
+    padding: 0 calc(6px * var(--control-scale));
+  }
+
+  /* 表单主按钮和审批按钮也要有拇指友好的热区。 */
+  .btn,
+  .btn-primary { min-height: calc(40px * var(--control-scale)); }
+
+  /* 大号语音按钮要铺满整行，宽高由 .voice-btn-big 自己决定；
+     这里只放大图标式的小按钮，别把它压成一条竖条。 */
+  .attach-btn:not(.voice-btn-big),
+  .send {
+    width: calc(40px * var(--control-scale));
+    height: calc(40px * var(--control-scale));
+  }
+
+  .attachment-remove {
+    width: calc(26px * var(--control-scale));
+    height: calc(26px * var(--control-scale));
+  }
+
+  .voice-btn-big { min-height: calc(76px * var(--control-scale)); }
+
+  /* Keep the floating control comfortably tappable on touch screens. */
+  .jump-bottom {
+    min-height: calc(40px * var(--control-scale));
+    padding: calc(8px * var(--control-scale)) calc(16px * var(--control-scale));
+  }
+
+  .menu-item { min-height: calc(40px * var(--control-scale)); }
+}
+
+/* 浅色主题：变量在 :root 之后覆盖，组件本身不需要感知主题。 */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f7f5ef;
+    --elev: #ffffff;
+    --input: #ece8de;
+    --menu: #ffffff;
+    --fg: #202020;
+    --muted: #5f5f5f;
+    --line: #d5d0c4;
+    --hover: #e7e2d6;
+    --orange: #b4552d;
+    --clay: #a84a27;
+    --ivory: #ffffff;
+    --green: #2f7d4f;
+    --red: #b03325;
+    --error: #a12d20;
+    --warn: #7a5a12;
+    --blue: #2563eb;
+    --placeholder: #6f6f6f;
+  }
+
+  .msg-image img { background: #0000000d; }
+  .jump-bottom { box-shadow: 0 4px 12px #00000026; }
+  .menu-popup,
+  .voice-live { box-shadow: 0 8px 24px #00000026; }
+  .dialog { box-shadow: 0 18px 48px #00000033; }
+}
+
+/* 归档：默认折叠，展开后按项目列出 HDD 上的旧会话。 */
+.archive-bar {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  flex: none;
+  flex-wrap: wrap;
+  padding: calc(4px * var(--control-scale)) calc(12px * var(--control-scale)) calc(6px * var(--control-scale));
+  border-bottom: 1px solid var(--line);
+}
+
+/* 归档开关排在「全部归档」右侧，和头部按钮同一行：去掉独占一行时的内边距和分隔线。 */
+.chat-head .archive-bar {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border-bottom: 0;
+  justify-content: flex-end;
+}
+
+/* 窄屏顶栏只留返回图标、标题和「更多」，其余入口收进菜单；
+   宽屏保持原来的文字按钮，图标只在窄屏出现。 */
+.chat-head .chat-more,
+.chat-back .narrow-only { display: none; }
+
+@media (max-width: 560px) {
+  .chat-head .wide-only,
+  .chat-head .chat-archive-wide,
+  .schedules-bar-wide { display: none; }
+
+  .chat-back .narrow-only { display: inline; }
+
+  .chat-head .chat-more { display: inline-flex; }
+
+  /* 图标按钮沿用文字按钮的 40px 触控热区，字形保持正文大小。 */
+  .chat-head .narrow-only {
+    font-size: var(--fs-16);
+    line-height: 1;
+  }
+}
+
+.archive-path,
+.archive-bar .error {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.archive-path {
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+/* 归档实例和保留期只在展开的归档面板里说明，顶栏保持简洁；右上角是关键词搜索。 */
+.archive-panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(7px * var(--control-scale)) calc(10px * var(--control-scale));
+  border-bottom: 1px solid var(--line);
+  background: var(--elev);
+}
+
+.archive-search {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.archive-search input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--fg);
+  padding: calc(5px * var(--control-scale)) calc(8px * var(--control-scale));
+  font-size: var(--fs-12);
+}
+
+.archive-search .text-btn { flex: none; }
+
+.archive-panel {
+  margin: calc(8px * var(--control-scale)) calc(12px * var(--control-scale)) 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--elev);
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.archive-panel .empty {
+  margin: 0;
+  padding: calc(10px * var(--control-scale));
+}
+
+.archive-row {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  padding: calc(8px * var(--control-scale)) calc(10px * var(--control-scale));
+  border-top: 1px solid var(--line);
+}
+
+.archive-row:first-child {
+  border-top: 0;
+}
+
+.archive-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(1px * var(--control-scale));
+  overflow: hidden;
+}
+
+.archive-text .convo-title,
+.archive-text .convo-sub,
+.archive-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.archive-meta {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}

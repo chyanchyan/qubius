@@ -1,0 +1,239 @@
+/* 首次运行部署向导：沿用部署页的颜色和 .field 输入框，只补充分步布局。 */
+
+.deploy-wizard {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--control-scale));
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.wizard-head h1 { margin: 0; }
+.wizard-head .lead { margin: calc(6px * var(--control-scale)) 0 0; }
+
+.wizard-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--control-scale));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wizard-progress li {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+  padding: calc(5px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.wizard-progress li[data-state="current"] {
+  border-color: var(--clay);
+  background: color-mix(in srgb, var(--clay) 14%, transparent);
+  color: var(--fg);
+}
+
+.wizard-progress li[data-state="done"] {
+  border-color: color-mix(in srgb, var(--green) 45%, var(--line));
+  color: var(--green);
+}
+
+.wizard-progress-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(18px * var(--control-scale));
+  height: calc(18px * var(--control-scale));
+  border-radius: 50%;
+  background: var(--elev);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+}
+
+.wizard-progress li[data-state="current"] .wizard-progress-index {
+  background: var(--clay);
+  color: var(--ivory);
+}
+
+.wizard-step {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--control-scale));
+  padding: calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+.wizard-step > h2 {
+  margin: 0;
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+
+.wizard-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.wizard-env {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: calc(8px * var(--control-scale));
+  margin: 0;
+  padding: calc(8px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+}
+
+.wizard-env > div { min-width: 0; }
+.wizard-env-wide { grid-column: 1 / -1; }
+.wizard-env dt { color: var(--muted); font-size: var(--fs-11); }
+.wizard-env dd { margin: calc(2px * var(--control-scale)) 0 0; overflow-wrap: anywhere; }
+
+.wizard-choices {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+}
+
+.wizard-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(10px * var(--control-scale));
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  cursor: pointer;
+}
+
+.wizard-choice[data-selected="true"] {
+  border-color: var(--clay);
+  background: color-mix(in srgb, var(--clay) 10%, var(--input));
+}
+
+.wizard-choice input {
+  width: auto;
+  margin-top: calc(3px * var(--control-scale));
+  flex: none;
+}
+
+.wizard-choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3px * var(--control-scale));
+  min-width: 0;
+}
+
+.wizard-choice-text strong { font-weight: 600; color: var(--fg); }
+.wizard-choice-text span { color: var(--muted); font-size: var(--fs-12); }
+
+.wizard-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: calc(8px * var(--control-scale)) calc(10px * var(--control-scale));
+}
+
+.wizard-span-2 { grid-column: 1 / -1; }
+.wizard-fields .field { min-width: 0; }
+.wizard-fields .field input { font-family: inherit; }
+.wizard-fields .field input.mono { font-family: Consolas, "Cascadia Mono", ui-monospace, monospace; }
+
+/* 配置目录由启动环境决定，只在步骤里展示，不可编辑。 */
+.wizard-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--control-scale));
+  padding: calc(8px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+.wizard-readonly-label { color: var(--muted); font-size: var(--fs-11); }
+.wizard-readonly-value { overflow-wrap: anywhere; }
+
+.wizard-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: calc(8px * var(--control-scale));
+}
+
+.wizard-summary-card {
+  min-width: 0;
+  padding: calc(8px * var(--control-scale)) calc(10px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.wizard-summary-card h3 {
+  margin: 0 0 calc(6px * var(--control-scale));
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.wizard-summary-card dl {
+  display: flex;
+  flex-direction: column;
+  gap: calc(5px * var(--control-scale));
+  margin: 0;
+}
+
+.wizard-summary-card dt { color: var(--muted); font-size: var(--fs-11); }
+.wizard-summary-card dd { margin: calc(1px * var(--control-scale)) 0 0; overflow-wrap: anywhere; }
+
+/* 可选设置放在实例步骤里，始终可见，避免到确认页才发现来不及配置。 */
+.wizard-optional {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.wizard-optional > h3 {
+  margin: 0;
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--control-scale));
+}
+
+.wizard-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  margin-top: calc(2px * var(--control-scale));
+}
+
+.wizard-nav-main { display: flex; gap: calc(8px * var(--control-scale)); }
+.wizard-nav-main .btn { min-width: calc(120px * var(--control-scale)); }
+.wizard-switch { margin-left: auto; }
+
+@media (max-width: 560px) {
+  .wizard-fields { grid-template-columns: minmax(0, 1fr); }
+  .wizard-nav { align-items: stretch; }
+  .wizard-nav-main { flex: 1; }
+  .wizard-nav-main .btn { flex: 1; min-width: 0; }
+  .wizard-switch { margin-left: 0; width: 100%; text-align: center; }
+  .wizard-progress-title { display: none; }
+  .wizard-progress li[data-state="current"] .wizard-progress-title { display: inline; }
+}

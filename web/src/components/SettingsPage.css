@@ -1,0 +1,132 @@
+/* 设置页专用样式：sticky 保存栏与可折叠的配置卡片。颜色全部走全局变量。 */
+
+/* 底部保存栏：直接贴在 .page 的滚动视口边缘，长页面滚到哪都能保存。 */
+.settings-savebar {
+  position: sticky;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  flex: none;
+  margin: 0 calc(-14px * var(--control-scale));
+  padding: calc(8px * var(--control-scale)) calc(14px * var(--control-scale));
+  background: var(--bg);
+}
+
+.settings-savebar-bottom {
+  bottom: 0;
+  margin-top: calc(4px * var(--control-scale));
+  border-top: 1px solid var(--line);
+  /* 底部安全区：刘海屏/手势条不遮挡保存按钮。 */
+  padding-bottom: calc(8px * var(--control-scale) + env(safe-area-inset-bottom, 0px));
+}
+
+.settings-savebar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8px * var(--control-scale));
+}
+
+.settings-savebar-status {
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+/* 可折叠配置卡片：<details> 保持表单元素在 DOM 里，折叠不影响提交。 */
+/* 覆盖 .provider 的 flex 布局，让 summary 保持浏览器原生的展开/收起行为。 */
+.provider.settings-provider { display: block; }
+
+.settings-provider-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--control-scale));
+  cursor: pointer;
+  user-select: none;
+}
+
+/* display:flex 会去掉原生 marker，用自绘箭头保留可折叠的视觉提示。 */
+.settings-provider-summary::before {
+  content: "▸";
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.settings-provider[open] > .settings-provider-summary::before {
+  content: "▾";
+}
+
+.settings-provider-index {
+  font-weight: 600;
+}
+
+.settings-provider-name {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-provider-key {
+  margin-left: auto;
+  padding: 0 calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+.settings-provider-key[data-on="true"] {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.settings-provider-body {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  margin-top: calc(8px * var(--control-scale));
+}
+
+.settings-provider-actions {
+  align-items: center;
+}
+
+.settings-provider-remove {
+  margin-left: auto;
+}
+
+/* API key 显示/隐藏按钮：叠在输入框右侧，不额外占一行。 */
+.secret-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.secret-input input {
+  /* 给右侧按钮留出位置，长密钥不会压到图标下面。 */
+  padding-right: calc(34px * var(--control-scale));
+}
+
+.secret-toggle {
+  position: absolute;
+  right: calc(4px * var(--control-scale));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(26px * var(--control-scale));
+  height: calc(26px * var(--control-scale));
+  padding: 0;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .settings-provider-name {
+    max-width: 100%;
+  }
+}

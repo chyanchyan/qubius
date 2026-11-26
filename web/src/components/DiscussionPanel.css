@@ -1,0 +1,252 @@
+/* 多模型讨论的参与模型面板：位于输入框上方，和工作流进度条同一视觉层级。 */
+.discussion-panel {
+  flex: none;
+  margin: 0 calc(8px * var(--control-scale)) calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--violet);
+  border-radius: 10px;
+  background: var(--menu);
+  overflow: hidden;
+}
+
+.discussion-panel[data-phase="running"] { border-left-color: var(--warn); }
+.discussion-panel[data-phase="completed"] { border-left-color: var(--green); }
+.discussion-panel[data-phase="failed"] { border-left-color: var(--red); }
+.discussion-panel[data-phase="stopped"] { border-left-color: var(--muted); }
+
+.discussion-head {
+  display: flex;
+  align-items: baseline;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(7px * var(--control-scale)) calc(9px * var(--control-scale)) calc(5px * var(--control-scale));
+}
+
+.discussion-title {
+  flex: none;
+  color: var(--violet);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.discussion-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discussion-status[data-state="failed"] { color: var(--red); }
+.discussion-status[data-state="stopped"] { color: var(--muted); }
+
+.discussion-empty {
+  margin: 0;
+  padding: 0 calc(9px * var(--control-scale)) calc(6px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.discussion-rows {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--control-scale));
+  padding: 0 calc(9px * var(--control-scale));
+}
+
+.discussion-row {
+  display: flex;
+  align-items: center;
+  gap: calc(5px * var(--control-scale));
+  min-width: 0;
+}
+
+.discussion-index {
+  flex: none;
+  width: calc(16px * var(--control-scale));
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-11);
+  text-align: right;
+}
+
+.discussion-name,
+.discussion-select {
+  height: calc(26px * var(--control-scale));
+  min-width: 0;
+  padding: 0 calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-12);
+}
+
+.discussion-name {
+  flex: 1 1 5rem;
+}
+
+.discussion-select {
+  flex: 0 1 auto;
+  max-width: 12rem;
+}
+
+.discussion-effort {
+  max-width: 9rem;
+}
+
+.discussion-name:focus-visible,
+.discussion-select:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 1px;
+}
+
+.discussion-remove {
+  flex: none;
+  width: calc(24px * var(--control-scale));
+  height: calc(24px * var(--control-scale));
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-15);
+  line-height: 1;
+}
+
+.discussion-remove:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--hover);
+  color: var(--red);
+}
+
+.discussion-actions {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(7px * var(--control-scale)) calc(9px * var(--control-scale)) calc(8px * var(--control-scale));
+}
+
+.discussion-add,
+.discussion-start {
+  height: calc(28px * var(--control-scale));
+  padding: 0 calc(11px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--fs-12);
+}
+
+.discussion-add:hover:not(:disabled) { background: var(--hover); }
+
+.discussion-start {
+  margin-left: auto;
+  border-color: color-mix(in srgb, var(--violet) 60%, transparent);
+  background: color-mix(in srgb, var(--violet) 18%, transparent);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.discussion-start:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--violet) 28%, transparent);
+}
+
+.discussion-add:disabled,
+.discussion-start:disabled,
+.discussion-remove:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.discussion-add:focus-visible,
+.discussion-start:focus-visible,
+.discussion-remove:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 1px;
+}
+
+/* 运行中：只读地展示参与者，当前发言者高亮。 */
+.discussion-running {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3px * var(--control-scale));
+  margin: 0;
+  padding: 0 calc(9px * var(--control-scale)) calc(8px * var(--control-scale));
+  list-style: none;
+}
+
+.discussion-running-item {
+  display: flex;
+  align-items: baseline;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+  padding: calc(2px * var(--control-scale)) calc(6px * var(--control-scale));
+  border-radius: 6px;
+  font-size: var(--fs-12);
+}
+
+.discussion-running-item[data-active] {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+.discussion-running-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discussion-running-model {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discussion-running-kind {
+  flex: none;
+  margin-left: auto;
+  color: var(--warn);
+  font-size: var(--fs-11);
+}
+
+/* 并行讨论：每个子任务一行，标题过长时省略，状态放右侧。 */
+.discussion-subtasks .discussion-running-name {
+  flex: 1 1 auto;
+}
+
+.discussion-running-item[data-phase="completed"] .discussion-running-kind {
+  color: var(--green);
+}
+
+.discussion-running-item[data-phase="failed"] .discussion-running-kind {
+  color: var(--red);
+}
+
+.discussion-running-item[data-phase="stopped"] .discussion-running-kind {
+  color: var(--muted);
+}
+
+/* 窄屏：每行折成两行，名称输入框占满第一行。 */
+@media (max-width: 560px) {
+  .discussion-row {
+    flex-wrap: wrap;
+  }
+
+  .discussion-name {
+    flex: 1 1 calc(100% - 60px);
+  }
+
+  .discussion-select {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+}

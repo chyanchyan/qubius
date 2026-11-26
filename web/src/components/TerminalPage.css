@@ -1,0 +1,95 @@
+/* 命令行页自己管理滚动（xterm），所以覆盖 .page 的内边距和整页滚动。
+   提高一级优先级，避免懒加载的 CSS 和 styles.css 的加载顺序影响结果。 */
+.page.terminal-page {
+  padding: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(6px * var(--control-scale)) calc(12px * var(--control-scale));
+  border-bottom: 1px solid var(--line);
+  flex: none;
+  min-width: 0;
+}
+
+.terminal-heading-group {
+  display: flex;
+  align-items: baseline;
+  gap: calc(8px * var(--control-scale));
+  min-width: 0;
+}
+
+.terminal-heading {
+  margin: 0;
+  font-size: var(--fs-15);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.terminal-heading:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+
+.terminal-meta {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.terminal-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(2px * var(--control-scale));
+  flex: none;
+}
+
+.terminal-actions button {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.terminal-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/* xterm 需要一个有明确尺寸的容器；fit 插件会自己扣掉这里的 padding。 */
+.terminal-host {
+  position: absolute;
+  inset: 0;
+  padding: calc(4px * var(--control-scale)) calc(6px * var(--control-scale)) 0;
+}
+
+.terminal-host .xterm { height: 100%; }
+
+.terminal-host .xterm-viewport { background: transparent !important; }
+
+/* 断线/连接中的遮罩；正常连接时完全不渲染。 */
+.terminal-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(12px * var(--control-scale));
+  padding: calc(24px * var(--control-scale));
+  text-align: center;
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+}
+
+.terminal-overlay-title {
+  margin: 0;
+  max-width: 42ch;
+  line-height: 1.5;
+  color: var(--fg);
+}

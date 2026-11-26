@@ -1,0 +1,500 @@
+/* 对话区补充样式。由 Composer.tsx 引入（Thread.tsx 会被 node:test 直接
+   import，而 Node 的 tsx 加载器不认识 .css），全站只加载一次。 */
+
+/* 浏览器不支持语音时按钮仍可聚焦/点击（按下由 onError 说明原因），
+   只做视觉弱化，不用 disabled。 */
+.voice-btn[data-unsupported="true"] {
+  opacity: 0.55;
+  cursor: help;
+}
+
+.voice-btn[data-unsupported="true"]:hover:not(:disabled),
+.voice-btn[data-unsupported="true"]:focus-visible {
+  opacity: 0.85;
+}
+
+/* Diff 按文件分组的 details。 */
+.patch-files {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  margin: calc(6px * var(--control-scale)) 0 calc(8px * var(--control-scale));
+}
+
+.patch-file {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--elev);
+  overflow: hidden;
+}
+
+/* Patch 嵌在 .tool 的 details 里，比现有的 `.tool summary` 更具体，
+   避免继承它的 baseline / 22px 高度。 */
+.patch-file > .patch-summary {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  min-height: calc(28px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(8px * var(--control-scale));
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-11);
+  cursor: pointer;
+  list-style: none;
+}
+
+.patch-file > .patch-summary::-webkit-details-marker { display: none; }
+
+/* 展开摘要只有文字和左侧箭头可点，行内空白不再触发折叠/展开。 */
+.patch-file > .patch-summary,
+.change-card > summary { pointer-events: none; }
+.patch-file > .patch-summary > *,
+.change-card > summary > * { pointer-events: auto; }
+.patch-file > .patch-summary::before,
+.change-card > summary::before { pointer-events: auto; }
+
+.patch-file > .patch-summary::before {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s ease;
+}
+
+.patch-file[open] > .patch-summary::before { transform: rotate(90deg); }
+
+.patch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.patch-add {
+  flex: none;
+  margin-left: auto;
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+
+.patch-del {
+  flex: none;
+  color: var(--error);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 每个文件自己的滚动区，覆盖 .tool-body 的默认外边距和边框。 */
+.patch-file > .tool-body {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  max-height: 22rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .patch-summary::before { transition: none; }
+}
+
+/* 详情页输入框上方的常驻 Diff 面板：工作流/子任务进度条之下、排队消息
+   之上。沿用工作流进度条的卡片外观；展开后卡片内部滚动，避免大 patch
+   把对话区和输入框挤没。 */
+.diff-dock {
+  flex: none;
+  /* 展开后最多占半屏，剩下的高度留给对话区。 */
+  max-height: min(48vh, 30rem);
+  margin: 0 calc(8px * var(--control-scale)) calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 10px;
+  background: var(--menu);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 记录区里的工具行按对话缩进；固定成卡片后改成一行等高的摘要行。 */
+.diff-dock .tool {
+  padding: 0 calc(8px * var(--control-scale)) 0 calc(20px * var(--control-scale));
+}
+
+.diff-dock .tool::before {
+  left: calc(8px * var(--control-scale));
+  /* 摘要行高 34px、圆点 7px：垂直居中；展开后圆点仍标在标题行。 */
+  top: calc(13.5px * var(--control-scale));
+}
+
+.diff-dock .tool > summary {
+  min-height: calc(34px * var(--control-scale));
+  align-items: center;
+}
+
+/* 卡片自身滚动，文件块不再各自截断，避免嵌套滚动。 */
+.diff-dock .patch-file > .tool-body { max-height: none; }
+
+/* ---- 简要档的编辑内联 diff ---- */
+
+.edit-diff {
+  margin: calc(6px * var(--control-scale)) 0 calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--elev);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  max-height: 26rem;
+  overflow: auto;
+}
+
+.edit-diff-line {
+  display: flex;
+  min-width: max-content;
+  white-space: pre;
+}
+
+.edit-diff-line[data-kind="add"] {
+  background: color-mix(in srgb, var(--green) 24%, transparent);
+}
+
+.edit-diff-line[data-kind="del"] {
+  background: color-mix(in srgb, var(--red) 21%, transparent);
+}
+
+.diff-mark {
+  flex: none;
+  width: 1.6em;
+  text-align: center;
+  color: var(--muted);
+  user-select: none;
+}
+
+.edit-diff-line[data-kind="add"] .diff-mark { color: var(--green); }
+.edit-diff-line[data-kind="del"] .diff-mark { color: var(--red); }
+
+.diff-text {
+  flex: 1;
+  padding-right: calc(10px * var(--control-scale));
+}
+
+.edit-diff-hunk {
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+  color: var(--muted);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.diff-stats {
+  flex: none;
+  display: inline-flex;
+  gap: calc(6px * var(--control-scale));
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-add { color: var(--green); }
+.diff-del { color: var(--red); }
+
+/* ---- 简要档的代码改动卡 ---- */
+/* 相邻编辑合并成一张卡：标题行汇总文件和增删行数，卡内按文件分块，
+   diff 行沿用上面的绿红底色。卡直接挂在 .thread 下，间距交给记录区的
+   flex gap，和外层工具行一致。 */
+.change-card {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--elev);
+  overflow: hidden;
+}
+
+.change-card > summary {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  min-height: calc(28px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.change-card > summary::-webkit-details-marker { display: none; }
+
+.change-card > summary::before {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s ease;
+}
+
+.change-card[open] > summary::before { transform: rotate(90deg); }
+
+.change-card-title {
+  flex: none;
+  color: var(--fg);
+  font-weight: 700;
+}
+
+/* 单文件卡直接用文件名当标题；长路径省略，不把增删行数挤出卡外。 */
+.change-card-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-weight: 600;
+}
+
+.change-card-count { flex: none; }
+.change-card > summary .diff-stats { margin-left: auto; }
+
+.change-card-body { display: flex; flex-direction: column; }
+
+.change-file-head {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(4px * var(--control-scale)) calc(10px * var(--control-scale));
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  color: var(--fg);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-12);
+}
+
+.change-file-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.change-file-edits {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.change-file-head .diff-stats { margin-left: auto; flex: none; }
+
+/* 卡内 diff 去掉自己的边框和圆角，交给卡片统一收口。 */
+.change-card > .edit-diff,
+.change-file > .edit-diff {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  max-height: 22rem;
+}
+
+.change-card > .edit-diff { border-top: 1px solid var(--line); }
+
+@media (prefers-reduced-motion: reduce) {
+  .change-card > summary::before { transition: none; }
+}
+
+/* 工具行摘要里的“转到后台”小按钮。放在主 chunk（Thread.css 由 Composer 引入），
+   避免 TaskRail chunk 未加载/加载失败时按钮无样式。 */
+.tool-bg-btn {
+  flex: none;
+  align-self: center;
+  min-height: calc(18px * var(--control-scale));
+  padding: 0 calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78em;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tool-bg-btn:hover:not(:disabled) {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.tool-bg-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ---- 用户消息的操作菜单与内联编辑 ---- */
+
+/* 只有可回滚的空闲消息才会渲染这一行；不显示时不占任何高度。 */
+.user-actions {
+  display: flex;
+  align-items: center;
+  margin-top: calc(1px * var(--control-scale));
+}
+
+.text-btn.user-actions-trigger {
+  min-width: calc(24px * var(--control-scale));
+  min-height: calc(20px * var(--control-scale));
+  padding: 0 calc(6px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-13);
+  line-height: 1;
+}
+
+.text-btn.user-actions-trigger:hover:not(:disabled),
+.text-btn.user-actions-trigger:focus-visible {
+  color: var(--fg);
+}
+
+/* 气泡旁的内联操作面板：回滚/分叉/重发的前置选择。不弹模态框，
+   点面板外或按 Escape 收起，页面其他区域照常可用。 */
+.msg-prompt {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: calc(5px * var(--control-scale));
+  max-width: min(100%, 30rem);
+  margin-top: calc(4px * var(--control-scale));
+  padding: calc(7px * var(--control-scale)) calc(27px * var(--control-scale))
+    calc(7px * var(--control-scale)) calc(9px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  font-size: var(--fs-13);
+}
+
+.msg-prompt-text {
+  color: var(--fg);
+  line-height: 1.45;
+}
+
+.msg-prompt-check {
+  display: flex;
+  align-items: center;
+  gap: calc(5px * var(--control-scale));
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.msg-prompt-check:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.msg-prompt-hint {
+  color: var(--muted);
+  font-size: var(--fs-11);
+  line-height: 1.4;
+}
+
+.msg-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--control-scale));
+}
+
+.msg-prompt-actions .btn {
+  min-height: calc(26px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+}
+
+.msg-prompt-close {
+  position: absolute;
+  top: calc(2px * var(--control-scale));
+  right: calc(4px * var(--control-scale));
+  padding: calc(2px * var(--control-scale));
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-15);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.msg-prompt-close:hover {
+  color: var(--fg);
+}
+
+@media (pointer: coarse) {
+  .msg-prompt-actions .btn {
+    min-height: calc(40px * var(--control-scale));
+    padding: calc(6px * var(--control-scale)) calc(12px * var(--control-scale));
+  }
+
+  .msg-prompt-close {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+
+/* 气泡默认 shrink-to-fit；编辑时改成整行宽，textarea 才有稳定宽度。 */
+.user-msg-editing {
+  display: block;
+  width: 100%;
+}
+
+.msg-editor {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  width: 100%;
+}
+
+/* 高度由脚本按内容撑开（见 UserRow 里的自适应 effect），所以关掉手动拖拽，
+   超过上限后内部滚动，吸顶时不至于把整段对话挡住。 */
+.msg-editor-input {
+  display: block;
+  width: 100%;
+  min-height: calc(52px * var(--control-scale));
+  max-height: min(40vh, 16rem);
+  overflow-y: auto;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  padding: calc(5px * var(--control-scale)) calc(7px * var(--control-scale));
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+
+.msg-editor-input:disabled {
+  opacity: 0.7;
+}
+
+.msg-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(6px * var(--control-scale));
+}
+
+.msg-editor-actions .btn,
+.msg-editor-actions .btn-primary {
+  min-height: calc(26px * var(--control-scale));
+  padding: calc(2px * var(--control-scale)) calc(10px * var(--control-scale));
+}
+
+/* 触屏下限：iOS 聚焦 <16px 的控件会放大页面；操作热区保持 40px。
+   选择器带上 .btn/.text-btn，压过上面的桌面尺寸和全局规则。 */
+@media (pointer: coarse) {
+  .msg-editor-input {
+    font-size: max(16px, calc(16px * var(--font-scale)));
+    min-height: calc(60px * var(--control-scale));
+  }
+
+  .msg-editor-actions .btn,
+  .msg-editor-actions .btn-primary {
+    min-height: calc(40px * var(--control-scale));
+    padding: calc(6px * var(--control-scale)) calc(12px * var(--control-scale));
+  }
+
+  .text-btn.user-actions-trigger {
+    min-width: calc(40px * var(--control-scale));
+    min-height: calc(40px * var(--control-scale));
+    padding: 0 calc(8px * var(--control-scale));
+  }
+}
