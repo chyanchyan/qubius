@@ -7,16 +7,17 @@
 ### config.yaml
 
 - `listen` 只能是 `127.0.0.1` 或 `localhost`。
-- `allowedHosts` 未配置时默认只允许 `127.0.0.1`、`localhost`、`[::1]`，防止 DNS rebinding；显式空数组会启动失败。只校验 `/api` 请求（静态资源不受限）。通过局域网、反向代理或公网域名访问时必须显式列出实际主机名，并保留 `127.0.0.1`（部署脚本的健康检查用）。lan-proxy 会把 Host 改写成 `127.0.0.1:<port>`，edgectl 转发原域名。升级后如果公网入口突然 403，先检查这一项。
+- `allowedHosts` 未配置时默认只允许 `127.0.0.1`、`localhost`、`[::1]`，防止 DNS rebinding；显式空数组会启动失败。只校验 `/api` 请求（静态资源不受限）。通过局域网、反向代理或公网域名访问时必须显式列出实际主机名，并保留 `127.0.0.1`（部署脚本的健康检查用）。部署页的「公网域名」由模板直接写进 `config.yaml`；「额外允许的访问域名」写进 env 的 `QUBIUS_ALLOWED_HOSTS`，启动时和这里的列表合并（配置文件里的显式列表保留，env 只追加），所以重新部署不会把额外域名冲掉。lan-proxy 会把 Host 改写成 `127.0.0.1:<port>`，edgectl 转发原域名。升级后如果公网入口突然 403，先在部署页「当前环境」看实际生效的列表。
 - API 访问令牌可选：配置文件写 `auth: true`（或环境变量 `QUBIUS_AUTH=1`）后，未显式配置令牌时会在 `dataDir/auth-token` 生成一个；也可以直接设 `authToken` / `QUBIUS_AUTH_TOKEN`（16 到 512 个字符）。显式 `auth: false` 会关闭认证，即使环境里还留着令牌。所有 `/api` 请求要带 `X-Qubius-Token: <token>`、`Authorization: Bearer <token>` 或 `qubius_token` cookie，`/api/health` 豁免。令牌主要用于同机多用户或 Host 配置失误时的兜底；同一个系统用户下的进程本来就能读 `dataDir`。
 - `terminal`：浏览器「命令行」页的开关，默认开启。写 `terminal: false`（或环境变量 `QUBIUS_TERMINAL=0`）后不创建 PTY，顶栏不显示入口，`/api/terminal` 返回 404；配置文件里的值优先于环境变量。
-- `dataDir` 放会话、worktree、普通对话目录和密钥。Linux 上建议 `/var/lib/qubius`，或部署默认的 `~/.local/share/qubius`（副实例 `~/.local/share/co-qubius`）。
+- `dataDir` 放会话、worktree、普通对话目录和密钥。默认是 `<configDir>/data`，即 `<checkout>/.qubius/data`（副实例在它自己的 checkout 里）；quickstart 和部署向导会把实际路径写进 env，重新部署不会再切到别的目录。部署时如果新数据目录与当前 `config.yaml` 不同、旧目录里还有会话，服务端会返回 409 要求显式确认，避免“重新部署后会话全没了”。
 - `projects` 是白名单，可省略，页面不能提交别的路径。每个项目可写 `permission`：`default`（改动和命令需确认）、`acceptEdits`（工作区内自动通过，默认）、`plan`（只规划）、`auto`（模型判断不了时再确认）、`bypassPermissions`（全部允许）。**`acceptEdits` 只是降低误操作的启发式规则，不是沙箱**：工作区内的 `npm` / `make` / `curl` / `git -c ...` 等命令会直接执行，agent 也能先改 `package.json`、`Makefile` 再执行；对不可信仓库请改成 `default`，或用专用系统用户 / 容器运行。页面改过的级别存在 `dataDir/project-permissions.json`，优先于配置文件。非 git 目录可写 `isolated: true`，每个对话使用 `<path>/<对话 id>` 独立子目录，不建 worktree，可并行。
 - 主页的「管理项目」可以在运行期添加或删除本机已有的 git 仓库：服务端校验目录后写入额外项目文件（`QUBIUS_PROJECTS_FILE`，未配置时是 `<configDir>/projects.yaml`），项目列表立即更新；之后手工修改该文件也会热加载，都不需要重启实例。也可以「新建仓库」：填仓库名称和母目录（不含仓库名），服务端在 `<母目录>/<仓库名称>` 建目录、`git init -b main` 并提交一个空初始提交（保证能直接建会话 worktree），再写入项目文件。仓库名称可按规则压成项目 id（小写字母、数字、连字符），压不出时（例如纯中文）生成 `repo-<8 位十六进制>` 兜底 id。母目录必须已存在，目标目录不能已存在。额外文件里的同 id 项目覆盖 `config.yaml` 里的定义；`config.yaml` 自带的项目和内置「普通对话」只能在配置文件里改，不能在这里删除。
 - 「普通对话」是内置项目 `chat`，始终排在项目列表第一位，目录为 `<dataDir>/chat`，每个对话在 `<dataDir>/chat/<对话 id>` 下运行，归档时只删该子目录。自己定义 `id: chat` 会覆盖内置入口。
 - `maxConcurrent`：同时进行的对话数，默认 4，超出排队。这里只作为设置文件的初始默认值；之后在页面「设置」里改「并发上限」，保存后立即生效，不需要重启或重新部署。
 - `limits`：`transcriptBytes`（单会话序列化总字节，默认 8388608）、`transcriptMessages`（消息条数，5000）、`messageText`（单条正文，200000）、`requestBodyBytes`（JSON 请求体，28000000）、`historyPage`（详情首帧/历史翻页条数，200）。可用 `QUBIUS_LIMIT_TRANSCRIPT_BYTES`、`QUBIUS_LIMIT_TRANSCRIPT_MESSAGES`、`QUBIUS_LIMIT_MESSAGE_TEXT`、`QUBIUS_LIMIT_REQUEST_BODY`、`QUBIUS_HISTORY_PAGE` 覆盖；超出范围或非正整数时启动报错。
-- `approvalTimeoutMinutes`：等待确认（提问/授权）的超时，默认 10 分钟，范围 0–1440，超时自动拒绝。户外使用可调大；设为 0 表示一直等待，不自动拒绝，界面上也不显示倒计时。
+- `approvalTimeoutMinutes`：等待确认（提问/授权）的超时，默认 10 分钟，范围 0–1440，超时自动拒绝。户外使用可调大；设为 0 表示一直等待，不自动拒绝，界面上也不显示倒计时。部署向导会写进 `QUBIUS_APPROVAL_TIMEOUT_MINUTES`，配置文件没写时也生效。
+- 局域网入口：部署页的「启用局域网入口」写 `QUBIUS_START_LAN` / `QUBIUS_LAN_USER`，凭据写到 `<configDir>/lan-proxy.credentials`（一行 `user:password`，`0600`）。密码只在部署响应的 `oneTime.lan` 里返回一次；`GET /api/deploy` 只返回用户名和 `lanAuthPasswordSet`。命令行 `make deploy-lan` 缺凭据时会自动生成并在终端打印一次。
 - `role`：`primary`（默认）或 `secondary`。副实例需要 `secondary.primaryRepo`；`secondary.primaryRef` 默认 `main`。
 - `archive`：`dir` 是归档根目录，`retentionDays` 是会话列表的保留天数（作用于本机 SSD 副本），默认 30，到期后会话归档到这里（冷存储）并永久保留；`archive.instance` 默认主实例 `main`、副实例 `bak`。不配置则不归档、不自动删除旧会话。
 
@@ -32,14 +33,14 @@ QUBIUS_AUTH=1
 # QUBIUS_AUTH_TOKEN=<openssl rand -hex 32 的输出>
 ```
 
-只写 `QUBIUS_AUTH=1` 时，首次启动会在 `dataDir/auth-token` 生成令牌：
+只写 `QUBIUS_AUTH=1` 时，首次启动会在 `dataDir/auth-token`（默认 `.qubius/data/auth-token`）生成令牌：
 
 ```bash
-cat ~/.local/share/qubius/auth-token
-curl -H "X-Qubius-Token: $(cat ~/.local/share/qubius/auth-token)" http://127.0.0.1:8787/api/settings
+cat .qubius/data/auth-token
+curl -H "X-Qubius-Token: $(cat .qubius/data/auth-token)" http://127.0.0.1:8787/api/settings
 ```
 
-浏览器页面遇到 401 会弹出「需要访问令牌」输入框，保存后写入 `localStorage` 和同源 cookie；「设置 → 访问令牌」里可以修改或清除。lan-proxy 会剥离 `Authorization`，所以浏览器请求用 `X-Qubius-Token` 或 cookie，不用 Bearer。`/api/health` 始终免令牌。
+浏览器页面遇到 401 会弹出「需要访问令牌」输入框，并显示令牌文件路径；保存后写入 `localStorage` 和同源 cookie。登录后到 `/deploy` 的「当前环境」点「显示当前访问令牌」，或在「设置 → 访问令牌」里修改/清除。`GET /api/config/token` 只在令牌启用时可调用（调用方本身已通过令牌校验），返回当前令牌、来源和文件路径；`/api/health` 始终免令牌，只返回 `authRequired` 和 `authTokenFile`（路径，不含令牌）。lan-proxy 会剥离 `Authorization`，所以浏览器请求用 `X-Qubius-Token` 或 cookie，不用 Bearer。
 
 ### 模型接口与设置
 
@@ -110,6 +111,10 @@ agent 用 Bash 的 `run_in_background` 启动下载、安装等耗时命令后�
 - `GET /api/sessions/<id>/subagents/<taskId>`：子任务的 sidechain transcript，返回 `entries`（提示、正文、思考、工具调用与结果）和 `truncated`；记录不存在时 404。
 - `POST /api/projects`：body `{ id, name, path, permission? }`，加入本机已有的 git 仓库；立即生效并写入额外项目文件，不需要重启。
 - `POST /api/projects/new`：body `{ name, parent, permission? }`，在母目录 `parent` 下新建 `<parent>/<name>` 目录，`git init -b main` 并提交空初始提交后加入项目列表；母目录不存在、目标目录已存在或项目 id 冲突时返回 4xx。
+- `GET /api/deploy`：部署表单、实际配置文件/env 路径，以及 `current`（当前生效的 `dataDir`、`allowedHosts`、令牌来源/文件、归档、终端开关、局域网入口状态）。表单里的 `lanAuthPassword` 永远为空，只用 `lanAuthPasswordSet` 表示已设置。`POST /api/deploy/apply` 成功时返回 `{jobId, oneTime}`：`oneTime.lan` 含局域网用户名、密码和访问地址，`oneTime.authToken` 是部署后生效的令牌，只在这次响应里出现一次。
+- `POST /api/deploy/lan-credentials/reset`：body `{ user? }`，立即生成新密码并写 `<configDir>/lan-proxy.credentials`；如果当前实例的局域网入口在运行，响应发出后会自动重启它（systemd unit 或 pidfile 进程）。返回 `{ ok, lan: { user, password, urls, restart: "scheduled"|"none", restartMethod, restartNote } }`，`restartNote` 会说明是否已重启、是否需要重新登录。
+- `POST /api/deploy/auth-token/reset`：立即生成 64 位十六进制令牌并切换到运行中的服务端；旧令牌保留 60 秒宽限，避免在途请求 401。新令牌持久化到 env（`QUBIUS_AUTH=1`、`QUBIUS_AUTH_TOKEN`），当前来源是 auth-token 文件或 config.yaml 时同步更新；返回 `{ ok, token, source, file?, restartNeeded: false, note }`，`note` 明确写“无需重启”。
+- `GET /api/config/token`：当前访问令牌，未启用时 404；启用时调用方本身已通过令牌校验。`GET /api/health` 额外返回 `authRequired` 和 `authTokenFile`（只含路径）。
 - `POST /api/settings/test`：测试接口配置；`GET /api/usage`：用量与成本。
 
 会话变更防抖写入 `dataDir`；单条正文最多 200k 字符，每会话保留最多 5000 条、序列化后 8MB，超限先丢最旧的非用户消息。SIGTERM 时把未落盘的会话 flush 到磁盘（有界重试）。

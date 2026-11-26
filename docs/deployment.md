@@ -9,8 +9,8 @@
 
 | 实例 | 默认 checkout | 角色开关 | 默认入口 | 默认端口 | 默认数据目录 |
 |---|---|---|---|---|---|
-| qubius | `~/qubius`（`QUBIUS_PRIMARY_DIR`） | `QUBIUS_SECONDARY=0` | code.example.com | 8787 | `~/.local/share/qubius`（`QUBIUS_DATA_PRIMARY`） |
-| co-qubius | `~/co-qubius`（`QUBIUS_SECONDARY_DIR`） | `QUBIUS_SECONDARY=1` | code-bak.example.com | 8788 | `~/.local/share/co-qubius`（`QUBIUS_DATA_SECONDARY`） |
+| qubius | 当前 checkout（`QUBIUS_PRIMARY_DIR`） | `QUBIUS_SECONDARY=0` | code.example.com | 8787 | `<checkout>/.qubius/data`（`QUBIUS_DATA_PRIMARY`） |
+| co-qubius | `~/co-qubius`（`QUBIUS_SECONDARY_DIR`） | `QUBIUS_SECONDARY=1` | code-bak.example.com | 8788 | `<副 checkout>/.qubius/data`（`QUBIUS_DATA_SECONDARY`） |
 
 - 两个 checkout 互相把对方加进 `projects`，可以在一边改另一边的代码；两边都不把自己放进去。
 - 真正需要的是两份能独立构建、重启的 checkout：主实例的页面或服务改坏时，用副实例的页面去修，反之亦然；修完在对应 checkout 构建并重启。
@@ -28,7 +28,7 @@
 - 版本号和更新说明只在收尾工作流（`tt` / `ttb` / `ttbm`）触发时更新，且发生在合入 main 之后、推送 main 之前；普通开发不提前递增，也不在 `CHANGELOG.md` 里写未发布条目。每个版本在 `CHANGELOG.md` 记录一句摘要和改动列表。
 - `qubius-land.sh` 的 `*-finish` 步骤会校验本地版本严格高于 `origin/main`，多会话同时收尾时漏递增版本会直接失败。
 - 页面位置：顶栏品牌名下方用很小的字显示版本号（手机上同样显示）；部署页的「当前环境」展示当前版本与 GitHub 镜像版本的对照，每个实例卡片也显示各自版本和 HEAD，便于确认主/副实例是否一致。
-- GitHub 对照读取镜像仓库 `main` 分支的 `package.json`，镜像仓库默认从 git 的 `github` remote 推断，也可以用 `QUBIUS_GITHUB_REPO=owner/repo` 显式指定。拉取失败只在部署页显示原因，不影响部署。
+- GitHub 对照读取镜像仓库 `main` 分支的 `package.json`。镜像仓库优先用 `QUBIUS_GITHUB_REPO`（接受 `owner/repo` 或完整 GitHub URL），其次名为 `github` 的 remote，最后扫描所有 remote（优先 `origin`）里的第一个 github.com 地址。拉取失败只在部署页显示原因，不影响部署。
 - 同一版本号可能对应多次提交，用提交短 sha 区分具体构建。开发环境（tsx 直接跑 `server/src`）没有 `build.json`，版本号回退到当前 checkout 的 `package.json`。
 
 ## 配置模型
@@ -36,10 +36,10 @@
 部署脚本都 `source deploy/lib.sh` 并调用 `qubius_load`。变量优先级从高到低：
 
 1. 调用者显式导出的环境变量，例如 `QUBIUS_SECONDARY=1 ./deploy/install.sh`；
-2. env 文件：`$QUBIUS_ENV`、`$QUBIUS_CONFIG_DIR/env`（默认 `~/.config/qubius/env`）、`<checkout>/deploy/env`，取第一个存在的；
+2. env 文件：`$QUBIUS_ENV`、`$QUBIUS_CONFIG_DIR/env`（默认 `<checkout>/.qubius/env`）、`<checkout>/deploy/env`，取第一个存在的；
 3. `deploy/lib.sh` 里的默认值。
 
-模板是 `deploy/env.example`。机器级配置放 `~/.config/qubius/env`；只影响一个 checkout 时放 `<checkout>/deploy/env`（已在 `.gitignore`）。
+模板是 `deploy/env.example`。日常不需要手工维护它：首次运行用 `npm run quickstart` 选择 npm 源、配置目录、数据目录和端口，其余参数（访问域名、访问令牌、归档、终端、并发/超时、项目）在 `/deploy` 部署向导里填写，两者都会落到当前 checkout 的 `.qubius/`。整个 `.qubius/` 已 gitignore，不再使用 `~/.config/qubius`、`~/.local/share` 或 `%APPDATA%`。`QUBIUS_ENV` 和 `<checkout>/deploy/env` 仍然兼容旧布局；页面的「当前环境」会显示实际读写的 env 文件、数据目录、allowedHosts 和令牌来源。
 
 部署页 `/deploy` 使用同一优先级，读取并写回实际生效的 env 文件，并通过 `QUBIUS_ENV` 传给部署任务；`start-all.sh` 启动 server 时也导出该文件，所以页面、脚本和运行中的 server 看到同一份配置。`QUBIUS_ENV` 指向不存在的文件时页面拒绝部署。仓库级 `deploy/env` 的备份 `deploy/env.bak.*` 已被忽略。
 
@@ -50,16 +50,18 @@
 | `QUBIUS_SECONDARY` | 唯一角色开关：`0` 主实例 qubius，`1` 副实例 co-qubius | `0` |
 | `QUBIUS_PRIMARY_REPO_URL` / `QUBIUS_SECONDARY_REPO_URL` | 两个 checkout 的仓库地址；副仓库默认跟随主仓库 | `example/qubius.git` / 同主仓库 |
 | `QUBIUS_PRIMARY_REF` | 副实例同步主实例使用的分支 | `main` |
-| `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR` | 两个 checkout 路径 | `~/qubius` / `~/co-qubius` |
-| `QUBIUS_CONFIG_DIR` | 配置、env，及生成的 systemd / logrotate 目录 | `~/.config/qubius` |
-| `QUBIUS_DATA_PRIMARY` / `QUBIUS_DATA_SECONDARY` | 两个实例的 `dataDir` | `~/.local/share/qubius` / `~/.local/share/co-qubius` |
+| `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR` | 两个 checkout 路径 | 当前 checkout / `~/co-qubius` |
+| `QUBIUS_CONFIG_DIR` | 配置、env，及生成的 systemd / logrotate 目录 | `<checkout>/.qubius` |
+| `QUBIUS_DATA_PRIMARY` / `QUBIUS_DATA_SECONDARY` | 两个实例的 `dataDir` | `<checkout>/.qubius/data` / `<副 checkout>/.qubius/data` |
 | `QUBIUS_PRIMARY_PORT` / `QUBIUS_SECONDARY_PORT` | 监听端口（只绑 `127.0.0.1`） | `8787` / `8788` |
 | `QUBIUS_PUBLIC_HOST` / `QUBIUS_PUBLIC_HOST_SECONDARY` | 公网域名，用于 `allowedHosts` 和 edgectl 片段 | `code.example.com` / `code-bak.example.com` |
+| `QUBIUS_ALLOWED_HOSTS` | 额外允许的 Host（逗号或空白分隔），启动时追加到 `allowedHosts`；公网域名由模板直接写进 config.yaml | 空 |
+| `QUBIUS_MAX_CONCURRENT` / `QUBIUS_APPROVAL_TIMEOUT_MINUTES` | 并发上限和确认超时（分钟，0 表示不自动拒绝） | `4` / `10` |
+| `QUBIUS_LIMIT_*` / `QUBIUS_HISTORY_PAGE` | 会话/请求上限；完整表单的「高级限制」折叠区也可以改 | 见 `docs/reference.md#配置` |
 | `QUBIUS_LAN_HOST` | 内网入口绑定地址；留空取第一个非回环 IPv4 | 空 |
 | `QUBIUS_ARCHIVE_DIR` / `QUBIUS_ARCHIVE_RETENTION_DAYS` | 归档根目录和列表保留天数（到期后会话归档到冷存储并永久保留）；目录留空不归档 | 空 / `30` |
 | `QUBIUS_PROJECTS_FILE` | 额外项目白名单 YAML；内置会加入另一实例的 checkout。主页的「管理项目」添加或删除仓库时写这里，文件变化会热加载 | 空 |
 | `QUBIUS_NODE_BIN` | Node.js 22+ 可执行文件；留空依次找 PATH 和 `~/.nvm` | 空 |
-| `QUBIUS_MAX_CONCURRENT` | 同时进行的对话上限的初始默认值；之后以设置页保存的值为准 | `4` |
 | `QUBIUS_CLONE_PEER` | `install.sh` 是否自动克隆另一实例的 checkout（等同 `--clone-peer`） | `0` |
 | `QUBIUS_PULL_LATEST` | 部署任务构建前是否从各 checkout 的 `origin` 快进拉取当前分支（对应部署页「部署前从远端拉取最新代码」） | `0` |
 | `QUBIUS_START_PRIMARY` / `QUBIUS_START_SECONDARY` | `start-all.sh` 是否启动对应实例 | `1` |
@@ -83,7 +85,7 @@
 
 ## 安装与启停
 
-新机器克隆仓库后，可以先运行 `npm run quickstart`：它会让用户选择 npm 官方源或国内镜像（npmmirror、腾讯云、华为云）、可选的配置目录和监听端口，然后执行 `npm ci`、`npm run build`、`npm start`。启动后打开 `http://127.0.0.1:<端口>`（默认 8787）进入首次部署向导；服务只绑定 `127.0.0.1`。`npm run quickstart -- --registry 2 --config-dir <绝对路径> --port 8790 --dry-run` 可以非交互地预览将执行的步骤；配置目录只在启动前可选，运行中的服务不能切换。
+新机器克隆仓库后，可以先运行 `npm run quickstart`：它会让用户选择 npm 官方源或国内镜像（npmmirror、腾讯云、华为云）、配置目录（默认 `<checkout>/.qubius`）、数据目录（默认 `<checkout>/.qubius/data`）和监听端口，然后执行 `npm ci`、`npm run build`、`npm start`。启动后打开 `http://127.0.0.1:<端口>`（默认 8787）进入首次部署向导，其余参数（访问域名、访问令牌、归档、终端、并发/超时）都在向导里；服务只绑定 `127.0.0.1`。`npm run quickstart -- --registry 2 --config-dir <绝对路径> --data-dir <绝对路径> --port 8790 --dry-run` 可以非交互地预览将执行的步骤；配置目录只在启动前可选，运行中的服务不能切换。
 
 安装和构建过程默认按 npm 的 `notice` 级别输出，只显示每个步骤的最终结果。排查依赖安装、node-pty 编译等问题时加 `--verbose`（等价于 `--loglevel=verbose` 并打开 `--foreground-scripts`），会输出 npm 的详细日志并实时显示依赖安装脚本的输出；需要最全的日志可以加 `--loglevel=silly`，只想看 quickstart 自己的提示则用 `--loglevel=silent`。
 
@@ -96,13 +98,13 @@ cd ~/qubius && ./deploy/install.sh
 cd ~/co-qubius && QUBIUS_SECONDARY=1 ./deploy/install.sh
 ```
 
-改过 `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR` 时换成实际路径。交互 shell 通常没有 `$QUBIUS_*`，直接替换为实际路径；需要加载 env 时在子 shell 里 `. "$HOME/.config/qubius/env"`，避免把 `QUBIUS_GITEA_TOKEN` 等凭据留在当前环境。
+改过 `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR` 时换成实际路径。交互 shell 通常没有 `$QUBIUS_*`，直接替换为实际路径；需要加载 env 时在子 shell 里 `. "<checkout>/.qubius/env"`，避免把 `QUBIUS_GITEA_TOKEN` 等凭据留在当前环境。
 
 `install.sh` 会：
 
 - 检查 Node.js 22+ 和 git（npm 由 `build.sh` 在需要构建时检查）。
 - 缺失时从 `deploy/env.example` 复制 `$QUBIUS_CONFIG_DIR/env`（`0600`）。
-- 把 `deploy/templates/config.yaml.in` 渲染成当前角色的配置（主 `config.yaml`，副 `config-secondary.yaml`），写到 `QUBIUS_CONFIG_DIR`；已存在的不覆盖，有差异时备份 `*.bak.<时间戳>`（`--force-config` 时覆盖）。
+- 把 `deploy/templates/config.yaml.in` 渲染成当前角色的配置（主 `config.yaml`，副 `config-secondary.yaml`），写到 `QUBIUS_CONFIG_DIR`（默认 `<checkout>/.qubius`）；已存在的不覆盖，有差异时备份 `*.bak.<时间戳>`（`--force-config` 时覆盖）。
 - 生成 systemd unit 到 `$QUBIUS_CONFIG_DIR/systemd/`、logrotate 配置到 `$QUBIUS_CONFIG_DIR/logrotate.d/qubius`（只生成，不安装）。
 - 主实例维护 `@reboot <主 checkout>/deploy/start-all.sh` crontab（systemd unit 已启用或 `QUBIUS_SKIP_CRONTAB=1` 时跳过）；副实例不维护。
 - 缺 `node_modules`/构建产物或代码变化时执行 `<checkout>/deploy/build.sh`（`--no-build` 跳过；实例在跑且没加 `--restart` 时也跳过，避免前后端版本错配）。
@@ -124,17 +126,22 @@ cd ~/co-qubius && QUBIUS_SECONDARY=1 ./deploy/install.sh
 
 ### make 快捷部署
 
-仓库根的 `make deploy` / `make deploy-lan` / `make deploy-wan` 统一调用 `deploy/deploy.sh`，按入口层级递进：
+`make` 是统一的启动/部署入口，所有目标都通过 Node 执行，Windows、Linux 和 macOS 都能用。Linux 上内部调用 `deploy/*.sh`（保留 systemd、flock、双实例逻辑），Windows/macOS 由 `deploy/cli.mjs` 用 Node 启动/停止，部署走 `deploy/deploy-job.mjs`。npm 脚本仍然保留。
 
 | 命令 | 做什么 |
 |---|---|
+| `make start` / `make restart` / `make stop` | 启动/重启/停止启用的实例和局域网入口（Linux 转给 `start-all.sh`） |
+| `make status` | 显示配置目录、env 文件、局域网凭据文件和每个实例的健康状态 |
+| `make install` | Linux：渲染配置、生成 systemd/logrotate、构建；macOS/Windows 提示改用部署页 |
+| `make pull` | 当前 checkout 从 `origin` 快进拉取 |
 | `make deploy` | 构建并重启本机实例，只保证 `127.0.0.1:<端口>` 可访问；不启动局域网/公网入口，也不停止已在运行的入口 |
-| `make deploy-lan` | 在 `deploy` 基础上启动/重启局域网入口（`lan-proxy` / `qubius-proxy.service`） |
+| `make deploy-lan` | 在 `deploy` 基础上启动/重启局域网入口（`lan-proxy` / `qubius-proxy.service`）；缺少 `lan-proxy.credentials` 时自动生成并在终端打印一次 |
 | `make deploy-wan` | 在 `lan` 基础上应用公网入口：走运行中实例的 `/api/edge`（plan → 确认域名 → apply → 轮询状态），与部署页同一套作业 |
 
-- 部署对象是 env 里的 `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR`，不是当前目录；与 `install.sh` / `start-all.sh` 一致。
+- 部署对象是 env 里的 `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR`，默认是当前 checkout。
 - 自动检测 systemd user unit：`qubius.service` 等已启用或运行中时用 `systemctl --user restart`，否则交给 `start-all.sh --restart`（本机模式会传 `QUBIUS_START_LAN=0`）。依赖变化（`node_modules` 缺失或 `package-lock.json` 变化）时会先停 unit 再 `npm ci`。
 - 部署后检查 `/api/health`，存在构建 stamp 时校验 `head` 与 checkout 的 git HEAD；`deploy-lan` / `deploy-wan` 还会等待局域网端口监听。
+- `deploy-lan` / `deploy-wan` 在结尾会把自动生成的 `<dataDir>/auth-token` 打印一次；页面部署则一次性显示在 `/deploy` 上。
 - `deploy-wan` 需要 env 里已配置 `QUBIUS_EDGECTL_CONFIG`；计划里的差异和警告会先打印，确认后才应用。`QUBIUS_EDGE_YES=1`（或 `--yes`）跳过交互确认，`QUBIUS_EDGE_DOMAIN` 指定确认域名，`QUBIUS_EDGE_WAIT` 指定等待作业的秒数。启用访问令牌时从 `QUBIUS_AUTH_TOKEN` 或 `<dataDir>/auth-token` 读取。
 - 手工执行时参与和部署页相同的 ops lock；部署页任务或公网入口作业进行中时会等待/失败。
 
@@ -142,7 +149,7 @@ cd ~/co-qubius && QUBIUS_SECONDARY=1 ./deploy/install.sh
 
 配置目录里还没有 `config.yaml` / `config-secondary.yaml` 时，服务进入首次部署模式：打开 `/deploy` 会先进入分步向导，依次选择使用方式（仅本机 / 远程访问 / 主副双实例）、确认当前实例的 checkout、数据目录、端口和访问域名，双实例再补另一个实例的信息，最后确认并部署。向导会把当前运行的 checkout 和 git origin 作为默认值；归档等可选参数放在「高级选项」里，也可以随时切换到完整部署表单。
 
-无论是向导还是完整表单，服务端都会写入实际生效的 env 文件和 `<configDir>/projects.yaml`（`configDir` 默认 `$XDG_CONFIG_HOME/qubius` 或 `$HOME/.config/qubius`）。Linux 按角色执行一次 `deploy/install.sh --force-config`，最后执行 `deploy/start-all.sh --restart`；Windows 和 macOS 由纯 Node 任务 `deploy/deploy-job.mjs` 完成等价的配置渲染、构建、停旧进程和启动，不依赖 bash/systemd/flock，见下面的平台章节。部署成功后向导会给出「进入 qubius」和「填写模型 API Key」两个下一步。任务日志在 `<configDir>/deploy.log`，状态在 `deploy.json`。
+无论是向导还是完整表单，服务端都会写入实际生效的 env 文件和 `<configDir>/projects.yaml`（`configDir` 默认是当前 checkout 的 `.qubius/`）。Linux 按角色执行一次 `deploy/install.sh --force-config`，最后执行 `deploy/start-all.sh --restart`；Windows 和 macOS 由纯 Node 任务 `deploy/deploy-job.mjs` 完成等价的配置渲染、构建、停旧进程和启动，不依赖 bash/systemd/flock，见下面的平台章节。部署成功后向导会给出「进入 qubius」和「填写模型 API Key」两个下一步。任务日志在 `<configDir>/deploy.log`，状态在 `deploy.json`。
 
 正常运行后也可回 `/deploy` 改配置并重新部署；部署页顶部的「重新部署」按钮会从向导第一步开始重新确认使用方式、目录和端口，当前配置作为预填值。`--force-config` 仅在内容有差异时用页面生成的内容覆盖已有配置，并备份 `*.bak.<时间戳>`；内容一致时保持原文件。
 
@@ -171,9 +178,9 @@ Windows 没有 bash/systemd/flock，部署页改走 Node 任务 `deploy/deploy-j
 3. 勾选「部署前从远端拉取最新代码」时，从各 checkout 的 `origin` 快进拉取当前分支（与 Linux 的 `deploy/pull-latest.sh` 语义一致）。
 4. `package-lock.json` 变化或 `node_modules` 缺失时 `npm ci`，然后按需 `npm run build`，写 `server/dist/build.json`。
 5. 停掉旧的服务进程（当前服务根据 server 传入的 PID 和 `process.argv[1]` 判断，其它实例按 `<dataDir>/qubius.pid`）。Windows 上 `process.kill` 是硬杀，所以 server 启动时会在 `<dataDir>/shutdown-token` 写一个随机令牌；部署任务先请求 `POST /api/internal/shutdown` 让它 flush 会话并优雅退出，15 秒未退出才强制结束。等端口释放后启动 `node server/dist/index.js`。
-6. 用 `/api/health` 校验端口、pid 和 `head`；配置目录里有 `lan-proxy.credentials` 时顺带重启 `deploy/lan-proxy.mjs`。
+6. 用 `/api/health` 校验端口、pid 和 `head`；`QUBIUS_START_LAN=1` 且配置目录里有 `lan-proxy.credentials` 时顺带重启 `deploy/lan-proxy.mjs`。部署页勾选局域网入口会自动写入凭据，并在部署响应里一次性返回用户名/密码/访问令牌。
 
-默认目录：配置 `%APPDATA%\qubius`，数据 `%LOCALAPPDATA%\qubius`。`QUBIUS_CONFIG_DIR` 等 env 仍然优先。手工 `npm start` 时会自动读取配置目录里的配置和 env，不需要额外设置 `QUBIUS_CONFIG`。
+默认目录和 Linux 一致：配置、env、数据和日志都在当前 checkout 的 `.qubius/`（整个目录已 gitignore），不再使用 `%APPDATA%` / `%LOCALAPPDATA%`。`QUBIUS_CONFIG_DIR` 等 env 仍然优先。手工 `npm start` 时会自动读取 `.qubius/` 里的配置和 env，不需要额外设置 `QUBIUS_CONFIG`。
 
 Windows 上**不支持**：systemd/logrotate/crontab 安装、公网入口（edge，依赖 edgectl 和 shell ops lock）、副实例的同步/回滚（`deploy/secondary.sh` 是 bash）、开机自启（请用任务计划程序）。部署页在一次部署进行中仍由 `deploy.job.lock` 和 `deploy.json` 串行化；Windows 不使用 shell 的 `ops.lock`。
 
@@ -181,7 +188,7 @@ Windows 上**不支持**：systemd/logrotate/crontab 安装、公网入口（edg
 
 macOS 没有 Linux 部署脚本依赖的 `flock`、`ss`、`setsid`、`sha256sum` 和 `/proc`，所以部署页和 Windows 一样走纯 Node 任务 `deploy/deploy-job.mjs`（`server/src/deploy.ts` 的 `deployJobSpec` 按 `process.platform` 选择）。它不参与依赖 flock 的 shell ops lock，仍由 `deploy.job.lock` 和 `deploy.json` 串行化。
 
-首次部署向导同样可用，完成与 Linux 脚本等价的步骤：渲染 `<configDir>/config.yaml` / `config-secondary.yaml`、按需 `npm ci` / `npm run build`（写 `server/dist/build.json`）、停掉旧进程、启动 `node server/dist/index.js`，并用 `/api/health` 校验端口和 HEAD。默认配置目录 `~/.config/qubius`，数据目录 `~/.local/share/qubius`；主、副实例都可以启动。
+首次部署向导同样可用，完成与 Linux 脚本等价的步骤：渲染 `<configDir>/config.yaml` / `config-secondary.yaml`、按需 `npm ci` / `npm run build`（写 `server/dist/build.json`）、停掉旧进程、启动 `node server/dist/index.js`，并用 `/api/health` 校验端口和 HEAD。默认配置目录是当前 checkout 的 `.qubius/`，数据目录 `.qubius/data`；主、副实例都可以启动。
 
 手工 `npm run quickstart` / `npm start` 启动时，仓库根目录没有 `config.yaml` 会回退读取配置目录里的 `config.yaml`，并补读 `<configDir>/env`，所以部署页生成的配置在重新启动后仍然生效。
 
@@ -228,7 +235,7 @@ git -C "$QUBIUS_SECONDARY_DIR" push -u origin main
 
 ### 从 qoder 改名升级
 
-- env：把 `QODER_*` 全部改成 `QUBIUS_*`（新代码只兼容更早的 `REMOTE_CODER_*`）。配置目录从 `~/.config/qoder` 复制到 `~/.config/qubius`，`lan-proxy.credentials` 一并复制。
+- env：把 `QODER_*` 全部改成 `QUBIUS_*`（新代码只兼容更早的 `REMOTE_CODER_*`）。配置目录从 `~/.config/qoder` 复制到当前 checkout 的 `.qubius/`（沿用旧布局时仍可用 `~/.config/qubius`，显式设置 `QUBIUS_CONFIG_DIR` 即可），`lan-proxy.credentials` 一并复制。
 - 数据/checkout/归档想原地保留时，在 env 里显式写旧的 `QUBIUS_PRIMARY_DIR`、`QUBIUS_DATA_PRIMARY`、`QUBIUS_ARCHIVE_DIR`；不要只改名而不处理 worktree 里的绝对路径。
 - 会话记录的 `projectPath` 会在服务启动和项目列表热加载时按 `projectId` 对齐到当前配置（非 git 会话由项目目录派生的 `cwd` 一起平移），所以改了项目目录不需要手工改会话 JSON。但 `dataDir/worktrees` 下 worktree 的 `.git` 指针仍指向旧路径：目录是真的 `mv` 走时要跑 `git worktree repair`，留软链则不需要。
 - systemd：安装新的 `qubius.service`、`qubius-proxy.service`，`systemctl --user disable --now qoder.service qoder-proxy.service` 后再启用新的。直接重启旧 unit 不行：旧 unit 只注入 `QODER_*`，新脚本会落回默认端口和路径。
@@ -239,8 +246,8 @@ git -C "$QUBIUS_SECONDARY_DIR" push -u origin main
 
 1. 准备仓库：用 `./deploy/create-repos.sh --apply` 创建共用的 `qubius` 仓库；
 2. 新机器先 clone 其中一个（或复制一份 checkout）拿到脚本，再 `./deploy/clone-repos.sh --apply` 补齐（一个仓库时两个 checkout 都指向同一 URL）；
-3. 复制 `deploy/env.example` 为 `~/.config/qubius/env`（或各 checkout 的 `deploy/env`），按新机器改路径、端口、域名、`QUBIUS_LAN_HOST`、归档目录、projects 文件和 Node 路径；token 只填本机 env；
-4. 准备凭据：git credential helper / SSH key、`QUBIUS_CONFIG_DIR/lan-proxy.credentials`（`user:password`，`0600`）、edgectl Basic 认证；
+3. 复制 `deploy/env.example` 为各 checkout 的 `.qubius/env`（或者直接跑 `npm run quickstart` + 部署向导），按新机器改路径、端口、域名、`QUBIUS_LAN_HOST`、归档目录、projects 文件和 Node 路径；token 只填本机 env；
+4. 准备凭据：git credential helper / SSH key、edgectl Basic 认证；局域网凭据可以在部署页勾选「启用局域网入口」自动生成（只显示一次），或运行 `make deploy-lan` 让 CLI 生成并打印一次，文件是 `QUBIUS_CONFIG_DIR/lan-proxy.credentials`（`user:password`，`0600`）；
 5. 两个 checkout 分别运行 `./deploy/install.sh`（副实例加 `QUBIUS_SECONDARY=1`）；
 6. 用 `"$QUBIUS_PRIMARY_DIR/deploy/start-all.sh" --restart` 或 systemd unit 启动；
 7. 在 edgectl 配置两个站点的 `domains`、`upstream`、`sse: true`，或通过部署页「公网入口」完成；

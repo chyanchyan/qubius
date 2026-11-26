@@ -14,12 +14,20 @@ import {
   type ProjectConfig,
 } from "./config.js";
 import {
+  DeployDataDirChangeError,
   DeployValidationError,
   applyDeploy,
+  deployBusy,
   deployConfigDir,
   readDeployJob,
   readDeployState,
 } from "./deploy.js";
+import {
+  resetAuthToken,
+  resetLanPassword,
+  restartLanProxy,
+  type AuthTokenState,
+} from "./credential-reset.js";
 import type { EdgeActionDeps } from "./edge/actions.js";
 import { handleEdgeRequest } from "./edge/http.js";
 import { envFlag } from "./env.js";
@@ -225,7 +233,7 @@ function validateApiRequest(
   req: IncomingMessage,
   method: string,
   allowedHosts: readonly string[] | undefined,
-  authToken: string | undefined,
+  tokenState: AuthTokenState,
   pathname: string,
 ): void {
   if (headerValue(req.headers["sec-fetch-site"]).toLowerCase() === "cross-site") {
@@ -235,7 +243,18 @@ function validateApiRequest(
     throw new HttpError(403, "Host 不被允许");
   }
   // /api/health 供部署脚本探活，不要求令牌；其余 API 在启用令牌后必须匹配。
-  if (authToken && pathname !== "/api/health" && !tokenMatches(authToken, tokenFromRequest(req))) {
+  // 刚重置令牌时旧令牌有 60 秒宽限，避免在途请求/页面自动刷新立刻 401。
+  const provided = tokenFromRequest(req);
+  const current = tokenState.current;
+  const previous = tokenState.previousUntil && Date.now() < tokenState.previousUntil
+    ? tokenState.previous
+    : undefined;
+  if (
+    current
+    && pathname !== "/api/health"
+    && !tokenMatches(current, provided)
+    && !(previous && tokenMatches(previous, provided))
+  ) {
     throw new HttpError(401, "需要访问令牌");
   }
   if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
@@ -302,6 +321,13 @@ export function createAppServer(options: {
   sdkConfigDir?: string;
   /** 启用 API 访问令牌后，除 /api/health 外的 API 请求必须携带。 */
   authToken?: string;
+  /** 可变的令牌状态；重置令牌后立即切换，旧值保留 60 秒宽限。 */
+  authTokenState?: AuthTokenState;
+  /** 当前配置文件的绝对路径；/api/deploy 用它展示「配置在哪」（支持 --config 自定义路径）。 */
+  configFile?: string;
+  /** 令牌来源；file 时附带 tokenFile，供登录框和部署页提示去哪里找。 */
+  authTokenSource?: "config" | "env" | "file";
+  authTokenFile?: string;
   /** 开发机命令行；未注入时 /api/terminal 返回 503。 */
   terminal?: TerminalController;
   /**
@@ -316,8 +342,13 @@ export function createAppServer(options: {
   /**
    * 令牌来源：index.ts 解析出的（含自动生成）优先；直接构造 AppConfig 的入口
    * 回退到 config.authToken。auth: false 显式关闭时不再使用配置里的令牌。
+   * 重置接口会原地修改 tokenState，所以这里用可变对象而不是字符串。
    */
-  const authToken = options.authToken ?? (config.auth === false ? undefined : config.authToken);
+  const tokenState: AuthTokenState = options.authTokenState ?? {
+    current: options.authToken ?? (config.auth === false ? undefined : config.authToken),
+    ...(options.authTokenSource ? { source: options.authTokenSource } : {}),
+    ...(options.authTokenFile ? { file: options.authTokenFile } : {}),
+  };
   /** 技能开关落在 dataDir；测试也可以注入独立的 store/configDir。 */
   const skillStore = options.skills?.store ?? new SkillSettings(config.dataDir);
   const skillConfigDir = options.skills?.configDir;
@@ -391,7 +422,7 @@ export function createAppServer(options: {
         req,
         method,
         allowedHosts,
-        authToken,
+        tokenState,
         url.pathname,
       );
     }
@@ -406,6 +437,9 @@ export function createAppServer(options: {
         dataDirWritable: isWritable(config.dataDir),
         webDist: hasWebDist(),
         memory: memoryMb(),
+        // 登录框还没拿到令牌时用它提示「令牌文件在哪」；只暴露路径，不暴露令牌。
+        authRequired: Boolean(tokenState.current),
+        ...(tokenState.file ? { authTokenFile: tokenState.file } : {}),
       });
       return;
     }
@@ -435,11 +469,70 @@ export function createAppServer(options: {
         repoRoot,
         port: config.port,
         setupRequired: options.setupRequired,
+        config,
+        ...(options.configFile ? { configFile: options.configFile } : {}),
+        authEnabled: Boolean(tokenState.current),
+        ...(tokenState.source ? { authTokenSource: tokenState.source } : {}),
+        ...(tokenState.file ? { authTokenFile: tokenState.file } : {}),
       }));
       return;
     }
     if (url.pathname === "/api/deploy/status" && method === "GET") {
-      sendJson(res, 200, { job: readDeployJob(deployConfigDir()) });
+      sendJson(res, 200, { job: readDeployJob(deployConfigDir(process.env, process.platform, repoRoot)) });
+      return;
+    }
+    if (url.pathname === "/api/config/token" && method === "GET") {
+      // 只有启用令牌时才有值；启用后本路由已经通过令牌校验，调用方本来就知道它。
+      // 用途：Windows/首次登录时在部署页直接复制，不用去数据目录翻 auth-token 文件。
+      if (!tokenState.current) throw new HttpError(404, "未启用访问令牌");
+      sendJson(res, 200, {
+        token: tokenState.current,
+        source: tokenState.source ?? (config.authToken ? "config" : "file"),
+        ...(tokenState.file ? { file: tokenState.file } : {}),
+      });
+      return;
+    }
+    if (url.pathname === "/api/deploy/lan-credentials/reset" && method === "POST") {
+      const configDir = deployConfigDir(process.env, process.platform, repoRoot);
+      if (deployBusy(configDir)) throw new HttpError(409, "已有部署任务在运行");
+      const body = await readJson(req);
+      const requested = body && typeof body === "object" && !Array.isArray(body)
+        ? (body as { user?: unknown }).user
+        : undefined;
+      const user = typeof requested === "string" ? requested : undefined;
+      const { result, credentialsFile, needsRestart } = resetLanPassword({
+        config,
+        configDir,
+        repoRoot,
+        env: process.env,
+        user,
+      });
+      // 先响应再重启：如果页面是通过局域网入口访问的，重启会断开当前连接。
+      sendJson(res, 200, { ok: true, lan: result });
+      if (needsRestart) {
+        setTimeout(() => {
+          void restartLanProxy(config, repoRoot, process.env, credentialsFile).catch((error) => {
+            console.warn("[lan] 重启局域网入口失败", error);
+          });
+        }, 500);
+      }
+      return;
+    }
+    if (url.pathname === "/api/deploy/auth-token/reset" && method === "POST") {
+      const configDir = deployConfigDir(process.env, process.platform, repoRoot);
+      if (deployBusy(configDir)) throw new HttpError(409, "已有部署任务在运行");
+      try {
+        const result = resetAuthToken({
+          config,
+          configDir,
+          repoRoot,
+          env: process.env,
+          state: tokenState,
+        });
+        sendJson(res, 200, { ok: true, ...result });
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : "重置令牌失败");
+      }
       return;
     }
     if (url.pathname === "/api/deploy/apply" && method === "POST") {
@@ -449,16 +542,33 @@ export function createAppServer(options: {
         result = applyDeploy({
           body,
           repoRoot,
+          ...(options.configFile ? { configFile: options.configFile } : {}),
           role: config.role,
           dataDir: config.dataDir,
           port: config.port,
         });
       } catch (error) {
+        if (error instanceof DeployDataDirChangeError) {
+          // 409 + 结构化字段：前端据此弹二次确认，而不是把整段文案塞进错误条。
+          sendJson(res, 409, {
+            error: error.message,
+            code: "data-dir-change",
+            currentDataDir: error.currentDataDir,
+            targetDataDir: error.targetDataDir,
+            sessions: error.sessions,
+          });
+          return;
+        }
         if (error instanceof DeployValidationError) throw new HttpError(400, error.message);
         throw error;
       }
       if ("jobId" in result) {
-        sendJson(res, 202, { ok: true, jobId: result.jobId });
+        sendJson(res, 202, {
+          ok: true,
+          jobId: result.jobId,
+          // 局域网密码和 API 令牌只在这次响应里出现一次。
+          ...(result.oneTime ? { oneTime: result.oneTime } : {}),
+        });
         return;
       }
       // busy 保持旧文案兼容；residual 用独立文案，避免前端按 busy 误判。

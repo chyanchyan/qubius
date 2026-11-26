@@ -132,9 +132,105 @@ function OptionalSettings({
 }) {
   return (
     <section className="wizard-optional" aria-labelledby="wizard-optional-title">
-      <h3 id="wizard-optional-title">可选设置</h3>
-      <p className="wizard-hint">不填也能正常部署；需要自动归档旧对话或自定义仓库地址时再填。</p>
+      <h3 id="wizard-optional-title">访问与运行</h3>
+      <p className="wizard-hint">
+        不填也能正常部署；这里控制对外访问、访问令牌和运行上限，部署后仍可在完整表单里修改。
+      </p>
       <div className="wizard-fields">
+        <Field
+          className="wizard-span-2"
+          label="额外允许的访问域名（逗号分隔，可选）"
+          value={form.allowedHostsExtra}
+          placeholder="例如 qa.example.com, [2001:db8::1]"
+          mono
+          disabled={disabled}
+          hint="公网域名会自动加入 allowedHosts；这里补充其它域名或 IP。局域网经 lan-proxy 转发不需要填。"
+          onChange={(value) => onUpdate({ allowedHostsExtra: value })}
+        />
+        <label className="field">
+          访问令牌
+          <select
+            value={form.authMode}
+            disabled={disabled}
+            onChange={(event) => onUpdate({ authMode: event.target.value as DeployForm["authMode"] })}
+          >
+            <option value="off">关闭</option>
+            <option value="auto">自动生成（推荐）</option>
+            <option value="custom">自定义</option>
+          </select>
+        </label>
+        {form.authMode === "custom" && (
+          <label className="field">
+            自定义访问令牌
+            <input
+              type="password"
+              value={form.authToken}
+              placeholder={form.authTokenSet ? "已设置，留空保持不变" : "16 到 512 个字符"}
+              autoComplete="off"
+              disabled={disabled}
+              onChange={(event) => onUpdate({ authToken: event.target.value })}
+            />
+          </label>
+        )}
+        <NumberField
+          label="并发上限"
+          value={form.maxConcurrent}
+          min={1}
+          max={256}
+          disabled={disabled}
+          onChange={(value) => onUpdate({ maxConcurrent: value })}
+        />
+        <NumberField
+          label="确认超时（分钟，0 不自动拒绝）"
+          value={form.approvalTimeoutMinutes}
+          min={0}
+          max={1440}
+          disabled={disabled}
+          onChange={(value) => onUpdate({ approvalTimeoutMinutes: value })}
+        />
+        <label className="field field-check">
+          <input
+            type="checkbox"
+            checked={form.terminal}
+            disabled={disabled}
+            onChange={(event) => onUpdate({ terminal: event.target.checked })}
+          />
+          启用浏览器命令行页
+        </label>
+        <label className="field field-check">
+          <input
+            type="checkbox"
+            checked={form.lanEnabled}
+            disabled={disabled}
+            onChange={(event) => onUpdate({ lanEnabled: event.target.checked })}
+          />
+          启用局域网入口（Basic 认证）
+        </label>
+        {form.lanEnabled && (
+          <>
+            <Field
+              label="局域网用户名"
+              value={form.lanAuthUser}
+              placeholder="qubius"
+              disabled={disabled}
+              onChange={(value) => onUpdate({ lanAuthUser: value })}
+            />
+            <label className="field">
+              局域网登录密码
+              <input
+                type="password"
+                value={form.lanAuthPassword}
+                placeholder={form.lanAuthPasswordSet ? "已设置，留空保持不变" : "留空自动生成"}
+                autoComplete="off"
+                disabled={disabled}
+                onChange={(event) => onUpdate({ lanAuthPassword: event.target.value })}
+              />
+            </label>
+          </>
+        )}
+        <p className="wizard-hint wizard-span-2">
+          启用后凭据写入配置目录的 lan-proxy.credentials；部署成功后会一次性显示访问地址、用户名、密码和 API 访问令牌。
+        </p>
         <Field
           label="归档目录（留空不归档）"
           value={form.archiveDir}

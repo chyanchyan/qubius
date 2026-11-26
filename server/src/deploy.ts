@@ -1,11 +1,18 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { Role } from "./config.js";
+import { resolveAuthToken } from "./auth.js";
+import {
+  DEFAULT_ALLOWED_HOSTS,
+  DEFAULT_LIMITS,
+  type AppConfig,
+  type LimitsConfig,
+  type Role,
+} from "./config.js";
 import { resolveDeployEnvFile, type DeployEnvSource } from "./deploy-env.js";
 import { jobTimestamp } from "./job-state.js";
 import {
@@ -45,6 +52,8 @@ export interface DeployForm {
   secondaryPort: number;
   publicHost: string;
   publicHostSecondary: string;
+  /** 额外允许的 Host（逗号或空白分隔）；写入 env 的 QUBIUS_ALLOWED_HOSTS，启动时追加到 allowedHosts。 */
+  allowedHostsExtra: string;
   lanHost: string;
   configDir: string;
   primaryDir: string;
@@ -54,10 +63,34 @@ export interface DeployForm {
   primaryRepoUrl: string;
   secondaryRepoUrl: string;
   primaryRef: string;
+  /** 访问令牌：off 关闭、auto 自动生成、custom 使用下面的令牌。 */
+  authMode: "off" | "auto" | "custom";
+  /** custom 模式的令牌。GET 不返回已保存的值（只用 authTokenSet 表示已设置）。 */
+  authToken: string;
+  /** 服务端是否已保存令牌；GET 用，提交时忽略。 */
+  authTokenSet?: boolean;
+  /** 浏览器命令行页开关。 */
+  terminal: boolean;
+  /** 同时进行的对话上限（初始默认值，页面设置优先）。 */
+  maxConcurrent: number;
+  /** 等待确认超时（分钟，0 表示不自动拒绝）。 */
+  approvalTimeoutMinutes: number;
+  /** 会话/请求上限；默认值见 DEFAULT_LIMITS。 */
+  limits: LimitsConfig;
+  /** 是否启用局域网 Basic 认证入口（write QUBIUS_START_LAN）。 */
+  lanEnabled: boolean;
+  /** 局域网 Basic 用户名；默认 qubius。 */
+  lanAuthUser: string;
+  /** 新密码；留空表示沿用已保存的密码，首次启用时自动生成。GET 不返回已保存的值。 */
+  lanAuthPassword: string;
+  /** 服务端是否已有局域网密码（GET 用，提交时忽略）。 */
+  lanAuthPasswordSet?: boolean;
   archiveDir: string;
   archiveRetentionDays: number;
   nodeBin: string;
   projects: DeployProject[];
+  /** 数据目录与当前配置文件不同且旧目录有会话时的二次确认。 */
+  confirmDataDirChange?: boolean;
 }
 
 export interface DeployInstanceInfo {
@@ -92,7 +125,35 @@ export interface DeployBusy {
   remainingPids?: number[];
 }
 
-export type ApplyDeployResult = { jobId: string } | DeployBusy;
+/** 局域网入口一次性信息：只在本次部署响应里返回，后续 GET 不再包含密码。 */
+export interface DeployLanInfo {
+  user: string;
+  password: string;
+  /** 形如 http://192.168.1.10:8787，按启用的实例生成。 */
+  urls: string[];
+}
+
+export interface DeployOneTimeInfo {
+  lan?: DeployLanInfo;
+  /** 本次部署后生效的 API 访问令牌；未启用 auth 时省略。 */
+  authToken?: string;
+}
+
+export type ApplyDeployResult = { jobId: string; oneTime?: DeployOneTimeInfo } | DeployBusy;
+
+/** 当前进程实际生效的配置摘要；部署页只读展示，避免再去翻文件和日志。 */
+export interface DeployCurrentConfig {
+  dataDir: string;
+  allowedHosts: string[];
+  authEnabled: boolean;
+  authTokenSource?: "config" | "env" | "file";
+  authTokenFile?: string;
+  terminal: boolean;
+  /** 局域网入口当前状态；不含密码。 */
+  lan?: { enabled: boolean; user: string; passwordSet: boolean; file: string };
+  archive?: { dir: string; retentionDays: number; instance: string };
+  role: Role;
+}
 
 export interface DeployState {
   setupRequired: boolean;
@@ -105,6 +166,8 @@ export interface DeployState {
   /** envFile 的解析来源，与 deploy/lib.sh 的优先级一致。 */
   envSource: DeployEnvSource;
   role: "primary" | "secondary";
+  /** 当前进程的配置摘要；测试或不传 config 时省略。 */
+  current?: DeployCurrentConfig;
   /** 当前 server 进程监听端口；前端据此判断部署后本页面实例是否还在。 */
   port: number;
   /** 运行服务的平台；前端据此提示 Windows 与 Linux 的部署差异。 */
@@ -131,7 +194,20 @@ const MANAGED_KEYS = [
   "QUBIUS_SECONDARY_PORT",
   "QUBIUS_PUBLIC_HOST",
   "QUBIUS_PUBLIC_HOST_SECONDARY",
+  "QUBIUS_ALLOWED_HOSTS",
+  "QUBIUS_AUTH",
+  "QUBIUS_AUTH_TOKEN",
+  "QUBIUS_TERMINAL",
+  "QUBIUS_MAX_CONCURRENT",
+  "QUBIUS_APPROVAL_TIMEOUT_MINUTES",
+  "QUBIUS_LIMIT_TRANSCRIPT_BYTES",
+  "QUBIUS_LIMIT_TRANSCRIPT_MESSAGES",
+  "QUBIUS_LIMIT_MESSAGE_TEXT",
+  "QUBIUS_LIMIT_REQUEST_BODY",
+  "QUBIUS_HISTORY_PAGE",
+  "QUBIUS_START_LAN",
   "QUBIUS_LAN_HOST",
+  "QUBIUS_LAN_USER",
   "QUBIUS_CONFIG_DIR",
   "QUBIUS_PRIMARY_DIR",
   "QUBIUS_SECONDARY_DIR",
@@ -165,34 +241,33 @@ export class DeployValidationError extends Error {
   }
 }
 
+/**
+ * 目标数据目录与当前 config.yaml 不同，且旧目录里还有会话。
+ * 这是「重新部署后会话全没了」的根因，必须让用户在页面上显式确认。
+ */
+export class DeployDataDirChangeError extends DeployValidationError {
+  readonly currentDataDir: string;
+  readonly targetDataDir: string;
+  readonly sessions: number;
+
+  constructor(currentDataDir: string, targetDataDir: string, sessions: number) {
+    super(
+      `数据目录将从 ${currentDataDir} 切换到 ${targetDataDir}，旧目录里还有 ${sessions} 个会话。`
+        + "直接部署会让这些会话在新实例里看不到；确认要切换请再次提交。",
+    );
+    this.name = "DeployDataDirChangeError";
+    this.currentDataDir = currentDataDir;
+    this.targetDataDir = targetDataDir;
+    this.sessions = sessions;
+  }
+}
+
 function fail(message: string): never {
   throw new DeployValidationError(message);
 }
 
 function homeOf(env: NodeJS.ProcessEnv): string {
   return env.HOME || env.USERPROFILE || os.homedir();
-}
-
-/**
- * Windows 的机器级配置目录：%APPDATA%\qubius。
- * 只有在真实 Windows 环境（env 里带 APPDATA/USERPROFILE）时才启用，
- * 这样用独立 HOME 的测试在 Linux/Windows 上都能得到 POSIX 语义。
- */
-function windowsConfigDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
-  if (platform !== "win32") return undefined;
-  const appData = nonEmpty(env.APPDATA);
-  if (appData) return path.join(appData, "qubius");
-  const profile = nonEmpty(env.USERPROFILE);
-  return profile ? path.join(profile, "AppData", "Roaming", "qubius") : undefined;
-}
-
-/** Windows 的数据目录：%LOCALAPPDATA%\qubius（与 roaming 配置分开）。 */
-function windowsDataHome(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
-  if (platform !== "win32") return undefined;
-  const localAppData = nonEmpty(env.LOCALAPPDATA);
-  if (localAppData) return localAppData;
-  const profile = nonEmpty(env.USERPROFILE);
-  return profile ? path.join(profile, "AppData", "Local") : undefined;
 }
 
 /**
@@ -204,31 +279,35 @@ function usesNodeDeployJob(platform: NodeJS.Platform): boolean {
   return platform === "win32" || platform === "darwin";
 }
 
-/** 与 deploy/lib.sh 一致：${XDG_CONFIG_HOME:-$HOME/.config}/qubius；Windows 用 %APPDATA%。 */
+/**
+ * 默认配置、env、数据、日志都收敛到 checkout 内的 .qubius/（已 gitignore）。
+ * 与 deploy/lib.sh 的 qubius_default_config_dir 保持一致：不再使用
+ * ~/.config、~/.local/share 或 %APPDATA%，避免 quickstart、部署页和服务端
+ * 各自算出不同的目录。
+ *
+ * repoRoot 优先从参数取；其次是部署脚本导出的 QUBIUS_REPO_DIR；最后用
+ * 进程工作目录（run.sh / deploy-job 都会在 checkout 根启动服务）。
+ */
+export function defaultRepoRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return nonEmpty(env.QUBIUS_REPO_DIR) ?? process.cwd();
+}
+
 export function defaultConfigDir(
   env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
+  _platform: NodeJS.Platform = process.platform,
+  repoRoot?: string,
 ): string {
-  const windows = windowsConfigDir(env, platform);
-  if (windows) return windows;
-  const home = homeOf(env);
-  return path.join(nonEmpty(env.XDG_CONFIG_HOME) ?? path.join(home, ".config"), "qubius");
+  return path.join(path.resolve(repoRoot ?? defaultRepoRoot(env)), ".qubius");
 }
 
-/** 与 deploy/lib.sh 一致：${XDG_DATA_HOME:-$HOME/.local/share}；Windows 用 %LOCALAPPDATA%。 */
-function defaultDataHome(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
-  return windowsDataHome(env, platform)
-    ?? nonEmpty(env.XDG_DATA_HOME)
-    ?? path.join(homeOf(env), ".local", "share");
-}
-
-/** 部署配置目录：QUBIUS_CONFIG_DIR，或 Windows 的 %APPDATA%\qubius / 其它平台的 ~/.config/qubius。 */
+/** 部署配置目录：QUBIUS_CONFIG_DIR，或 <checkout>/.qubius。 */
 export function deployConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  repoRoot?: string,
 ): string {
   const configured = (env.QUBIUS_CONFIG_DIR ?? "").trim();
-  return path.resolve(configured || defaultConfigDir(env, platform));
+  return path.resolve(configured || defaultConfigDir(env, platform, repoRoot));
 }
 
 /**
@@ -453,7 +532,7 @@ export function deriveDeployForm(
   platform: NodeJS.Platform = process.platform,
 ): DerivedDeploy {
   const home = homeOf(env);
-  const configDir = deployConfigDir(env, platform);
+  const configDir = deployConfigDir(env, platform, repoRoot);
   // 与 shell 侧 deploy/lib.sh 单一来源：QUBIUS_ENV > configDir/env > repo/deploy/env。
   const { file: envFile, source: envSource } = resolveDeployEnvFile(env, configDir, repoRoot);
   let stored: Record<string, string> = {};
@@ -472,16 +551,37 @@ export function deriveDeployForm(
   const startSecondaryDefault = role === "secondary" ? "1" : "0";
   // 两个实例共用一个仓库：副仓库地址未显式设置时跟随主仓库（包括 env 里的自定义地址）。
   const primaryRepoUrl = pick("QUBIUS_PRIMARY_REPO_URL", DEFAULT_PRIMARY_REPO_URL);
-  // Windows / macOS 的主实例没有显式配置时默认部署当前 checkout（本机首次部署
-  // 通常就在这个仓库里）。Linux 保持原来的 $HOME/qubius 默认，避免改变既有行为。
-  const primaryDirDefault = usesNodeDeployJob(platform) && role === "primary" && repoRoot
-    ? repoRoot
-    : path.join(home, "qubius");
+  // 主实例默认就是当前 checkout；数据目录放在它自己的 .qubius/data。
+  const repoBase = path.resolve(repoRoot ?? defaultRepoRoot(env));
+  const primaryDirDefault = repoBase;
+  const secondaryDirDefault = path.join(home, "co-qubius");
+  const primaryDir = resolveDir(configDir, pick("QUBIUS_PRIMARY_DIR", primaryDirDefault));
+  const secondaryDir = resolveDir(configDir, pick("QUBIUS_SECONDARY_DIR", secondaryDirDefault));
   // 真实 Windows 环境里默认 localhost，本机使用不用再想一个域名；
   // 用隔离 HOME 的测试不设置 APPDATA/USERPROFILE，仍然得到空串。
   const windowsLocalHost = platform === "win32" && (nonEmpty(env.APPDATA) || nonEmpty(env.USERPROFILE))
     ? "localhost"
     : "";
+  // 令牌只回传「是否已设置」，不回传明文。QUBIUS_AUTH=0 表示显式关闭；
+  // 已有令牌且没有显式关闭时按自定义模式展示。
+  const authTokenStored = nonEmpty(stored.QUBIUS_AUTH_TOKEN) ?? "";
+  const authFlag = pick("QUBIUS_AUTH", "").trim().toLowerCase();
+  const authExplicitOff = ["0", "false", "no", "off"].includes(authFlag);
+  const authExplicitOn = ["1", "true", "yes", "on"].includes(authFlag);
+  const authMode: DeployForm["authMode"] = authExplicitOff
+    ? "off"
+    : authTokenStored
+      ? "custom"
+      : authExplicitOn
+        ? "auto"
+        : "off";
+  // 局域网入口：有凭据文件或 env 显式打开时默认启用；密码只回传“已设置”。
+  const lanFile = lanCredentialsFile(configDir, env);
+  const lanStored = readLanCredentials(lanFile);
+  // 只看 env 文件，不看进程环境：deploy/lib.sh 会把 QUBIUS_START_LAN 默认成 1，
+  // 如果混进来，部署页会把“默认值”误当成用户主动启用。
+  const lanFlag = nonEmpty(stored.QUBIUS_START_LAN);
+  const lanEnabled = lanFlag === undefined ? fs.existsSync(lanFile) : parseBool(lanFlag, false);
   const form: DeployForm = {
     startPrimary: parseBool(pick("QUBIUS_START_PRIMARY", startPrimaryDefault), role !== "secondary"),
     startSecondary: parseBool(pick("QUBIUS_START_SECONDARY", startSecondaryDefault), role === "secondary"),
@@ -491,21 +591,48 @@ export function deriveDeployForm(
     secondaryPort: parseIntOr(pick("QUBIUS_SECONDARY_PORT", "8788"), 8788),
     publicHost: pick("QUBIUS_PUBLIC_HOST", windowsLocalHost),
     publicHostSecondary: pick("QUBIUS_PUBLIC_HOST_SECONDARY", ""),
+    allowedHostsExtra: pick("QUBIUS_ALLOWED_HOSTS", ""),
     lanHost: pick("QUBIUS_LAN_HOST", ""),
     configDir,
-    primaryDir: resolveDir(configDir, pick("QUBIUS_PRIMARY_DIR", primaryDirDefault)),
-    secondaryDir: resolveDir(configDir, pick("QUBIUS_SECONDARY_DIR", path.join(home, "co-qubius"))),
-    dataPrimary: resolveDir(
-      configDir,
-      pick("QUBIUS_DATA_PRIMARY", path.join(defaultDataHome(env, platform), "qubius")),
-    ),
-    dataSecondary: resolveDir(
-      configDir,
-      pick("QUBIUS_DATA_SECONDARY", path.join(defaultDataHome(env, platform), "co-qubius")),
-    ),
+    primaryDir,
+    secondaryDir,
+    dataPrimary: resolveDir(configDir, pick("QUBIUS_DATA_PRIMARY", path.join(primaryDir, ".qubius", "data"))),
+    dataSecondary: resolveDir(configDir, pick("QUBIUS_DATA_SECONDARY", path.join(secondaryDir, ".qubius", "data"))),
     primaryRepoUrl,
     secondaryRepoUrl: pick("QUBIUS_SECONDARY_REPO_URL", primaryRepoUrl),
     primaryRef: pick("QUBIUS_PRIMARY_REF", "main"),
+    authMode,
+    authToken: "",
+    authTokenSet: Boolean(authTokenStored),
+    terminal: parseBool(pick("QUBIUS_TERMINAL", "1"), true),
+    maxConcurrent: parseIntOr(pick("QUBIUS_MAX_CONCURRENT", "4"), 4),
+    approvalTimeoutMinutes: parseIntOr(pick("QUBIUS_APPROVAL_TIMEOUT_MINUTES", "10"), 10),
+    limits: {
+      transcriptBytes: parseIntOr(
+        pick("QUBIUS_LIMIT_TRANSCRIPT_BYTES", String(DEFAULT_LIMITS.transcriptBytes)),
+        DEFAULT_LIMITS.transcriptBytes,
+      ),
+      transcriptMessages: parseIntOr(
+        pick("QUBIUS_LIMIT_TRANSCRIPT_MESSAGES", String(DEFAULT_LIMITS.transcriptMessages)),
+        DEFAULT_LIMITS.transcriptMessages,
+      ),
+      messageText: parseIntOr(
+        pick("QUBIUS_LIMIT_MESSAGE_TEXT", String(DEFAULT_LIMITS.messageText)),
+        DEFAULT_LIMITS.messageText,
+      ),
+      requestBodyBytes: parseIntOr(
+        pick("QUBIUS_LIMIT_REQUEST_BODY", String(DEFAULT_LIMITS.requestBodyBytes)),
+        DEFAULT_LIMITS.requestBodyBytes,
+      ),
+      historyPage: parseIntOr(
+        pick("QUBIUS_HISTORY_PAGE", String(DEFAULT_LIMITS.historyPage)),
+        DEFAULT_LIMITS.historyPage,
+      ),
+    },
+    lanEnabled,
+    lanAuthUser: lanStored?.user ?? (nonEmpty(env.QUBIUS_LAN_USER) ?? "qubius"),
+    lanAuthPassword: "",
+    lanAuthPasswordSet: Boolean(lanStored?.password),
     archiveDir: archiveDirRaw ? resolveDir(configDir, archiveDirRaw) : "",
     archiveRetentionDays: parseIntOr(pick("QUBIUS_ARCHIVE_RETENTION_DAYS", "30"), 30),
     nodeBin: pick("QUBIUS_NODE_BIN", ""),
@@ -597,6 +724,27 @@ function validateProjects(value: unknown): DeployProject[] {
   return projects;
 }
 
+/** 会话/请求上限；缺省字段沿用 DEFAULT_LIMITS，范围与 server/src/config.ts 的 LIMIT_RULES 一致。 */
+function validateLimits(value: unknown): LimitsConfig {
+  if (value === undefined) return { ...DEFAULT_LIMITS };
+  const record = asRecord(value);
+  const read = (key: keyof LimitsConfig, label: string, min: number, max: number): number => {
+    const raw = record[key];
+    if (raw === undefined) return DEFAULT_LIMITS[key];
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < min || raw > max) {
+      fail(`${label}必须是 ${min} 到 ${max} 的整数`);
+    }
+    return raw;
+  };
+  return {
+    transcriptBytes: read("transcriptBytes", "单会话总字节上限", 64 * 1024, 64 * 1024 * 1024),
+    transcriptMessages: read("transcriptMessages", "单会话消息条数上限", 50, 20_000),
+    messageText: read("messageText", "单条消息正文字符上限", 1_024, 1_024 * 1_024),
+    requestBodyBytes: read("requestBodyBytes", "请求体字节上限", 1_024 * 1_024, 64 * 1_024 * 1_024),
+    historyPage: read("historyPage", "历史分页条数", 50, 2_000),
+  };
+}
+
 function requireAbsolute(value: string, label: string): void {
   if (!path.isAbsolute(value)) fail(`${label} 必须是绝对路径`);
 }
@@ -610,6 +758,39 @@ export function validateDeployForm(
   platform: NodeJS.Platform = process.platform,
 ): DeployForm {
   const record = asRecord(input);
+  const authMode = record.authMode === undefined ? "off" : record.authMode;
+  if (authMode !== "off" && authMode !== "auto" && authMode !== "custom") {
+    fail("访问令牌模式必须是 off、auto 或 custom");
+  }
+  const authToken = record.authToken === undefined ? "" : requireString(record, "authToken", "访问令牌");
+  if (authToken && (authToken.length < 16 || authToken.length > 512)) {
+    fail("访问令牌必须是 16 到 512 个字符");
+  }
+  const allowedHostsExtra = record.allowedHostsExtra === undefined
+    ? ""
+    : requireString(record, "allowedHostsExtra", "额外允许的域名");
+  for (const raw of allowedHostsExtra.split(/[,\s]+/)) {
+    const host = raw.trim().replace(/^\[|\]$/g, "").toLowerCase();
+    if (!host) continue;
+    if (!HOST_RE.test(host) && isIP(host) === 0) {
+      fail(`额外允许的域名里 ${raw} 不是合法域名或 IP`);
+    }
+  }
+  const lanEnabled = record.lanEnabled === undefined
+    ? false
+    : requireBool(record, "lanEnabled", "局域网入口开关");
+  const lanAuthUser = record.lanAuthUser === undefined
+    ? "qubius"
+    : requireString(record, "lanAuthUser", "局域网用户名");
+  if (!/^[^\s:]{1,64}$/.test(lanAuthUser)) {
+    fail("局域网用户名必须是 1 到 64 个字符，且不能包含冒号或空白");
+  }
+  const lanAuthPassword = record.lanAuthPassword === undefined
+    ? ""
+    : requireString(record, "lanAuthPassword", "局域网密码");
+  if (lanAuthPassword && (lanAuthPassword.length < 8 || lanAuthPassword.length > 128)) {
+    fail("局域网密码必须是 8 到 128 个字符");
+  }
   const form: DeployForm = {
     startPrimary: requireBool(record, "startPrimary", "startPrimary"),
     startSecondary: requireBool(record, "startSecondary", "startSecondary"),
@@ -620,6 +801,7 @@ export function validateDeployForm(
     secondaryPort: requireInt(record, "secondaryPort", "副实例端口"),
     publicHost: requireString(record, "publicHost", "主实例公网域名"),
     publicHostSecondary: requireString(record, "publicHostSecondary", "副实例公网域名"),
+    allowedHostsExtra,
     lanHost: requireString(record, "lanHost", "内网入口地址"),
     configDir: requireString(record, "configDir", "配置目录"),
     primaryDir: requireString(record, "primaryDir", "主实例目录"),
@@ -629,10 +811,25 @@ export function validateDeployForm(
     primaryRepoUrl: requireString(record, "primaryRepoUrl", "主实例仓库地址"),
     secondaryRepoUrl: requireString(record, "secondaryRepoUrl", "副实例仓库地址"),
     primaryRef: requireString(record, "primaryRef", "主实例分支"),
+    // 新字段都有默认值，旧版页面/测试不提交也能继续工作。
+    authMode,
+    authToken,
+    authTokenSet: record.authTokenSet === true,
+    terminal: record.terminal === undefined ? true : requireBool(record, "terminal", "命令行页开关"),
+    maxConcurrent: record.maxConcurrent === undefined ? 4 : requireInt(record, "maxConcurrent", "并发上限"),
+    approvalTimeoutMinutes: record.approvalTimeoutMinutes === undefined
+      ? 10
+      : requireInt(record, "approvalTimeoutMinutes", "确认超时"),
+    limits: validateLimits(record.limits),
+    lanEnabled,
+    lanAuthUser,
+    lanAuthPassword,
+    lanAuthPasswordSet: record.lanAuthPasswordSet === true,
     archiveDir: requireString(record, "archiveDir", "归档目录"),
     archiveRetentionDays: requireInt(record, "archiveRetentionDays", "列表保留天数"),
     nodeBin: requireString(record, "nodeBin", "Node 路径"),
     projects: validateProjects(record.projects),
+    confirmDataDirChange: record.confirmDataDirChange === true,
   };
   // clonePeer 只对副实例有意义；没启用副实例时归一化为 false，避免 env 里残留 1。
   form.clonePeer = form.startSecondary && form.clonePeer;
@@ -779,6 +976,12 @@ export function validateDeployForm(
   if (form.archiveRetentionDays < 1 || form.archiveRetentionDays > 3650) {
     fail("列表保留天数必须在 1 到 3650 之间");
   }
+  if (form.maxConcurrent < 1 || form.maxConcurrent > 256) {
+    fail("并发上限必须在 1 到 256 之间");
+  }
+  if (form.approvalTimeoutMinutes < 0 || form.approvalTimeoutMinutes > 1440) {
+    fail("确认超时必须在 0 到 1440 分钟之间（0 表示不自动拒绝）");
+  }
 
   return form;
 }
@@ -794,6 +997,19 @@ export function deployEnvValues(form: DeployForm, projectsFile: string): Record<
     QUBIUS_SECONDARY_PORT: String(form.secondaryPort),
     QUBIUS_PUBLIC_HOST: form.publicHost,
     QUBIUS_PUBLIC_HOST_SECONDARY: form.publicHostSecondary,
+    QUBIUS_ALLOWED_HOSTS: form.allowedHostsExtra ?? "",
+    QUBIUS_AUTH: form.authMode === "off" ? "0" : "1",
+    QUBIUS_AUTH_TOKEN: form.authMode === "custom" ? form.authToken : "",
+    QUBIUS_TERMINAL: form.terminal === false ? "0" : "1",
+    QUBIUS_MAX_CONCURRENT: String(form.maxConcurrent ?? 4),
+    QUBIUS_APPROVAL_TIMEOUT_MINUTES: String(form.approvalTimeoutMinutes ?? 10),
+    QUBIUS_LIMIT_TRANSCRIPT_BYTES: String(form.limits?.transcriptBytes ?? DEFAULT_LIMITS.transcriptBytes),
+    QUBIUS_LIMIT_TRANSCRIPT_MESSAGES: String(form.limits?.transcriptMessages ?? DEFAULT_LIMITS.transcriptMessages),
+    QUBIUS_LIMIT_MESSAGE_TEXT: String(form.limits?.messageText ?? DEFAULT_LIMITS.messageText),
+    QUBIUS_LIMIT_REQUEST_BODY: String(form.limits?.requestBodyBytes ?? DEFAULT_LIMITS.requestBodyBytes),
+    QUBIUS_HISTORY_PAGE: String(form.limits?.historyPage ?? DEFAULT_LIMITS.historyPage),
+    QUBIUS_START_LAN: form.lanEnabled ? "1" : "0",
+    QUBIUS_LAN_USER: form.lanAuthUser,
     QUBIUS_LAN_HOST: form.lanHost,
     QUBIUS_CONFIG_DIR: form.configDir,
     QUBIUS_PRIMARY_DIR: form.primaryDir,
@@ -1378,9 +1594,121 @@ function resolveProjectsFile(value: string | undefined, configDir: string): stri
   return configured ? resolveDir(configDir, configured) : path.join(configDir, "projects.yaml");
 }
 
+/** 局域网 Basic 凭据文件：LAN_PROXY_CREDENTIALS 优先，否则 <configDir>/lan-proxy.credentials。 */
+export function lanCredentialsFile(configDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  const configured = nonEmpty(env.LAN_PROXY_CREDENTIALS);
+  return configured ? resolveDir(configDir, configured) : path.join(configDir, "lan-proxy.credentials");
+}
+
+/** 读取 user:password；文件缺失或格式不对时返回 undefined。 */
+export function readLanCredentials(file: string): { user: string; password: string } | undefined {
+  try {
+    const raw = fs.readFileSync(file, "utf8").trim();
+    const index = raw.indexOf(":");
+    if (index <= 0) return undefined;
+    const user = raw.slice(0, index).trim();
+    const password = raw.slice(index + 1);
+    if (!user || !password) return undefined;
+    return { user, password };
+  } catch {
+    return undefined;
+  }
+}
+
+export function writeLanCredentials(file: string, user: string, password: string): void {
+  writeAtomic(file, `${user}:${password}\n`, 0o600);
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch {
+    // Windows 等不支持 chmod；文件仍在配置目录里。
+  }
+}
+
+function generateLanPassword(): string {
+  // 16 个 base64url 字符，方便复制，不含冒号/空白。
+  return randomBytes(12).toString("base64url");
+}
+
+/** 与 deploy/lan-proxy.mjs 的 lanAddress() 保持一致：第一个非回环 IPv4。 */
+export function detectLanHost(): string | undefined {
+  const skip = /^(lo|docker|br-|veth|virbr|tun|tap|cni)/;
+  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
+    if (skip.test(name) || !addrs) continue;
+    for (const addr of addrs) {
+      if (addr.family === "IPv4" && !addr.internal) return addr.address;
+    }
+  }
+  return undefined;
+}
+
+function lanUrls(form: DeployForm, env: NodeJS.ProcessEnv): string[] {
+  const host = form.lanHost.trim() || nonEmpty(env.QUBIUS_LAN_HOST) || detectLanHost();
+  if (!host) return [];
+  const urls: string[] = [];
+  if (form.startPrimary) urls.push(`http://${host}:${form.primaryPort}`);
+  if (form.startSecondary) urls.push(`http://${host}:${form.secondaryPort}`);
+  return urls;
+}
+
+/** 当前 config.yaml 里的 dataDir；没有配置文件或字段时返回 undefined。 */
+function readConfiguredDataDir(configFile: string, configDir: string): string | undefined {
+  try {
+    const parsed = parseYaml(fs.readFileSync(configFile, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const value = (parsed as Record<string, unknown>).dataDir;
+    if (typeof value !== "string" || !value.trim()) return undefined;
+    return resolveDir(configDir, value.trim());
+  } catch {
+    return undefined;
+  }
+}
+
+/** 数据目录里的会话数；目录存在但读不到 sessions 时按 1 处理，宁可多确认一次。 */
+function countSessions(dataDir: string): number {
+  const sessionsDir = path.join(dataDir, "sessions");
+  try {
+    return fs.readdirSync(sessionsDir).filter((name) => name.endsWith(".json")).length;
+  } catch {
+    try {
+      return fs.statSync(dataDir).isDirectory() ? 1 : 0;
+    } catch {
+      return 0;
+    }
+  }
+}
+
+/** 写入（或沿用）局域网凭据，返回本次要一次性展示的信息。 */
+function prepareLanInfo(
+  form: DeployForm,
+  configDir: string,
+  env: NodeJS.ProcessEnv,
+): DeployLanInfo | undefined {
+  if (!form.lanEnabled) return undefined;
+  const file = lanCredentialsFile(configDir, env);
+  const existing = readLanCredentials(file);
+  const user = form.lanAuthUser.trim() || existing?.user || "qubius";
+  const password = form.lanAuthPassword || existing?.password || generateLanPassword();
+  writeLanCredentials(file, user, password);
+  return { user, password, urls: lanUrls(form, env) };
+}
+
+/** 部署后生效的 API 令牌：custom 用表单值，auto 读/生成目标数据目录的 auth-token。 */
+function deployedAuthToken(form: DeployForm, role: Role): string | undefined {
+  if (form.authMode === "off") return undefined;
+  if (form.authMode === "custom") return form.authToken || undefined;
+  const dataDir = role === "secondary" ? form.dataSecondary : form.dataPrimary;
+  try {
+    return resolveAuthToken({ auth: true, dataDir }, {});
+  } catch {
+    return undefined;
+  }
+}
+
 export interface ApplyDeployOptions {
   body: unknown;
   repoRoot: string;
+  /** 服务实际加载的配置文件；用于数据目录变化检查。 */
+  configFile?: string;
   env?: NodeJS.ProcessEnv;
   /** 当前服务实例的角色；交给部署任务决定是否停掉父进程。 */
   role?: Role;
@@ -1444,7 +1772,7 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
   const useOpsLock = !usesNodeDeployJob(platform);
   const form = validateDeployForm(options.body, platform);
   // configDir 由服务端部署环境决定；不接受页面修改，否则 GET/POST/status 会读写不同目录。
-  const configDir = deployConfigDir(env);
+  const configDir = deployConfigDir(env, platform, options.repoRoot);
   if (path.resolve(form.configDir) !== configDir) {
     throw new DeployValidationError("配置目录由服务端 QUBIUS_CONFIG_DIR 决定，不能在此修改");
   }
@@ -1458,6 +1786,22 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
     );
   }
   const envFile = resolution.file;
+
+  // 重新部署最容易丢数据的场景：新配置把 dataDir 指到另一个空目录，页面看起来
+  // 就是“会话全没了”。旧目录还有会话时要求显式确认，不静默切换。
+  const existingConfigFile = options.configFile
+    ? path.resolve(options.configFile)
+    : path.join(configDir, (options.role ?? "primary") === "secondary" ? "config-secondary.yaml" : "config.yaml");
+  const currentDataDir = readConfiguredDataDir(existingConfigFile, configDir);
+  const targetDataDir = (options.role ?? "primary") === "secondary" ? form.dataSecondary : form.dataPrimary;
+  if (
+    currentDataDir
+    && path.resolve(currentDataDir) !== path.resolve(targetDataDir)
+    && !form.confirmDataDirChange
+  ) {
+    const sessions = countSessions(currentDataDir);
+    if (sessions > 0) throw new DeployDataDirChangeError(currentDataDir, targetDataDir, sessions);
+  }
 
   // O_EXCL 锁覆盖「busy 检查 → 写 running 状态」，跨进程也只允许一个 apply。
   // 先拿锁再读/写任何文件：busy 时直接 409，不留下半套配置。
@@ -1501,6 +1845,23 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
     const stored = fs.existsSync(envFile)
       ? parseEnvFile(fs.readFileSync(envFile, "utf8"), env)
       : {};
+    // 自定义令牌允许页面留空表示“沿用已保存的值”；不存在时才要求输入。
+    if (form.authMode === "custom" && !form.authToken) {
+      const existingToken = nonEmpty(stored.QUBIUS_AUTH_TOKEN) ?? nonEmpty(env.QUBIUS_AUTH_TOKEN);
+      if (!existingToken || existingToken.length < 16 || existingToken.length > 512) {
+        throw new DeployValidationError("自定义访问令牌必须是 16 到 512 个字符");
+      }
+      form.authToken = existingToken;
+    }
+    // 局域网凭据和部署后生效的令牌只在本次响应里返回一次；GET /api/deploy 不含密码。
+    const lanInfo = prepareLanInfo(form, configDir, env);
+    const authToken = deployedAuthToken(form, options.role ?? "primary");
+    const oneTime: DeployOneTimeInfo | undefined = lanInfo || authToken
+      ? {
+        ...(lanInfo ? { lan: lanInfo } : {}),
+        ...(authToken ? { authToken } : {}),
+      }
+      : undefined;
     // 与 GET 一致：只有 env 显式配置了 QUBIUS_PROJECTS_FILE 才读该文件；
     // 未配置时不碰默认路径下的手工文件。
     const configuredProjects = nonEmpty(stored.QUBIUS_PROJECTS_FILE);
@@ -1533,7 +1894,8 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
     });
     if (result === "busy") return { code: "busy", kind: "deploy" };
     spawned = true;
-    return result;
+    // 密码/令牌只在这次响应里返回，GET /api/deploy 只保留“已设置”状态。
+    return oneTime ? { ...result, oneTime } : result;
   } finally {
     // 没有成功交给 detached 脚本时，按 token 清掉 pending，避免锁被占 120s。
     if (useOpsLock && !spawned) {
@@ -1553,6 +1915,13 @@ export interface ReadDeployStateOptions {
   port: number;
   setupRequired?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** 当前进程的配置；传入后在 /api/deploy 里附带 current 摘要。 */
+  config?: AppConfig;
+  /** 服务实际加载的配置文件；--config 指定时用它而不是按 configDir 推导。 */
+  configFile?: string;
+  authEnabled?: boolean;
+  authTokenSource?: "config" | "env" | "file";
+  authTokenFile?: string;
 }
 
 export async function readDeployState(options: ReadDeployStateOptions): Promise<DeployState> {
@@ -1561,13 +1930,40 @@ export async function readDeployState(options: ReadDeployStateOptions): Promise<
     options.role,
     options.repoRoot,
   );
-  const configFile = path.join(
-    configDir,
-    options.role === "secondary" ? "config-secondary.yaml" : "config.yaml",
-  );
+  const configFile = options.configFile
+    ? path.resolve(options.configFile)
+    : path.join(configDir, options.role === "secondary" ? "config-secondary.yaml" : "config.yaml");
   // 只有首次部署（没有配置文件）才需要这个提示，正常页面不必每次都查 git。
   const detectedRepoUrl = options.setupRequired === true
     ? detectRepoUrl(path.resolve(options.repoRoot))
+    : undefined;
+  const current: DeployCurrentConfig | undefined = options.config
+    ? {
+      dataDir: options.config.dataDir,
+      allowedHosts: options.config.allowedHosts?.length
+        ? [...options.config.allowedHosts]
+        : [...DEFAULT_ALLOWED_HOSTS],
+      authEnabled: options.authEnabled === true,
+      ...(options.authTokenSource ? { authTokenSource: options.authTokenSource } : {}),
+      ...(options.authTokenFile ? { authTokenFile: options.authTokenFile } : {}),
+      terminal: options.config.terminal !== false,
+      lan: {
+        enabled: form.lanEnabled,
+        user: form.lanAuthUser,
+        passwordSet: form.lanAuthPasswordSet === true,
+        file: lanCredentialsFile(configDir, options.env ?? process.env),
+      },
+      ...(options.config.archive
+        ? {
+          archive: {
+            dir: options.config.archive.dir,
+            retentionDays: options.config.archive.retentionDays,
+            instance: options.config.archive.instance,
+          },
+        }
+        : {}),
+      role: options.config.role,
+    }
     : undefined;
   return {
     setupRequired: options.setupRequired === true,
@@ -1578,6 +1974,7 @@ export async function readDeployState(options: ReadDeployStateOptions): Promise<
     envFile,
     envSource,
     role: options.role,
+    ...(current ? { current } : {}),
     port: options.port,
     platform: process.platform,
     nodeVersion: process.version,

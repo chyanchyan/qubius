@@ -1,16 +1,22 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { PERMISSIONS, PERMISSION_LABEL } from "../api";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { PERMISSIONS, PERMISSION_LABEL, writeApiToken } from "../api";
 import {
   applyDeploy,
   deployBusyKind,
   deployResidualPids,
+  getConfigToken,
   getDeployState,
   getDeployStatus,
   getGithubVersion,
+  isDataDirChangeError,
   isDeployBusyError,
   isDeployResidualError,
+  resetAuthToken as resetAuthTokenApi,
+  resetLanPassword as resetLanPasswordApi,
   type DeployForm,
   type DeployJob,
+  type DeployOneTimeInfo,
   type DeployPermission,
   type DeployProject,
   type DeployState,
@@ -28,6 +34,7 @@ import { pathIsAbsolute } from "../deploy-path";
 import { Notice } from "../ui";
 import { DeployWizard } from "./DeployWizard";
 import { EdgePanel } from "./EdgePanel";
+import { Hint } from "./FieldHint";
 import { PushSettings } from "./PushSettings";
 import "./DeployPage.css";
 
@@ -245,35 +252,128 @@ function validate(form: DeployForm): ValidationFailure | null {
   return null;
 }
 
-function TextField({ label, value, placeholder, className, onChange }: {
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"
+      fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5.2" y="5.2" width="8.3" height="8.3" rx="1.6" />
+      <path d="M10.8 5.2V3.6A1.6 1.6 0 0 0 9.2 2H3.6A1.6 1.6 0 0 0 2 3.6v5.6a1.6 1.6 0 0 0 1.6 1.6h1.6" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"
+      fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 8.5 6.4 12 13 4.8" />
+    </svg>
+  );
+}
+
+function CopyButton({ value, label = "" }: { value: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  async function onCopy() {
+    if (!(await copyToClipboard(value))) return;
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  }
+  return (
+    <button
+      type="button"
+      className="icon-btn"
+      title={copied ? "已复制" : "复制"}
+      aria-label={copied ? "已复制" : `复制${label}`}
+      onClick={onCopy}
+    >
+      {copied ? <CheckIcon /> : <CopyIcon />}
+    </button>
+  );
+}
+
+interface ResetSecret {
+  title: string;
+  value: string;
+  urls?: string[];
+  hint: string;
+}
+
+function SecretDialog({ secret, onDismiss }: { secret: ResetSecret; onDismiss: () => void }) {
+  return createPortal(
+    <div className="dialog-backdrop">
+      <section
+        className="dialog dialog-wide deploy-once-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="deploy-reset-title"
+      >
+        <div className="deploy-once-head">
+          <h2 id="deploy-reset-title">{secret.title}</h2>
+          <button type="button" className="btn" onClick={onDismiss}>关闭</button>
+        </div>
+        <p className="deploy-once-hint">{secret.hint}</p>
+        {secret.urls && secret.urls.length > 0 && (
+          <dl className="deploy-once-list">
+            {secret.urls.map((url) => (
+              <div key={url}>
+                <dt>访问地址</dt>
+                <dd>
+                  <code className="mono">{url}</code>
+                  <CopyButton value={url} label="访问地址" />
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        <div className="deploy-once-token">
+          <code className="mono">{secret.value}</code>
+          <CopyButton value={secret.value} label={secret.title} />
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+function TextField({ label, value, placeholder, className, type = "text", disabled, hint, action, onChange }: {
   label: string;
   value: string;
   placeholder?: string;
   className?: string;
+  type?: "text" | "password";
+  disabled?: boolean;
+  hint?: string;
+  action?: ReactNode;
   onChange: (value: string) => void;
 }) {
   return (
     <label className={className ? `field ${className}` : "field"}>
-      {label}
-      <input
-        value={value}
-        placeholder={placeholder}
-        autoComplete="off"
-        onChange={(event) => onChange(event.target.value)}
-      />
+      <span className="field-label">{label}{hint && <Hint text={hint} />}</span>
+      <span className={action ? "field-control" : undefined}>
+        <input
+          type={type}
+          value={value}
+          placeholder={placeholder}
+          autoComplete="off"
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {action}
+      </span>
     </label>
   );
 }
 
-function NumberField({ label, value, min, onChange }: {
+function NumberField({ label, value, min, hint, onChange }: {
   label: string;
   value: number;
   min?: number;
+  hint?: string;
   onChange: (value: number) => void;
 }) {
   return (
     <label className="field">
-      {label}
+      <span className="field-label">{label}{hint && <Hint text={hint} />}</span>
       <input
         type="number"
         min={min}
@@ -281,6 +381,126 @@ function NumberField({ label, value, min, onChange }: {
         onChange={(event) => onChange(event.target.value === "" ? 0 : Number(event.target.value))}
       />
     </label>
+  );
+}
+
+const ONE_TIME_STORAGE_KEY = "qubius.deploy.one-time";
+
+/** 一次性凭据跨部署后的自动刷新保留；关闭时清除。 */
+function readOneTimeInfo(): DeployOneTimeInfo | null {
+  try {
+    const raw = window.sessionStorage.getItem(ONE_TIME_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DeployOneTimeInfo;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeOneTimeInfo(info: DeployOneTimeInfo): void {
+  try {
+    window.sessionStorage.setItem(ONE_TIME_STORAGE_KEY, JSON.stringify(info));
+  } catch {
+    // 隐私模式/存储禁用时只保留当前页面状态。
+  }
+}
+
+function clearOneTimeInfo(): void {
+  try {
+    window.sessionStorage.removeItem(ONE_TIME_STORAGE_KEY);
+  } catch {
+    // 忽略。
+  }
+}
+
+/** 局域网是 HTTP，navigator.clipboard 在非安全上下文不可用时回退到 execCommand。 */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // 继续走回退方案。
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function OneTimeCredentials({
+  info,
+  onDismiss,
+}: {
+  info: DeployOneTimeInfo;
+  onDismiss: () => void;
+}) {
+  const token = info.authToken;
+  return createPortal(
+    <div className="dialog-backdrop">
+      <section
+        className="dialog dialog-wide deploy-once-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="deploy-once-title"
+      >
+      <div className="deploy-once-head">
+        <h2 id="deploy-once-title">部署凭据（只显示这一次）</h2>
+        <button type="button" className="btn" onClick={onDismiss}>我已保存，关闭</button>
+      </div>
+      <p className="deploy-once-hint">
+        部署完成后生效。密码和访问令牌不会再次弹出；关闭后如需找回，请查看配置目录的
+        <span className="mono"> lan-proxy.credentials</span>，以及 env 文件或数据目录的
+        <span className="mono"> auth-token</span>。
+      </p>
+      {info.lan && (
+        <dl className="deploy-once-list">
+          {info.lan.urls.map((url) => (
+            <div key={url}>
+              <dt>访问地址</dt>
+              <dd>
+                <code className="mono">{url}</code>
+                <CopyButton value={url} label="访问地址" />
+              </dd>
+            </div>
+          ))}
+          <div>
+            <dt>用户名</dt>
+            <dd>
+              <code className="mono">{info.lan.user}</code>
+              <CopyButton value={info.lan.user} label="用户名" />
+            </dd>
+          </div>
+          <div>
+            <dt>登录密码</dt>
+            <dd>
+              <code className="mono">{info.lan.password}</code>
+              <CopyButton value={info.lan.password} label="登录密码" />
+            </dd>
+          </div>
+        </dl>
+      )}
+      {token && (
+        <div className="deploy-once-token">
+          <span>API 访问令牌</span>
+          <code className="mono">{token}</code>
+          <CopyButton value={token} label="API 访问令牌" />
+        </div>
+      )}
+      </section>
+    </div>,
+    document.body,
   );
 }
 
@@ -332,6 +552,34 @@ export function DeployPage() {
   const submittedPorts = useRef<number[]>([]);
   /** 轮询连续失败次数，用于「当前端口将不再监听」时提前收尾。 */
   const pollFailures = useRef(0);
+
+  /** 重置密码/令牌后的一次性展示；不落盘，关闭即清除。 */
+  const [resetSecret, setResetSecret] = useState<ResetSecret | null>(null);
+  /** 正在重置的类型，用来禁用对应按钮并显示进度。 */
+  const [resetting, setResetting] = useState<"lan" | "token" | null>(null);
+
+  /** 部署响应里的一次性凭据；跨自动刷新保留，关闭后清除。 */
+  const [oneTime, setOneTime] = useState<DeployOneTimeInfo | null>(() => readOneTimeInfo());
+  /** 供轮询回调读取，避免一次性凭据还没保存完就自动刷新。 */
+  const oneTimeRef = useRef<DeployOneTimeInfo | null>(oneTime);
+  function dismissOneTime() {
+    clearOneTimeInfo();
+    oneTimeRef.current = null;
+    setOneTime(null);
+  }
+
+  /** 部署页直接显示当前令牌；登录框之外不用再去数据目录翻 auth-token。 */
+  const [revealedToken, setRevealedToken] = useState("");
+  const [tokenError, setTokenError] = useState("");
+  async function onRevealToken() {
+    setTokenError("");
+    try {
+      const result = await getConfigToken();
+      setRevealedToken(result.token);
+    } catch (reason) {
+      setTokenError(readableError(reason, "读取访问令牌失败"));
+    }
+  }
 
   function setPhaseSafe(next: Phase) {
     setPhase(next);
@@ -409,8 +657,8 @@ export function DeployPage() {
           setPhaseSafe("success");
           stopPolling();
           setPortChanged(!samePort);
-          // 向导模式下不自动刷新：成功后要留在向导里给出「进入系统 / 填 API Key」下一步。
-          const autoReload = samePort && !wizardRef.current;
+          // 向导模式或还有一次性凭据未保存时不自动刷新：先让用户复制密码/令牌。
+          const autoReload = samePort && !wizardRef.current && !oneTimeRef.current;
           setReloading(autoReload);
           if (autoReload) {
             reloadTimer.current = window.setTimeout(() => window.location.reload(), RELOAD_DELAY_MS);
@@ -561,6 +809,54 @@ export function DeployPage() {
     setFormError("");
   }
 
+  /** 服务端重置局域网密码：立即写盘；响应后重启局域网入口，并在弹窗里说明。 */
+  async function resetLanPassword() {
+    if (resetting) return;
+    setResetting("lan");
+    setFormError("");
+    try {
+      const result = await resetLanPasswordApi(form?.lanAuthUser);
+      update({
+        lanEnabled: true,
+        lanAuthUser: result.lan.user,
+        lanAuthPassword: "",
+        lanAuthPasswordSet: true,
+      });
+      setResetSecret({
+        title: "新的局域网登录密码",
+        value: result.lan.password,
+        urls: result.lan.urls,
+        hint: `${result.lan.restartNote} 关闭后不再自动显示；密码保存在配置目录的 lan-proxy.credentials。`,
+      });
+    } catch (reason) {
+      setFormError(readableError(reason, "重置局域网密码失败"));
+    } finally {
+      setResetting(null);
+    }
+  }
+
+  /** 服务端重置 API 令牌：立即生效（旧令牌 60 秒宽限），无需重启服务。 */
+  async function resetAuthToken() {
+    if (resetting) return;
+    setResetting("token");
+    setFormError("");
+    try {
+      const result = await resetAuthTokenApi();
+      // 先更新浏览器令牌，避免重置后页面自己的请求收到 401。
+      writeApiToken(result.token);
+      update({ authMode: "custom", authToken: "", authTokenSet: true });
+      setResetSecret({
+        title: "新的 API 访问令牌",
+        value: result.token,
+        hint: `${result.note} 关闭后不再自动显示；需要时可在「当前环境」查看当前令牌。`,
+      });
+    } catch (reason) {
+      setFormError(readableError(reason, "重置访问令牌失败"));
+    } finally {
+      setResetting(null);
+    }
+  }
+
   /**
    * 打开部署向导。setup 用于首次部署（还没有配置文件），redeploy 用于已有配置时
    * 从第一步重新确认；两种入口都从当前表单值预填，不丢用户已改过的内容。
@@ -661,13 +957,30 @@ export function DeployPage() {
     try {
       // 两个实例共用同一个仓库：副实例地址始终跟随界面上唯一的仓库输入。
       const hosts = effectivePublicHosts(form);
-      const result = await applyDeploy({
+      const payload: DeployForm = {
         ...form,
         publicHost: hosts.publicHost,
         publicHostSecondary: hosts.publicHostSecondary,
         secondaryRepoUrl: form.primaryRepoUrl,
-      }, controller.signal);
+      };
+      let result;
+      try {
+        result = await applyDeploy(payload, controller.signal);
+      } catch (reason) {
+        if (!isDataDirChangeError(reason) || controller.signal.aborted) throw reason;
+        // 数据目录变化且旧目录有会话：二次确认后再带 confirm 重试。
+        const confirmed = window.confirm(
+          `${reason.message}\n\n仍要切换数据目录并重新部署吗？旧目录会原样保留，不会被删除。`,
+        );
+        if (!confirmed) throw reason;
+        result = await applyDeploy({ ...payload, confirmDataDirChange: true }, controller.signal);
+      }
       if (!mounted.current || controller.signal.aborted) return;
+      if (result.oneTime) {
+        oneTimeRef.current = result.oneTime;
+        storeOneTimeInfo(result.oneTime);
+        setOneTime(result.oneTime);
+      }
       activeJobId.current = result.jobId;
       setPhaseSafe("running");
       schedulePoll();
@@ -709,6 +1022,7 @@ export function DeployPage() {
     return (
       <section className="page">
         <h1 tabIndex={-1}>部署</h1>
+        {oneTime && <OneTimeCredentials info={oneTime} onDismiss={dismissOneTime} />}
         <p className="muted">正在读取部署配置…</p>
       </section>
     );
@@ -718,6 +1032,8 @@ export function DeployPage() {
     return (
       <section className="page">
         <h1 tabIndex={-1}>部署</h1>
+        {/* 开启访问令牌后刷新可能先拿到 401；凭据仍要能看见。 */}
+        {oneTime && <OneTimeCredentials info={oneTime} onDismiss={dismissOneTime} />}
         <Notice
           tone="error"
           action={{ label: "重试", onClick: () => setReloadKey((value) => value + 1) }}
@@ -735,10 +1051,10 @@ export function DeployPage() {
   const isWindows = deployState.platform === "win32";
   // Windows 与 Linux 的默认目录习惯不同，占位符跟着平台走。
   const placeholders = {
-    primaryDir: isWindows ? String.raw`C:\Users\you\qubius` : "/srv/qubius",
-    secondaryDir: isWindows ? String.raw`C:\Users\you\co-qubius` : "/srv/co-qubius",
-    dataPrimary: isWindows ? String.raw`C:\Users\you\AppData\Local\qubius` : "/srv/qubius-data",
-    dataSecondary: isWindows ? String.raw`C:\Users\you\AppData\Local\co-qubius` : "/srv/co-qubius-data",
+    primaryDir: isWindows ? String.raw`C:\src\qubius` : "/srv/qubius",
+    secondaryDir: isWindows ? String.raw`C:\src\co-qubius` : "/srv/co-qubius",
+    dataPrimary: isWindows ? String.raw`C:\src\qubius\.qubius\data` : "<checkout>/.qubius/data",
+    dataSecondary: isWindows ? String.raw`C:\src\co-qubius\.qubius\data` : "<副 checkout>/.qubius/data",
     publicHost: isWindows ? "仅本机使用可填 localhost" : "例如 code.example.com",
     publicHostSecondary: isWindows ? "仅本机使用可填 localhost" : "例如 code-bak.example.com",
     nodeBin: isWindows ? String.raw`C:\Program Files\nodejs\node.exe` : "留空时从 PATH / nvm 查找",
@@ -746,6 +1062,10 @@ export function DeployPage() {
 
   if (showWizard) {
     return (
+      <>
+        {resetSecret && (
+          <SecretDialog secret={resetSecret} onDismiss={() => setResetSecret(null)} />
+        )}
       <DeployWizard
         key={wizardKey}
         state={deployState}
@@ -766,6 +1086,7 @@ export function DeployPage() {
         }}
         onRestart={restartWizard}
       />
+      </>
     );
   }
 
@@ -783,10 +1104,14 @@ export function DeployPage() {
   }
 
   function renderStatus() {
-    if (phase === "idle" && !job) return null;
+    if (phase === "idle" && !job) {
+      return oneTime ? <OneTimeCredentials info={oneTime} onDismiss={dismissOneTime} /> : null;
+    }
     // 服务端会保留上一次成功记录；加载到它时只提示，不进入忙碌状态。
     const historicalSuccess = phase === "idle" && job?.state === "success";
     return (
+      <>
+        {oneTime && <OneTimeCredentials info={oneTime} onDismiss={dismissOneTime} />}
       <section
         className="deploy-status"
         data-state={phase}
@@ -843,14 +1168,18 @@ export function DeployPage() {
           <pre className="deploy-log" aria-label="部署日志">{job.logTail}</pre>
         )}
       </section>
+      </>
     );
   }
 
   return (
     <section className="page">
       <h1 tabIndex={-1}>部署</h1>
+      {resetSecret && (
+        <SecretDialog secret={resetSecret} onDismiss={() => setResetSecret(null)} />
+      )}
       <p className="lead">
-        填写实例和目录信息后保存，服务端会自动生成配置、构建并重启。标注「留空自动」的项可以交给服务端推导。
+        填写实例和目录信息后保存，服务端会自动生成配置、构建并重启。标注「留空自动」的项可以交给服务端推导；每个字段旁的问号可以查看详细说明。
       </p>
 
       {!deployState.setupRequired && (
@@ -929,7 +1258,83 @@ export function DeployPage() {
             <dt>env 文件</dt>
             <dd className="mono">{deployState.envFile}</dd>
           </div>
+          {deployState.current && (
+            <>
+              <div>
+                <dt>数据目录</dt>
+                <dd className="mono">{deployState.current.dataDir}</dd>
+              </div>
+              <div>
+                <dt>allowedHosts</dt>
+                <dd className="mono">{deployState.current.allowedHosts.join("、")}</dd>
+              </div>
+              <div>
+                <dt>访问令牌</dt>
+                <dd>
+                  {deployState.current.authEnabled
+                    ? `已启用（${
+                      deployState.current.authTokenSource === "env"
+                        ? "env 文件"
+                        : deployState.current.authTokenSource === "config"
+                          ? "config.yaml"
+                          : "自动生成文件"
+                    }）`
+                    : "未启用"}
+                </dd>
+              </div>
+              <div>
+                <dt>归档</dt>
+                <dd className="mono">
+                  {deployState.current.archive
+                    ? `${deployState.current.archive.dir}（保留 ${deployState.current.archive.retentionDays} 天）`
+                    : "未启用"}
+                </dd>
+              </div>
+              <div>
+                <dt>命令行页</dt>
+                <dd>{deployState.current.terminal ? "开启" : "关闭"}</dd>
+              </div>
+              {deployState.current.lan && (
+                <div>
+                  <dt>局域网入口</dt>
+                  <dd>
+                    {deployState.current.lan.enabled
+                      ? `已启用（${deployState.current.lan.user}${
+                        deployState.current.lan.passwordSet ? "，密码已设置" : "，密码未设置"
+                      }）`
+                      : "未启用"}
+                  </dd>
+                </div>
+              )}
+            </>
+          )}
         </dl>
+
+        {deployState.current?.authEnabled && (
+          <div className="deploy-token">
+            <button type="button" className="btn" onClick={onRevealToken}>
+              显示当前访问令牌
+            </button>
+            {revealedToken && (
+              <>
+                <code className="mono deploy-token-value" onClick={(event) => {
+                  const selection = window.getSelection();
+                  const range = document.createRange();
+                  range.selectNodeContents(event.currentTarget);
+                  selection?.removeAllRanges();
+                  selection?.addRange(range);
+                }}>
+                  {revealedToken}
+                </code>
+                <CopyButton value={revealedToken} label="当前访问令牌" />
+              </>
+            )}
+            {deployState.current.authTokenFile && (
+              <span className="muted">令牌文件：<span className="mono">{deployState.current.authTokenFile}</span></span>
+            )}
+            {tokenError && <span className="error" role="alert">{tokenError}</span>}
+          </div>
+        )}
 
         <div className="deploy-cards">
           <article className="deploy-card">
@@ -1026,6 +1431,7 @@ export function DeployPage() {
                 onChange={(event) => update({ startPrimary: event.target.checked })}
               />
               启动主实例
+              <Hint text="运行主实例 qubius；至少需要启用一个实例。" />
             </label>
             <label className="field field-check">
               <input
@@ -1034,6 +1440,7 @@ export function DeployPage() {
                 onChange={(event) => toggleSecondary(event.target.checked)}
               />
               启动副实例
+              <Hint text="同时运行副实例 co-qubius；需要另一份 checkout。" />
             </label>
             <label className="field field-check" data-disabled={!form.startSecondary}>
               <input
@@ -1043,6 +1450,7 @@ export function DeployPage() {
                 onChange={(event) => update({ clonePeer: event.target.checked })}
               />
               缺少副实例 checkout 时自动克隆
+              <Hint text="副实例 checkout 不存在时，部署任务会按仓库地址自动克隆。" />
             </label>
           </div>
           {!form.startSecondary && <p className="deploy-inline-hint">勾选「启动副实例」后，自动克隆选项才会生效。</p>}
@@ -1060,17 +1468,20 @@ export function DeployPage() {
               label="Checkout 路径"
               value={form.primaryDir}
               placeholder={placeholders.primaryDir}
+              hint="qubius checkout 目录，必须包含 deploy/ 脚本和 package.json；默认当前仓库。"
               onChange={(value) => update({ primaryDir: value })}
             />
             <TextField
               label="数据目录"
               value={form.dataPrimary}
               placeholder={placeholders.dataPrimary}
+              hint="会话、worktree、密钥和日志；默认 <checkout>/.qubius/data，重新部署一般不要改。"
               onChange={(value) => update({ dataPrimary: value })}
             />
             <NumberField
               label="端口"
               min={1}
+              hint="只监听 127.0.0.1；默认 8787。主副实例不能相同。"
               value={form.primaryPort}
               onChange={(value) => update({ primaryPort: value })}
             />
@@ -1078,6 +1489,7 @@ export function DeployPage() {
               label="公网域名"
               value={form.publicHost}
               placeholder={placeholders.publicHost}
+              hint="浏览器实际访问的域名，会写进 allowedHosts；仅本机使用可填 localhost。"
               onChange={(value) => update({ publicHost: value })}
             />
           </div>
@@ -1095,17 +1507,20 @@ export function DeployPage() {
               label="Checkout 路径"
               value={form.secondaryDir}
               placeholder={placeholders.secondaryDir}
+              hint="副实例 co-qubius 的 checkout；默认 ~/co-qubius，必须是另一份仓库。"
               onChange={(value) => update({ secondaryDir: value })}
             />
             <TextField
               label="数据目录"
               value={form.dataSecondary}
               placeholder={placeholders.dataSecondary}
+              hint="副实例的会话和数据；默认 <副 checkout>/.qubius/data，不能和主实例相同。"
               onChange={(value) => update({ dataSecondary: value })}
             />
             <NumberField
               label="端口"
               min={1}
+              hint="副实例只监听 127.0.0.1；默认 8788，不能和主实例相同。"
               value={form.secondaryPort}
               onChange={(value) => update({ secondaryPort: value })}
             />
@@ -1113,10 +1528,14 @@ export function DeployPage() {
               label="公网域名"
               value={form.publicHostSecondary}
               placeholder={placeholders.publicHostSecondary}
+              hint="副实例的访问域名；会写进它的 allowedHosts。仅本机可填 localhost。"
               onChange={(value) => update({ publicHostSecondary: value })}
             />
             <div className="field deploy-readonly deploy-span-2">
-              <span>主实例 checkout（同步用）</span>
+              <span className="field-label">
+                主实例 checkout（同步用）
+                <Hint text="副实例的同步/回滚会把结果推回主实例 checkout 的 origin。" />
+              </span>
               <span className="mono deploy-readonly-value">{form.primaryDir || "—"}</span>
             </div>
             <TextField
@@ -1124,6 +1543,7 @@ export function DeployPage() {
               label="同步分支"
               value={form.primaryRef}
               placeholder="例如 main"
+              hint="副实例同步主实例时使用的 git 分支，默认 main。"
               onChange={(value) => update({ primaryRef: value })}
             />
           </div>
@@ -1141,6 +1561,7 @@ export function DeployPage() {
               label="qubius 仓库，用于自己开发迭代自己"
               value={form.primaryRepoUrl}
               placeholder="http://git.example.com/example/qubius.git"
+              hint="qubius 自己的仓库地址，用于部署前拉取和自动克隆；单实例本机使用可保持默认。"
               onChange={(value) => update({ primaryRepoUrl: value })}
             />
           </div>
@@ -1152,6 +1573,7 @@ export function DeployPage() {
                 onChange={(event) => update({ pullLatest: event.target.checked })}
               />
               部署前从远端拉取最新代码
+              <Hint text="构建前从各 checkout 的 origin 快进拉取当前分支；有未提交改动或分叉时中止部署。" />
             </label>
           </div>
           <p className="deploy-inline-hint">
@@ -1170,37 +1592,194 @@ export function DeployPage() {
           <legend>通用</legend>
           <div className="deploy-grid">
             <div className="field deploy-readonly">
-              <span>配置目录</span>
+              <span className="field-label">
+                配置目录
+                <Hint text="由服务端启动时的 QUBIUS_CONFIG_DIR 决定，运行中不能修改；默认 .qubius/。" />
+              </span>
               <span className="mono deploy-readonly-value">{form.configDir || "—"}</span>
             </div>
             <TextField
               label="LAN 监听地址（留空自动）"
               value={form.lanHost}
               placeholder="留空时自动选择"
+              hint="局域网入口绑定的 IPv4；留空自动选择第一个非回环地址。"
               onChange={(value) => update({ lanHost: value })}
             />
             <TextField
               label="Node 路径（留空自动）"
               value={form.nodeBin}
               placeholder={placeholders.nodeBin}
+              hint="Node.js 22+ 可执行文件；留空从 PATH 和 ~/.nvm 查找。"
               onChange={(value) => update({ nodeBin: value })}
             />
+            <TextField
+              className="deploy-span-2"
+              label="额外允许的访问域名（逗号分隔，可选）"
+              value={form.allowedHostsExtra}
+              placeholder="例如 qa.example.com, [2001:db8::1]"
+              hint="额外的 Host 白名单（逗号分隔），和公网域名一起合并；局域网经 lan-proxy 不需要填。"
+              onChange={(value) => update({ allowedHostsExtra: value })}
+            />
+            <div className="field">
+              <span className="field-label">
+                访问令牌
+                <Hint text="关闭不校验令牌；自动生成会写入数据目录 auth-token；自定义可指定 16-512 个字符。重置会切换到自定义模式。" />
+              </span>
+              <span className="field-control">
+                <select
+                  value={form.authMode}
+                  onChange={(event) => update({ authMode: event.target.value as DeployForm["authMode"] })}
+                >
+                  <option value="off">关闭</option>
+                  <option value="auto">自动生成</option>
+                  <option value="custom">自定义</option>
+                </select>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={resetting !== null}
+                  onClick={resetAuthToken}
+                >
+                  {resetting === "token" ? "重置中…" : "重置令牌"}
+                </button>
+              </span>
+            </div>
+            {form.authMode === "custom" && (
+              <TextField
+                type="password"
+                label="自定义访问令牌"
+                value={form.authToken}
+                placeholder={form.authTokenSet ? "已设置，留空保持不变" : "16 到 512 个字符"}
+                hint="至少 16 个字符；留空沿用已保存的值。需要新令牌时点上面的「重置令牌」。"
+                onChange={(value) => update({ authToken: value })}
+              />
+            )}
+            <NumberField
+              label="并发上限"
+              min={1}
+              hint="同时进行的对话数初始值（1-256）；设置页保存的值优先。"
+              value={form.maxConcurrent}
+              onChange={(value) => update({ maxConcurrent: value })}
+            />
+            <NumberField
+              label="确认超时（分钟，0 不自动拒绝）"
+              min={0}
+              hint="等待提问/授权多久自动拒绝（0-1440）；0 表示一直等待，不显示倒计时。"
+              value={form.approvalTimeoutMinutes}
+              onChange={(value) => update({ approvalTimeoutMinutes: value })}
+            />
+            <label className="field field-check">
+              <input
+                type="checkbox"
+                checked={form.terminal}
+                onChange={(event) => update({ terminal: event.target.checked })}
+              />
+              启用浏览器命令行页
+              <Hint text="打开后是运行服务用户的完整 shell；不需要时关闭。" />
+            </label>
+            <label className="field field-check">
+              <input
+                type="checkbox"
+                checked={form.lanEnabled}
+                onChange={(event) => update({ lanEnabled: event.target.checked })}
+              />
+              启用局域网入口（Basic 认证）
+              <Hint text="启用后启动 lan-proxy；部署成功会一次性显示访问地址、用户名、密码和 API 令牌。" />
+            </label>
+            <TextField
+              label="局域网用户名"
+              value={form.lanAuthUser}
+              placeholder="qubius"
+              disabled={!form.lanEnabled}
+              hint="Basic 认证用户名；不能包含冒号和空白。"
+              onChange={(value) => update({ lanAuthUser: value })}
+            />
+            <TextField
+              type="password"
+              label="局域网登录密码"
+              value={form.lanAuthPassword}
+              placeholder={form.lanAuthPasswordSet ? "已设置，留空保持不变" : "留空自动生成"}
+              disabled={!form.lanEnabled}
+              hint="至少 8 位；留空自动生成或沿用。重置后保存并部署生效。"
+              action={(
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!form.lanEnabled || resetting !== null}
+                  onClick={resetLanPassword}
+                >
+                  {resetting === "lan" ? "重置中…" : "重置密码"}
+                </button>
+              )}
+              onChange={(value) => update({ lanAuthPassword: value })}
+            />
+            <p className="deploy-inline-hint deploy-span-2">
+              启用后部署任务会写入配置目录的 <span className="mono">lan-proxy.credentials</span>（0600），
+              并在部署响应里一次性显示局域网访问地址、用户名、登录密码和 API 访问令牌。
+              关闭本页后不再显示；忘记时可在配置目录查看凭据文件。
+            </p>
+            <details className="field deploy-span-2 deploy-advanced">
+              <summary>高级限制（一般不用改）</summary>
+              <div className="deploy-grid">
+                <NumberField
+                  label="单会话总字节"
+                  min={65536}
+                  hint="单个会话序列化后的最大字节数，默认 8MB；范围 64KB-64MB。"
+                  value={form.limits.transcriptBytes}
+                  onChange={(value) => update({ limits: { ...form.limits, transcriptBytes: value } })}
+                />
+                <NumberField
+                  label="单会话消息条数"
+                  min={50}
+                  hint="单个会话保留的消息条数，默认 5000；范围 50-20000。"
+                  value={form.limits.transcriptMessages}
+                  onChange={(value) => update({ limits: { ...form.limits, transcriptMessages: value } })}
+                />
+                <NumberField
+                  label="单条消息字符数"
+                  min={1024}
+                  hint="单条消息正文的最大字符数，默认 200000；范围 1024-1048576。"
+                  value={form.limits.messageText}
+                  onChange={(value) => update({ limits: { ...form.limits, messageText: value } })}
+                />
+                <NumberField
+                  label="请求体字节数"
+                  min={1048576}
+                  hint="单次 JSON 请求体的最大字节数，默认 28MB；范围 1MB-64MB。"
+                  value={form.limits.requestBodyBytes}
+                  onChange={(value) => update({ limits: { ...form.limits, requestBodyBytes: value } })}
+                />
+                <NumberField
+                  label="历史分页条数"
+                  min={50}
+                  hint="首帧/翻页一次返回的历史消息条数，默认 200；范围 50-2000。"
+                  value={form.limits.historyPage}
+                  onChange={(value) => update({ limits: { ...form.limits, historyPage: value } })}
+                />
+              </div>
+            </details>
             <TextField
               label="归档目录（留空不归档）"
               value={form.archiveDir}
               placeholder="留空表示不归档"
+              hint="会话超过保留天数后先归档到这里再从本机删除；留空不归档、不自动清理。"
               onChange={(value) => update({ archiveDir: value })}
             />
             <NumberField
               label="列表保留天数（到期归档到冷存储）"
               min={1}
+              hint="会话在本机保留的天数，默认 30；范围 1-3650。"
               value={form.archiveRetentionDays}
               onChange={(value) => update({ archiveRetentionDays: value })}
             />
           </div>
           <p className="deploy-inline-hint">
             配置目录由服务端启动时的 QUBIUS_CONFIG_DIR 决定，运行中不能修改。
-            需要换目录时先停止服务，再用 <span className="mono">npm run quickstart</span> 重新启动并选择。
+            默认目录是当前 checkout 内的 <span className="mono">.qubius/</span>（配置、env、数据和日志），
+            已加入 <span className="mono">.gitignore</span>；需要换目录时先停止服务，再用
+            <span className="mono"> npm run quickstart</span> 重新启动并选择。
+            访问令牌选「自动生成」时会写入数据目录的 <span className="mono">auth-token</span>，
+            部署页会显示实际生效的令牌。
           </p>
         </fieldset>
 
@@ -1229,22 +1808,28 @@ export function DeployPage() {
                   label={`项目 ${index + 1} id`}
                   value={project.id}
                   placeholder="例如 sample"
+                  hint="小写字母、数字和连字符；用于 worktree 路径和 URL。"
                   onChange={(value) => updateProject(index, { id: value })}
                 />
                 <TextField
                   label="名称"
                   value={project.name}
                   placeholder="显示名称"
+                  hint="项目列表里显示的名称。"
                   onChange={(value) => updateProject(index, { name: value })}
                 />
                 <TextField
                   label="路径"
                   value={project.path}
                   placeholder="绝对路径"
+                  hint="项目主检出的绝对路径；agent 只能在这个白名单目录里工作。"
                   onChange={(value) => updateProject(index, { path: value })}
                 />
-                <label className="field">
-                  权限
+                <div className="field">
+                  <span className="field-label">
+                    权限
+                    <Hint text="default 改动/命令需确认；acceptEdits 工作区内自动放行；plan 只规划；auto 模型判断；bypassPermissions 全部放行（不建议）。" />
+                  </span>
                   <select
                     value={project.permission}
                     onChange={(event) => updateProject(index, { permission: event.target.value as DeployPermission })}
@@ -1253,14 +1838,15 @@ export function DeployPage() {
                       <option key={permission} value={permission}>{PERMISSION_LABEL[permission]}</option>
                     ))}
                   </select>
-                </label>
-                <label className="field field-check" title="非 git 目录：每个对话使用独立子目录">
+                </div>
+                <label className="field field-check">
                   <input
                     type="checkbox"
                     checked={project.isolated}
                     onChange={(event) => updateProject(index, { isolated: event.target.checked })}
                   />
                   独立目录
+                  <Hint text="只对非 git 目录生效：每个对话使用独立子目录，可并行。" />
                 </label>
                 <button
                   type="button"

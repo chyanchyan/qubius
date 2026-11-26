@@ -135,7 +135,7 @@ export function loadConfig(file: string, env: NodeJS.ProcessEnv = process.env): 
     typeof record.dataDir === "string" && record.dataDir.trim() ? record.dataDir : "./data",
   );
   const maxConcurrent = normalizeMax(record.maxConcurrent);
-  const approvalTimeoutMinutes = normalizeApprovalTimeout(record.approvalTimeoutMinutes);
+  const approvalTimeoutMinutes = normalizeApprovalTimeout(record.approvalTimeoutMinutes, env);
   const projects = normalizeProjects(record.projects, configDir);
   // 页面始终有一个「普通对话」入口；用户可以自己在 projects 里定义同 id 项目来覆盖。
   // 目录放在 dataDir 下，随 dataDir 一起创建和备份，不依赖额外配置。
@@ -159,7 +159,7 @@ export function loadConfig(file: string, env: NodeJS.ProcessEnv = process.env): 
   const role = normalizeRole(record.role);
   const secondary = normalizeSecondary(record.secondary, role, configDir);
   const archive = normalizeArchive(record.archive, configDir, role);
-  const allowedHosts = normalizeAllowedHosts(record.allowedHosts);
+  const allowedHosts = normalizeAllowedHosts(record.allowedHosts, env);
   const auth = normalizeAuth(record.auth, env);
   const authToken = normalizeAuthToken(record.authToken, env);
   const terminal = normalizeTerminal(record.terminal, env);
@@ -203,8 +203,12 @@ function normalizeAuth(value: unknown, env: NodeJS.ProcessEnv): boolean | undefi
     if (typeof value !== "boolean") throw new Error("auth 必须是 true 或 false");
     return value;
   }
-  // 与 envFlag 等价：QUBIUS_AUTH=1（或旧变量 REMOTE_CODER_AUTH=1）时启用。
-  return bootstrapEnv(env, "QUBIUS_AUTH") === "1" ? true : undefined;
+  // 与 envFlag 等价：QUBIUS_AUTH=1（或旧变量 REMOTE_CODER_AUTH=1）时启用；
+  // 显式 QUBIUS_AUTH=0 表示关闭（部署向导「关闭访问令牌」会写这个值）。
+  const fromEnv = bootstrapEnv(env, "QUBIUS_AUTH");
+  if (fromEnv === "1") return true;
+  if (fromEnv === "0") return false;
+  return undefined;
 }
 
 function normalizeAuthToken(value: unknown, env: NodeJS.ProcessEnv): string | undefined {
@@ -248,24 +252,52 @@ function normalizeLimits(value: unknown, env: NodeJS.ProcessEnv): LimitsConfig {
   return result;
 }
 
-function normalizeAllowedHosts(value: unknown): string[] {
-  // 未配置时默认只允许回环主机；返回副本，避免调用方修改共享常量。
-  if (value === undefined) return [...DEFAULT_ALLOWED_HOSTS];
-  if (!Array.isArray(value)) throw new Error("allowedHosts 必须是字符串数组");
-  if (value.length === 0) throw new Error("allowedHosts 不能为空数组；删除该字段则默认只允许回环主机");
+/**
+ * 部署 env 里的额外主机：QUBIUS_ALLOWED_HOSTS（逗号或空白分隔）。
+ * 公网域名由部署模板直接写进 config.yaml 的 allowedHosts，不在这里重复追加，
+ * 免得 manual start 时把部署脚本的占位默认值（code.example.com）也放进来。
+ * 额外域名不走 config.yaml，是因为部署页每次会重新渲染它，手工加的会被覆盖。
+ */
+function extraHostsFromEnv(env: NodeJS.ProcessEnv): string[] {
+  const raw = bootstrapEnv(env, "QUBIUS_ALLOWED_HOSTS");
+  if (!raw) return [];
   const hosts: string[] = [];
-  for (const [index, item] of value.entries()) {
+  for (const part of raw.split(/[,\s]+/)) {
+    const host = part.trim();
+    if (host) hosts.push(host);
+  }
+  return hosts;
+}
+
+function normalizeHosts(items: unknown[], label: string): string[] {
+  const hosts: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, item] of items.entries()) {
     if (typeof item !== "string" || !item.trim()) {
-      throw new Error(`allowedHosts[${index}] 必须是非空字符串`);
+      throw new Error(`${label}[${index}] 必须是非空字符串`);
     }
     let host = item.trim().toLowerCase();
     // 统一的 IPv6 写法：不带方括号的裸地址包上 []，便于和 Host 头匹配。
     if (host.includes(":") && !host.startsWith("[") && !/^[^:]+:\d+$/.test(host)) {
       host = `[${host}]`;
     }
+    if (seen.has(host)) continue;
+    seen.add(host);
     hosts.push(host);
   }
   return hosts;
+}
+
+function normalizeAllowedHosts(value: unknown, env: NodeJS.ProcessEnv): string[] {
+  const fromEnv = extraHostsFromEnv(env);
+  // 未配置时默认只允许回环主机；env 里的额外域名（部署页的访问域名）追加在后面。
+  if (value === undefined) {
+    return normalizeHosts([...DEFAULT_ALLOWED_HOSTS, ...fromEnv], "QUBIUS_ALLOWED_HOSTS");
+  }
+  if (!Array.isArray(value)) throw new Error("allowedHosts 必须是字符串数组");
+  if (value.length === 0) throw new Error("allowedHosts 不能为空数组；删除该字段则默认只允许回环主机");
+  // 显式数组仍作为基础列表；env 追加的域名同样生效，避免部署后丢失。
+  return normalizeHosts([...value, ...fromEnv], "allowedHosts");
 }
 
 function normalizeArchive(
@@ -345,8 +377,17 @@ function normalizeMax(value: unknown): number {
   return value;
 }
 
-function normalizeApprovalTimeout(value: unknown): number {
-  if (value === undefined) return 10;
+function normalizeApprovalTimeout(value: unknown, env: NodeJS.ProcessEnv = process.env): number {
+  if (value === undefined) {
+    // 部署向导把值写进 env，config.yaml 里没写时也生效。
+    const fromEnv = bootstrapEnv(env, "QUBIUS_APPROVAL_TIMEOUT_MINUTES");
+    if (fromEnv === undefined) return 10;
+    const parsed = Number(fromEnv);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 1440) {
+      throw new Error("QUBIUS_APPROVAL_TIMEOUT_MINUTES 必须是 0 到 1440 的整数（0 表示不自动拒绝）");
+    }
+    return parsed;
+  }
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1440) {
     throw new Error("approvalTimeoutMinutes 必须是 0 到 1440 的整数（0 表示不自动拒绝）");
   }
@@ -369,18 +410,6 @@ function bootstrapPort(env: NodeJS.ProcessEnv, name: string, fallback: number): 
   if (raw === undefined) return fallback;
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : fallback;
-}
-
-/** 与部署页一致：Windows 用 %LOCALAPPDATA%，其它平台 ${XDG_DATA_HOME:-$HOME/.local/share}。 */
-function bootstrapDataHome(env: NodeJS.ProcessEnv): string {
-  if (process.platform === "win32") {
-    const local = bootstrapEnv(env, "LOCALAPPDATA");
-    if (local) return local;
-    const profile = bootstrapEnv(env, "USERPROFILE");
-    if (profile) return path.join(profile, "AppData", "Local");
-  }
-  const configured = bootstrapEnv(env, "XDG_DATA_HOME");
-  return configured ? configured : path.join(env.HOME || env.USERPROFILE || os.homedir(), ".local", "share");
 }
 
 function bootstrapMaxConcurrent(env: NodeJS.ProcessEnv): number {
@@ -406,10 +435,13 @@ export function bootstrapConfig(
   const port = role === "secondary"
     ? bootstrapPort(env, "QUBIUS_SECONDARY_PORT", 8788)
     : bootstrapPort(env, "QUBIUS_PRIMARY_PORT", 8787);
+  // 冷启动默认数据目录与配置目录一致：<checkout>/.qubius/data。
+  // 这样 quickstart、部署页和服务端不会各自算出不同的目录，会话也不会“重新部署后消失”。
+  const defaultDataDir = path.join(repoRoot, ".qubius", "data");
   const dataDir = path.resolve(
     role === "secondary"
-      ? bootstrapEnv(env, "QUBIUS_DATA_SECONDARY") ?? path.join(bootstrapDataHome(env), "co-qubius")
-      : bootstrapEnv(env, "QUBIUS_DATA_PRIMARY") ?? path.join(bootstrapDataHome(env), "qubius"),
+      ? bootstrapEnv(env, "QUBIUS_DATA_SECONDARY") ?? defaultDataDir
+      : bootstrapEnv(env, "QUBIUS_DATA_PRIMARY") ?? defaultDataDir,
   );
   const maxConcurrent = bootstrapMaxConcurrent(env);
   // 与 loadConfig 保持一致：页面始终有「普通对话」入口。
@@ -447,7 +479,7 @@ export function bootstrapConfig(
     role,
     secondary,
     archive: undefined,
-    allowedHosts: [...DEFAULT_ALLOWED_HOSTS],
+    allowedHosts: normalizeAllowedHosts(undefined, env),
     auth: bootstrapEnv(env, "QUBIUS_AUTH") === "1" ? true : undefined,
     authToken: bootstrapEnv(env, "QUBIUS_AUTH_TOKEN")?.trim() || undefined,
     terminal: normalizeTerminal(undefined, env),

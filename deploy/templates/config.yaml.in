@@ -9,6 +9,7 @@ listen: 127.0.0.1:{{QUBIUS_PORT}}
 dataDir: {{QUBIUS_CFG_DATA_DIR}}
 allowedHosts: [127.0.0.1, localhost, "[::1]", {{QUBIUS_CFG_PUBLIC_HOST}}]
 maxConcurrent: {{QUBIUS_MAX_CONCURRENT}}
+approvalTimeoutMinutes: {{QUBIUS_APPROVAL_TIMEOUT_MINUTES}}
 # limits 可选，不写时使用默认值；也可以用环境变量覆盖（见 README）。
 # limits:
 #   transcriptBytes: 8388608

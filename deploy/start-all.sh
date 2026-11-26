@@ -1,8 +1,9 @@
 #!/bin/bash
-# 启动或重启主实例（qubius）和副实例（co-qubius）及其内网入口。
+# 启动、重启或停止主实例（qubius）和副实例（co-qubius）及其内网入口。
 # 只在手动调用或 @reboot 时执行一次，不是看门狗。
 #
 # 行为：
+# - `--stop` 只停止实例和局域网入口，不构建、不启动。
 # - 角色由 QUBIUS_START_PRIMARY / QUBIUS_START_SECONDARY 决定（默认都启动）。
 # - QUBIUS_START_LAN=0 时不管理局域网入口（只做本机部署；已在运行的代理不停止）。
 # - flock 串行化（QUBIUS_DEPLOY_LOCK），与安装脚本共用同一把锁。
@@ -21,13 +22,19 @@ NODE_BIN=$(qubius_resolve_node)
 export PATH="$(dirname "$NODE_BIN"):$PATH"
 
 RESTART=0
+STOP=0
 for arg in "$@"; do
   case $arg in
     --restart) RESTART=1 ;;
-    -h|--help) echo "用法：$0 [--restart]"; exit 0 ;;
+    --stop) STOP=1 ;;
+    -h|--help) echo "用法：$0 [--restart|--stop]"; exit 0 ;;
     *) echo "未知参数：$arg" >&2; exit 2 ;;
   esac
 done
+if (( STOP && RESTART )); then
+  echo "--stop 和 --restart 不能同时使用" >&2
+  exit 2
+fi
 
 for cmd in curl ss git flock pgrep sha256sum; do
   command -v "$cmd" >/dev/null 2>&1 || qubius_die "缺少命令：$cmd"
@@ -538,6 +545,22 @@ fi
 # 与安装脚本共用同一把锁，串行化部署/重启。
 exec 9>"$QUBIUS_DEPLOY_LOCK"
 flock -w 600 9 || { echo "等待部署锁超时：$QUBIUS_DEPLOY_LOCK 被其他任务占用" >&2; exit 1; }
+
+# --stop：只停止，不构建、不启动。和 --restart 共用部署锁/ops lock，
+# 避免在部署过程中被另一个进程停掉。
+if (( STOP )); then
+  if (( ${#MANAGED[@]} == 0 )); then
+    echo "没有需要停止的实例（检查 QUBIUS_START_PRIMARY / QUBIUS_START_SECONDARY）" >&2
+    exit 0
+  fi
+  stop_proxies
+  for role in "${MANAGED[@]}"; do
+    stop_instance "${ROLE_LABEL[$role]}" "${ROLE_PORT[$role]}" \
+      "${ROLE_DATA[$role]}/qubius.pid" "${ROLE_REPO[$role]}"
+  done
+  echo "已停止：${MANAGED[*]}"
+  exit 0
+fi
 
 for role in "${MANAGED[@]}"; do
   manage_instance "$role"

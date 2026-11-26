@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 克隆仓库后的首次启动命令：选择 npm 源（可同时选择配置目录），
-// 依次执行 npm ci、npm run build、npm start。
+// 克隆仓库后的首次启动命令：选择 npm 源、配置目录和数据目录（默认都在
+// 当前 checkout 的 .qubius/），依次执行 npm ci、npm run build、npm start。
 // 只用 Node 内置模块，未安装依赖也能运行；Windows 和 POSIX 通用。
 import fs from "node:fs";
 import path from "node:path";
@@ -30,19 +30,20 @@ const npm = "npm";
 
 function help() {
   console.log(`用法：npm run quickstart [-- --registry <地址或序号>] [--config-dir <绝对路径>]
-                     [--port <端口>] [--verbose] [--loglevel <级别>] [--dry-run]
+                     [--data-dir <绝对路径>] [--port <端口>]
+                     [--verbose] [--loglevel <级别>] [--dry-run]
 
 不带参数时会交互式询问：
   1. npm 源：官方源、npmmirror（淘宝）、腾讯云、华为云，也可以直接粘贴地址
-  2. 配置目录：留空使用服务端默认值（Windows 为 %APPDATA%\\qubius，
-     Linux/macOS 为 $XDG_CONFIG_HOME/qubius 或 ~/.config/qubius）
+  2. 配置目录：留空使用 <当前仓库>/.qubius（配置、env、数据和日志都在这里）
   3. 监听端口：默认 8787（副实例 8788），只绑定 127.0.0.1
 
 随后依次执行 npm ci、npm run build、npm start。
 --verbose（或 -v）输出 npm 安装/构建的详细日志，并实时显示依赖的安装脚本输出；
 --loglevel 可以直接指定 npm 日志级别（${NPM_LOGLEVELS.join("、")}），
 不想看日志时用 --loglevel silent。
-只有首次启动需要选择配置目录；运行中的服务不能切换配置目录。
+默认目录都在当前代码目录内，并已加入 .gitignore；只有首次启动需要选择。
+其余配置（访问域名、访问令牌、归档、项目等）在启动后的 /deploy 页面完成。
 已有配置时端口以配置里的 listen 为准；被占用时交互菜单可以选择
 停止占用进程（二次确认；Windows 上强制结束）或换一个空闲端口。`);
 }
@@ -362,14 +363,44 @@ async function main() {
   const registry = await askRegistry(options.registry);
   env.npm_config_registry = registry;
 
-  const configDir = await askConfigDir(options.configDir, env);
-  if (configDir) {
-    if (!options.dryRun) fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
-    env.QUBIUS_CONFIG_DIR = configDir;
+  const repoRoot = path.resolve(process.cwd());
+  // 所有默认目录都在当前代码目录内：配置在 .qubius/，数据在 .qubius/data/。
+  const askedConfigDir = await askConfigDir(options.configDir, env);
+  let configDir = askedConfigDir || defaultConfigDir(env, process.platform, repoRoot);
+  const secondaryRole = env.QUBIUS_SECONDARY === "1";
+  const configName = secondaryRole ? "config-secondary.yaml" : "config.yaml";
+  // 已有仓库根的旧配置时不要另起 .qubius 空实例：继续用旧目录，
+  // 等部署向导重新部署时再迁移（数据目录变化会有二次确认）。
+  const usingLegacy = !askedConfigDir
+    && configDir !== repoRoot
+    && !fs.existsSync(path.join(configDir, configName))
+    && fs.existsSync(path.join(repoRoot, configName));
+  if (usingLegacy) {
+    console.log(`[quickstart] 检测到已有配置 ${path.join(repoRoot, configName)}，本次继续使用仓库根目录`);
+    configDir = repoRoot;
+  }
+  const dirKey = secondaryRole ? "QUBIUS_SECONDARY_DIR" : "QUBIUS_PRIMARY_DIR";
+  const dataKey = secondaryRole ? "QUBIUS_DATA_SECONDARY" : "QUBIUS_DATA_PRIMARY";
+  let dataDir;
+  if (options.dataDir !== undefined && String(options.dataDir).trim()) {
+    dataDir = normalizeConfigDir(options.dataDir, env);
+  } else {
+    dataDir = path.resolve((env[dataKey] ?? "").trim() || path.join(configDir, "data"));
+  }
+  env.QUBIUS_CONFIG_DIR = configDir;
+  env.QUBIUS_REPO_DIR = repoRoot;
+  env[dirKey] = (env[dirKey] ?? "").trim() || repoRoot;
+  env[dataKey] = dataDir;
+  env.QUBIUS_CONFIG = path.join(configDir, configName);
+  if (!options.dryRun) {
+    fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   }
 
   console.log(`\n[quickstart] npm 源：${registry}`);
-  console.log(`[quickstart] 配置目录：${configDir || `默认（${defaultConfigDir(env)}）`}`);
+  console.log(`[quickstart] 配置目录：${configDir}`);
+  console.log(`[quickstart] 数据目录：${dataDir}`);
+  console.log("[quickstart] 其余配置（访问域名、访问令牌、归档、项目等）在启动后的 /deploy 页面完成");
   if (npmLoglevel) {
     console.log(`[quickstart] 详细日志：npm --loglevel=${npmLoglevel}，并实时显示依赖安装脚本输出`);
   }
@@ -407,6 +438,26 @@ async function main() {
     configFile ? configuredPort ?? 8787 : undefined,
   );
   if (!locked) env[envKey] = String(port);
+  if (!options.dryRun && !usingLegacy) {
+    // 首次启动把目录和端口落到 env，之后手工 `npm start` / make start 也能找回同一组值。
+    // 已存在时或沿用仓库根旧配置时不改，后续由 /deploy 向导维护。
+    const envFile = path.join(configDir, "env");
+    if (!fs.existsSync(envFile)) {
+      const lines = [
+        "# 由 quickstart 生成；后续配置请在 /deploy 向导里修改。",
+        `QUBIUS_CONFIG_DIR=${configDir}`,
+        `QUBIUS_REPO_DIR=${repoRoot}`,
+        `${dirKey}=${env[dirKey]}`,
+        `${dataKey}=${dataDir}`,
+        `${envKey}=${port}`,
+        // 单 checkout 首次启动默认只跑当前角色；双实例在 /deploy 里启用。
+        `QUBIUS_START_PRIMARY=${secondaryRole ? "0" : "1"}`,
+        `QUBIUS_START_SECONDARY=${secondaryRole ? "1" : "0"}`,
+      ];
+      fs.writeFileSync(envFile, `${lines.join("\n")}\n`, { mode: 0o600 });
+      console.log(`[quickstart] 已写入 ${envFile}`);
+    }
+  }
   if (port < 1024) {
     console.log(`[quickstart] 提示：端口 ${port} 小于 1024，Linux/macOS 上可能需要额外权限。`);
   }

@@ -349,6 +349,7 @@ function run(label, command, args, options = {}) {
 const configDir = path.resolve(envValue("QUBIUS_CONFIG_DIR") || path.dirname(STATUS));
 const startPrimary = envBool("QUBIUS_START_PRIMARY", false);
 const startSecondary = envBool("QUBIUS_START_SECONDARY", false);
+const startLan = envBool("QUBIUS_START_LAN", true);
 const clonePeer = envBool("QUBIUS_CLONE_PEER", false);
 const pullLatest = envBool("QUBIUS_PULL_LATEST", false);
 const primaryRepo = envValue("QUBIUS_PRIMARY_DIR") ? abs(envValue("QUBIUS_PRIMARY_DIR")) : "";
@@ -356,6 +357,7 @@ const secondaryRepo = envValue("QUBIUS_SECONDARY_DIR") ? abs(envValue("QUBIUS_SE
 const secondaryRepoUrl = envValue("QUBIUS_SECONDARY_REPO_URL") || envValue("QUBIUS_PRIMARY_REPO_URL") || "";
 const primaryRef = envValue("QUBIUS_PRIMARY_REF") || "main";
 const maxConcurrent = envInt("QUBIUS_MAX_CONCURRENT", 4);
+const approvalTimeoutMinutes = envInt("QUBIUS_APPROVAL_TIMEOUT_MINUTES", 10);
 const archiveDir = envValue("QUBIUS_ARCHIVE_DIR") ? abs(envValue("QUBIUS_ARCHIVE_DIR")) : "";
 const archiveRetentionDays = envInt("QUBIUS_ARCHIVE_RETENTION_DAYS", 30);
 const projectsFileRaw = envValue("QUBIUS_PROJECTS_FILE");
@@ -556,6 +558,7 @@ function writeConfig(entry) {
     port: entry.port,
     publicHost: entry.publicHost,
     maxConcurrent,
+    approvalTimeoutMinutes,
     archiveDir,
     archiveRetentionDays,
     archiveInstance: entry.role === "secondary" ? "bak" : "main",
@@ -889,9 +892,13 @@ async function main() {
     await startRole(entry);
   }
 
-  for (const entry of entries) {
-    await stopProxy(entry);
-    await startProxy(entry);
+  if (startLan) {
+    for (const entry of entries) {
+      await stopProxy(entry);
+      await startProxy(entry);
+    }
+  } else {
+    say("跳过局域网入口（QUBIUS_START_LAN=0）");
   }
 
   finish("success", "done", "部署完成");

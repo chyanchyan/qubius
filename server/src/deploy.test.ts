@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { parse as parseYaml } from "yaml";
 import {
+  DeployDataDirChangeError,
   DeployValidationError,
   applyDeploy,
   deployBusy,
@@ -79,6 +80,7 @@ function validForm(base: string): DeployForm {
     secondaryPort: 8788,
     publicHost: "code.example.com",
     publicHostSecondary: "",
+    allowedHostsExtra: "",
     lanHost: "",
     configDir: path.join(base, "config"),
     primaryDir: primary,
@@ -88,6 +90,22 @@ function validForm(base: string): DeployForm {
     primaryRepoUrl: "http://example.com/example/qubius.git",
     secondaryRepoUrl: "http://example.com/example/co-qubius.git",
     primaryRef: "main",
+    authMode: "off",
+    authToken: "",
+    terminal: true,
+    maxConcurrent: 4,
+    approvalTimeoutMinutes: 10,
+    limits: {
+      transcriptBytes: 8 * 1024 * 1024,
+      transcriptMessages: 5_000,
+      messageText: 200_000,
+      requestBodyBytes: 28_000_000,
+      historyPage: 200,
+    },
+    lanEnabled: false,
+    lanAuthUser: "qubius",
+    lanAuthPassword: "",
+    lanAuthPasswordSet: false,
     archiveDir: "",
     archiveRetentionDays: 30,
     nodeBin: "",
@@ -103,10 +121,11 @@ function withSecondary(form: DeployForm): DeployForm {
   };
 }
 
-test("默认值来自 $HOME，端口和仓库地址符合部署约定", () => {
+test("默认目录收敛到 checkout 内的 .qubius，端口和仓库地址符合部署约定", () => {
   const home = tmp();
-  const { configDir, envFile, form } = deriveDeployForm({ HOME: home });
-  assert.equal(configDir, path.join(home, ".config", "qubius"));
+  const repoRoot = path.join(home, "repo");
+  const { configDir, envFile, form } = deriveDeployForm({ HOME: home }, "primary", repoRoot);
+  assert.equal(configDir, path.join(repoRoot, ".qubius"));
   assert.equal(envFile, path.join(configDir, "env"));
   assert.equal(form.startPrimary, true);
   assert.equal(form.startSecondary, false);
@@ -116,12 +135,24 @@ test("默认值来自 $HOME，端口和仓库地址符合部署约定", () => {
   assert.equal(form.secondaryPort, 8788);
   assert.equal(form.publicHost, "");
   assert.equal(form.publicHostSecondary, "");
+  assert.equal(form.allowedHostsExtra, "");
   assert.equal(form.lanHost, "");
   assert.equal(form.configDir, configDir);
-  assert.equal(form.primaryDir, path.join(home, "qubius"));
+  assert.equal(form.primaryDir, repoRoot);
   assert.equal(form.secondaryDir, path.join(home, "co-qubius"));
-  assert.equal(form.dataPrimary, path.join(home, ".local", "share", "qubius"));
-  assert.equal(form.dataSecondary, path.join(home, ".local", "share", "co-qubius"));
+  assert.equal(form.dataPrimary, path.join(repoRoot, ".qubius", "data"));
+  assert.equal(form.dataSecondary, path.join(home, "co-qubius", ".qubius", "data"));
+  assert.equal(form.authMode, "off");
+  assert.equal(form.terminal, true);
+  assert.equal(form.maxConcurrent, 4);
+  assert.equal(form.approvalTimeoutMinutes, 10);
+  assert.deepEqual(form.limits, {
+    transcriptBytes: 8 * 1024 * 1024,
+    transcriptMessages: 5_000,
+    messageText: 200_000,
+    requestBodyBytes: 28_000_000,
+    historyPage: 200,
+  });
   assert.equal(form.primaryRepoUrl, "http://gitea.example.com/example/qubius.git");
   assert.equal(form.secondaryRepoUrl, "http://gitea.example.com/example/qubius.git");
   assert.equal(form.primaryRef, "main");
@@ -208,71 +239,58 @@ test("从 env 文件读取表单，支持引号、$HOME 和外部 projects 文�
   }]);
 });
 
-test("XDG 目录与 deploy/lib.sh 保持一致", () => {
+test("XDG 环境变量不再影响默认目录，显式 QUBIUS_* 仍然优先", () => {
   const home = tmp();
+  const repoRoot = path.join(home, "repo");
   const { configDir, form } = deriveDeployForm({
     HOME: home,
     XDG_CONFIG_HOME: path.join(home, "xdg-config"),
     XDG_DATA_HOME: path.join(home, "xdg-data"),
-  });
-  assert.equal(configDir, path.join(home, "xdg-config", "qubius"));
-  assert.equal(form.dataPrimary, path.join(home, "xdg-data", "qubius"));
-  assert.equal(form.dataSecondary, path.join(home, "xdg-data", "co-qubius"));
+  }, "primary", repoRoot);
+  assert.equal(configDir, path.join(repoRoot, ".qubius"));
+  assert.equal(form.dataPrimary, path.join(repoRoot, ".qubius", "data"));
+  const explicit = deriveDeployForm({
+    HOME: home,
+    QUBIUS_CONFIG_DIR: path.join(home, "cfg"),
+    QUBIUS_DATA_PRIMARY: path.join(home, "data"),
+  }, "primary", repoRoot);
+  assert.equal(explicit.configDir, path.join(home, "cfg"));
+  assert.equal(explicit.form.dataPrimary, path.join(home, "data"));
 });
 
-test("Windows 默认目录使用 %APPDATA% 和 %LOCALAPPDATA%", () => {
+test("Windows 也使用 checkout 内的 .qubius，只是默认公网域名是 localhost", () => {
   const profile = tmp();
-  const appData = path.join(profile, "AppData", "Roaming");
-  const localAppData = path.join(profile, "AppData", "Local");
+  const repoRoot = path.join(profile, "repo");
   const { configDir, envFile, form } = deriveDeployForm(
-    { USERPROFILE: profile, APPDATA: appData, LOCALAPPDATA: localAppData },
+    { USERPROFILE: profile, APPDATA: path.join(profile, "AppData", "Roaming") },
     "primary",
-    undefined,
+    repoRoot,
     "win32",
   );
-  assert.equal(configDir, path.join(appData, "qubius"));
+  assert.equal(configDir, path.join(repoRoot, ".qubius"));
   assert.equal(envFile, path.join(configDir, "env"));
-  assert.equal(form.dataPrimary, path.join(localAppData, "qubius"));
-  assert.equal(form.dataSecondary, path.join(localAppData, "co-qubius"));
+  assert.equal(form.dataPrimary, path.join(repoRoot, ".qubius", "data"));
+  assert.equal(form.dataSecondary, path.join(profile, "co-qubius", ".qubius", "data"));
   // 真实 Windows 环境默认 localhost，本机部署不用先想域名。
   assert.equal(form.publicHost, "localhost");
-  // HOME 存在时仍然优先 APPDATA（Windows 的机器级配置习惯）。
-  const withHome = deriveDeployForm(
-    { HOME: path.join(profile, "home"), APPDATA: appData, LOCALAPPDATA: localAppData },
-    "primary",
-    undefined,
-    "win32",
-  );
-  assert.equal(withHome.configDir, path.join(appData, "qubius"));
   // 显式 QUBIUS_CONFIG_DIR 永远优先。
   const explicit = deriveDeployForm(
-    { USERPROFILE: profile, APPDATA: appData, QUBIUS_CONFIG_DIR: path.join(profile, "cfg") },
+    { USERPROFILE: profile, APPDATA: path.join(profile, "AppData", "Roaming"), QUBIUS_CONFIG_DIR: path.join(profile, "cfg") },
     "primary",
-    undefined,
+    repoRoot,
     "win32",
   );
   assert.equal(explicit.configDir, path.join(profile, "cfg"));
 });
 
-test("只有 Windows 默认把 repoRoot 当作主实例目录", () => {
+test("所有平台默认都把 repoRoot 当作主实例目录", () => {
   const home = tmp();
   const repoRoot = path.join(home, "some-clone");
   const linux = deriveDeployForm({ HOME: home }, "primary", repoRoot, "linux");
-  assert.equal(linux.form.primaryDir, path.join(home, "qubius"));
-  // 副实例在 Windows 上也不跟随 repoRoot。
-  const secondary = deriveDeployForm(
-    { USERPROFILE: home, APPDATA: path.join(home, "AppData", "Roaming") },
-    "secondary",
-    repoRoot,
-    "win32",
-  );
-  assert.equal(secondary.form.primaryDir, path.join(home, "qubius"));
-  const win = deriveDeployForm(
-    { USERPROFILE: home, APPDATA: path.join(home, "AppData", "Roaming") },
-    "primary",
-    repoRoot,
-    "win32",
-  );
+  assert.equal(linux.form.primaryDir, repoRoot);
+  const secondary = deriveDeployForm({ HOME: home }, "secondary", repoRoot, "linux");
+  assert.equal(secondary.form.primaryDir, repoRoot);
+  const win = deriveDeployForm({ USERPROFILE: home }, "primary", repoRoot, "win32");
   assert.equal(win.form.primaryDir, repoRoot);
 });
 
@@ -519,8 +537,133 @@ test("env 合并保留未知变量和注释，只替换受管的 QUBIUS_* 键", 
   assert.match(merged, /^QUBIUS_PRIMARY_PORT=8787$/m);
   assert.equal((merged.match(/QUBIUS_PRIMARY_PORT=/g) ?? []).length, 1);
   assert.match(merged, /^QUBIUS_START_PRIMARY=1$/m);
-  // 并发上限已移到设置页，部署页不再管理该变量；已有的 env 行保持原样。
-  assert.match(merged, /^QUBIUS_MAX_CONCURRENT=6$/m);
+  // 并发上限也收敛进部署向导，已有的 env 行会被表单值替换。
+  assert.match(merged, /^QUBIUS_MAX_CONCURRENT=4$/m);
+  assert.equal((merged.match(/QUBIUS_MAX_CONCURRENT=/g) ?? []).length, 1);
+});
+
+test("访问令牌、额外域名、终端和超时写入 env 并由表单校验", () => {
+  const base = tmp();
+  const form = {
+    ...validForm(base),
+    allowedHostsExtra: "qa.example.com, [2001:db8::1]",
+    authMode: "auto" as const,
+    terminal: false,
+    maxConcurrent: 6,
+    approvalTimeoutMinutes: 0,
+  };
+  const values = deployEnvValues(form, "");
+  assert.equal(values.QUBIUS_ALLOWED_HOSTS, "qa.example.com, [2001:db8::1]");
+  assert.equal(values.QUBIUS_AUTH, "1");
+  assert.equal(values.QUBIUS_AUTH_TOKEN, "");
+  assert.equal(values.QUBIUS_TERMINAL, "0");
+  assert.equal(values.QUBIUS_MAX_CONCURRENT, "6");
+  assert.equal(values.QUBIUS_APPROVAL_TIMEOUT_MINUTES, "0");
+  assert.equal(values.QUBIUS_LIMIT_TRANSCRIPT_BYTES, String(8 * 1024 * 1024));
+  assert.equal(values.QUBIUS_LIMIT_TRANSCRIPT_MESSAGES, "5000");
+  assert.equal(values.QUBIUS_LIMIT_MESSAGE_TEXT, "200000");
+  assert.equal(values.QUBIUS_LIMIT_REQUEST_BODY, "28000000");
+  assert.equal(values.QUBIUS_HISTORY_PAGE, "200");
+  assert.equal(values.QUBIUS_START_LAN, "0");
+  assert.equal(values.QUBIUS_LAN_USER, "qubius");
+
+  const custom = deployEnvValues(
+    { ...form, authMode: "custom", authToken: "0123456789abcdef" },
+    "",
+  );
+  assert.equal(custom.QUBIUS_AUTH, "1");
+  assert.equal(custom.QUBIUS_AUTH_TOKEN, "0123456789abcdef");
+
+  const parsed = validateDeployForm(form);
+  assert.equal(parsed.allowedHostsExtra, "qa.example.com, [2001:db8::1]");
+  assert.equal(parsed.authMode, "auto");
+  assert.equal(parsed.terminal, false);
+  assert.equal(parsed.maxConcurrent, 6);
+  assert.equal(parsed.approvalTimeoutMinutes, 0);
+  assert.throws(() => validateDeployForm({ ...form, authMode: "bad" }), /访问令牌模式/);
+  assert.throws(
+    () => validateDeployForm({ ...form, authMode: "custom", authToken: "short" }),
+    /16 到 512/,
+  );
+  assert.throws(
+    () => validateDeployForm({ ...form, allowedHostsExtra: "bad host!" }),
+    /不是合法域名或 IP/,
+  );
+  assert.throws(() => validateDeployForm({ ...form, maxConcurrent: 0 }), /并发上限/);
+  assert.throws(
+    () => validateDeployForm({ ...form, approvalTimeoutMinutes: 1441 }),
+    /确认超时/,
+  );
+  assert.throws(
+    () => validateDeployForm({ ...form, limits: { ...form.limits, transcriptBytes: 1 } }),
+    /单会话总字节上限/,
+  );
+  assert.throws(
+    () => validateDeployForm({ ...form, limits: { ...form.limits, historyPage: 5000 } }),
+    /历史分页条数/,
+  );
+  assert.throws(
+    () => validateDeployForm({ ...form, lanAuthUser: "bad user" }),
+    /局域网用户名/,
+  );
+  assert.throws(
+    () => validateDeployForm({ ...form, lanAuthPassword: "short" }),
+    /局域网密码/,
+  );
+  // 旧页面不提交这些字段时仍能部署。
+  const legacy: Record<string, unknown> = { ...validForm(base) };
+  for (const key of [
+    "allowedHostsExtra",
+    "authMode",
+    "authToken",
+    "terminal",
+    "maxConcurrent",
+    "approvalTimeoutMinutes",
+    "limits",
+    "lanEnabled",
+    "lanAuthUser",
+    "lanAuthPassword",
+  ]) {
+    delete legacy[key];
+  }
+  const accepted = validateDeployForm(legacy);
+  assert.equal(accepted.allowedHostsExtra, "");
+  assert.equal(accepted.authMode, "off");
+  assert.equal(accepted.terminal, true);
+  assert.equal(accepted.maxConcurrent, 4);
+  assert.equal(accepted.approvalTimeoutMinutes, 10);
+  assert.equal(accepted.lanEnabled, false);
+  assert.equal(accepted.lanAuthUser, "qubius");
+  assert.equal(accepted.lanAuthPassword, "");
+  assert.deepEqual(accepted.limits, {
+    transcriptBytes: 8 * 1024 * 1024,
+    transcriptMessages: 5_000,
+    messageText: 200_000,
+    requestBodyBytes: 28_000_000,
+    historyPage: 200,
+  });
+});
+
+test("数据目录变化且旧目录有会话时要求显式确认", () => {
+  const base = tmp();
+  const form = validForm(base);
+  const env = { HOME: base, QUBIUS_CONFIG_DIR: form.configDir };
+  const oldData = path.join(base, "old-data");
+  fs.mkdirSync(path.join(oldData, "sessions"), { recursive: true });
+  fs.writeFileSync(path.join(oldData, "sessions", "session.json"), "{}\n");
+  fs.mkdirSync(form.configDir, { recursive: true });
+  fs.writeFileSync(path.join(form.configDir, "config.yaml"), `dataDir: '${oldData}'\n`);
+
+  assert.throws(
+    () => applyDeploy({ body: form, repoRoot: base, env, platform: "linux" }),
+    (error: unknown) => {
+      assert.ok(error instanceof DeployDataDirChangeError);
+      assert.equal(error.currentDataDir, oldData);
+      assert.equal(error.targetDataDir, form.dataPrimary);
+      assert.equal(error.sessions, 1);
+      return true;
+    },
+  );
 });
 
 test("pullLatest 写入 env、从 env 读回；旧表单缺字段按 false 处理", () => {
@@ -946,6 +1089,53 @@ test("applyDeploy 写入 QUBIUS_ENV 指定的文件", () => {
   assert.match(content, /^QUBIUS_PRIMARY_PORT=8787$/m);
   assert.match(content, /^QUBIUS_GITEA_TOKEN=keep-me$/m);
   assert.equal(fs.existsSync(path.join(configDir, "env")), false);
+});
+
+test("applyDeploy 一次性返回局域网凭据和访问令牌，后续只保留已设置状态", () => {
+  const base = tmp();
+  const configDir = path.join(base, "config");
+  fs.mkdirSync(configDir, { recursive: true });
+  makeRepo(base);
+  const token = "0123456789abcdef";
+  const result = applyDeploy({
+    body: {
+      ...validForm(base),
+      configDir,
+      lanEnabled: true,
+      lanHost: "192.168.1.10",
+      lanAuthUser: "lanuser",
+      lanAuthPassword: "secret-pass-123",
+      authMode: "custom" as const,
+      authToken: token,
+    },
+    repoRoot: base,
+    env: { HOME: base, QUBIUS_CONFIG_DIR: configDir },
+    platform: "darwin",
+  });
+  assert.ok("jobId" in result, `期望启动部署任务，实际：${JSON.stringify(result)}`);
+  assert.deepEqual(result.oneTime?.lan, {
+    user: "lanuser",
+    password: "secret-pass-123",
+    urls: ["http://192.168.1.10:8787"],
+  });
+  assert.equal(result.oneTime?.authToken, token);
+
+  const credentials = path.join(configDir, "lan-proxy.credentials");
+  assert.equal(fs.readFileSync(credentials, "utf8"), "lanuser:secret-pass-123\n");
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(credentials).mode & 0o777, 0o600);
+  }
+
+  // GET 侧只回传用户名和“密码已设置”，不再包含明文密码。
+  const derived = deriveDeployForm({
+    HOME: base,
+    QUBIUS_CONFIG_DIR: configDir,
+    QUBIUS_START_LAN: "1",
+  });
+  assert.equal(derived.form.lanEnabled, true);
+  assert.equal(derived.form.lanAuthUser, "lanuser");
+  assert.equal(derived.form.lanAuthPassword, "");
+  assert.equal(derived.form.lanAuthPasswordSet, true);
 });
 
 test("detectRepoUrl 只返回 http(s) origin", () => {

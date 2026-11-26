@@ -24,7 +24,12 @@ interface Harness {
   close: () => Promise<void>;
 }
 
-async function startHarness(options: { setupRequired?: boolean } = {}): Promise<Harness> {
+async function startHarness(options: {
+  setupRequired?: boolean;
+  authToken?: string;
+  authTokenSource?: "config" | "env" | "file";
+  authTokenFile?: string;
+} = {}): Promise<Harness> {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "qubius-deploy-http-"));
   const dataDir = path.join(base, "data");
   const configDir = path.join(base, "config");
@@ -79,6 +84,9 @@ async function startHarness(options: { setupRequired?: boolean } = {}): Promise<
     permissions: { current: {} },
     repoRoot: base,
     setupRequired: options.setupRequired,
+    ...(options.authToken ? { authToken: options.authToken } : {}),
+    ...(options.authTokenSource ? { authTokenSource: options.authTokenSource } : {}),
+    ...(options.authTokenFile ? { authTokenFile: options.authTokenFile } : {}),
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as AddressInfo;
@@ -226,7 +234,7 @@ test("GET /api/deploy/github-version 没有镜像时返回可展示的状态", a
   try {
     const result = await call<GithubVersionState>(harness, "GET", "/api/deploy/github-version");
     assert.equal(result.status, 200);
-    assert.equal(result.data.error, "没有找到 GitHub 镜像");
+    assert.match(result.data.error ?? "", /没有找到 GitHub 镜像/);
     assert.equal(result.data.status, "unknown");
     assert.equal(typeof result.data.current, "string");
     assert.ok(!Number.isNaN(Date.parse(result.data.checkedAt)));
@@ -529,6 +537,170 @@ test("env 未引用默认 projects.yaml 时 GET 不读、apply 不覆盖手工�
       (value) => value.data.job?.state === "success" && value.data.job.jobId === applied.data.jobId,
     );
     assert.equal(fs.readFileSync(manual, "utf8"), original);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("健康检查提示令牌文件，/api/config/token 需要令牌且返回当前令牌", async () => {
+  const token = "0123456789abcdef";
+  const tokenFile = "/tmp/qubius-auth-token";
+  const harness = await startHarness({
+    authToken: token,
+    authTokenSource: "file",
+    authTokenFile: tokenFile,
+  });
+  try {
+    const health = await call<{ authRequired: boolean; authTokenFile?: string }>(harness, "GET", "/api/health");
+    assert.equal(health.status, 200);
+    assert.equal(health.data.authRequired, true);
+    assert.equal(health.data.authTokenFile, tokenFile);
+
+    // 部署页展示当前生效的数据目录和域名白名单，不用再翻 config.yaml。
+    const state = await fetch(`${harness.url}/api/deploy`, {
+      headers: { "x-qubius-token": token },
+    });
+    assert.equal(state.status, 200);
+    const deploy = await state.json() as DeployState;
+    assert.equal(deploy.current?.dataDir, harness.dataDir);
+    assert.ok(deploy.current?.allowedHosts.includes("127.0.0.1"));
+
+    // 没有令牌时被通用鉴权拦住。
+    const denied = await call(harness, "GET", "/api/config/token");
+    assert.equal(denied.status, 401);
+
+    const revealed = await fetch(`${harness.url}/api/config/token`, {
+      headers: { "x-qubius-token": token },
+    });
+    assert.equal(revealed.status, 200);
+    const data = await revealed.json() as { token: string; source: string; file?: string };
+    assert.equal(data.token, token);
+    assert.equal(data.source, "file");
+    assert.equal(data.file, tokenFile);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("部署响应一次性返回局域网凭据和令牌，GET 只保留已设置状态", async () => {
+  const harness = await startHarness();
+  try {
+    makeFakeJob(harness.base);
+    const repo = makeRepo(harness.base, "primary");
+    const state = await call<DeployState>(harness, "GET", "/api/deploy");
+    const token = "0123456789abcdef";
+    const form: DeployForm = {
+      ...state.data.form,
+      primaryDir: repo,
+      dataPrimary: path.join(harness.base, "data-primary"),
+      publicHost: "code.example.com",
+      startPrimary: true,
+      startSecondary: false,
+      lanEnabled: true,
+      lanHost: "192.168.1.10",
+      lanAuthUser: "lanuser",
+      lanAuthPassword: "secret-pass-123",
+      authMode: "custom",
+      authToken: token,
+    };
+    const applied = await call<{
+      ok: boolean;
+      jobId: string;
+      oneTime?: { lan?: { user: string; password: string; urls: string[] }; authToken?: string };
+    }>(harness, "POST", "/api/deploy/apply", form);
+    assert.equal(applied.status, 202);
+    assert.deepEqual(applied.data.oneTime?.lan, {
+      user: "lanuser",
+      password: "secret-pass-123",
+      urls: ["http://192.168.1.10:19181"],
+    });
+    assert.equal(applied.data.oneTime?.authToken, token);
+
+    const credentials = path.join(harness.configDir, "lan-proxy.credentials");
+    assert.equal(fs.readFileSync(credentials, "utf8"), "lanuser:secret-pass-123\n");
+
+    // 后续 GET 不再包含密码，只告诉页面“已设置”。
+    const next = await call<DeployState>(harness, "GET", "/api/deploy");
+    assert.equal(next.data.form.lanEnabled, true);
+    assert.equal(next.data.form.lanAuthUser, "lanuser");
+    assert.equal(next.data.form.lanAuthPassword, "");
+    assert.equal(next.data.form.lanAuthPasswordSet, true);
+    assert.equal(next.data.current?.lan?.passwordSet, true);
+
+    await waitFor(
+      () => call<{ job: { state: string } | null }>(harness, "GET", "/api/deploy/status"),
+      (value) => value.data.job?.state === "success",
+    );
+  } finally {
+    await harness.close();
+  }
+});
+
+test("POST /api/deploy/lan-credentials/reset 立即写凭据并在响应里返回一次", async () => {
+  const harness = await startHarness();
+  try {
+    const response = await fetch(`${harness.url}/api/deploy/lan-credentials/reset`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user: "lanuser" }),
+    });
+    assert.equal(response.status, 200);
+    const data = await response.json() as {
+      ok: boolean;
+      lan: { user: string; password: string; urls: string[]; restart: string; restartNote: string };
+    };
+    assert.equal(data.ok, true);
+    assert.equal(data.lan.user, "lanuser");
+    assert.ok(data.lan.password.length >= 12);
+    assert.equal(data.lan.restart, "none");
+    assert.match(data.lan.restartNote, /未运行/);
+
+    const credentials = path.join(harness.configDir, "lan-proxy.credentials");
+    assert.match(fs.readFileSync(credentials, "utf8"), /^lanuser:/);
+    assert.ok(fs.readFileSync(credentials, "utf8").includes(data.lan.password));
+
+    // 后续 GET 只返回“已设置”，不包含密码。
+    const state = await call<DeployState>(harness, "GET", "/api/deploy");
+    assert.equal(state.data.form.lanEnabled, true);
+    assert.equal(state.data.form.lanAuthUser, "lanuser");
+    assert.equal(state.data.form.lanAuthPassword, "");
+    assert.equal(state.data.form.lanAuthPasswordSet, true);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("POST /api/deploy/auth-token/reset 立即切换令牌，旧令牌短暂宽限", async () => {
+  const oldToken = "old-token-0123456789";
+  const harness = await startHarness({ authToken: oldToken });
+  try {
+    const reset = await fetch(`${harness.url}/api/deploy/auth-token/reset`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-qubius-token": oldToken },
+      body: "{}",
+    });
+    assert.equal(reset.status, 200);
+    const data = await reset.json() as { ok: boolean; token: string; note: string; restartNeeded: boolean };
+    assert.equal(data.ok, true);
+    assert.equal(data.token.length, 64);
+    assert.equal(data.restartNeeded, false);
+    assert.match(data.note, /无需重启/);
+
+    const withNew = await fetch(`${harness.url}/api/health`, {
+      headers: { "x-qubius-token": data.token },
+    });
+    assert.equal(withNew.status, 200);
+    const withOld = await fetch(`${harness.url}/api/deploy`, {
+      headers: { "x-qubius-token": oldToken },
+    });
+    assert.equal(withOld.status, 200, "60 秒宽限期内旧令牌仍可用");
+    const without = await fetch(`${harness.url}/api/deploy`);
+    assert.equal(without.status, 401);
+
+    const envFile = path.join(harness.configDir, "env");
+    const envText = fs.readFileSync(envFile, "utf8");
+    assert.match(envText, /^QUBIUS_AUTH=1$/m);
+    assert.match(envText, new RegExp(`^QUBIUS_AUTH_TOKEN=${data.token}$`, "m"));
   } finally {
     await harness.close();
   }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   compareVersions,
   fetchGithubVersion,
   githubRepoFromRemote,
+  resolveGithubRepo,
 } from "./github-version.js";
 
 const ENV_KEY = "QUBIUS_GITHUB_REPO";
@@ -96,6 +98,32 @@ test("拉取失败时返回 error 而不是抛错", async () => {
   });
 });
 
+test("QUBIUS_GITHUB_REPO 接受完整 GitHub URL", () => {
+  assert.equal(
+    resolveGithubRepo(tempRepo(), {
+      QUBIUS_GITHUB_REPO: "https://github.com/chyanchyan/qubius.git",
+    }),
+    "chyanchyan/qubius",
+  );
+});
+
+test("没有名为 github 的 remote 时回退到 origin / 其它 github 地址", () => {
+  const dir = tempRepo();
+  execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:chyanchyan/qubius.git"]);
+  assert.equal(resolveGithubRepo(dir, {}), "chyanchyan/qubius");
+
+  // 名为 github 的 remote 优先于 origin。
+  execFileSync("git", ["-C", dir, "remote", "add", "github", "https://github.com/other/mirror.git"]);
+  assert.equal(resolveGithubRepo(dir, {}), "other/mirror");
+
+  // 非 GitHub 的 origin 不会误识别。
+  const local = tempRepo();
+  execFileSync("git", ["init", "-q", local]);
+  execFileSync("git", ["-C", local, "remote", "add", "origin", "http://gitlab.example.com/a/b.git"]);
+  assert.equal(resolveGithubRepo(local, {}), undefined);
+});
+
 test("没有镜像配置时不发请求", async () => {
   await withRepoEnv(undefined, async () => {
     let called = false;
@@ -108,7 +136,7 @@ test("没有镜像配置时不发请求", async () => {
       }) as typeof fetch,
     });
     assert.equal(called, false);
-    assert.equal(result.error, "没有找到 GitHub 镜像");
+    assert.match(result.error ?? "", /没有找到 GitHub 镜像/);
     assert.equal(result.current, "0.1.0");
   });
 });

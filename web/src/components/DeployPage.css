@@ -270,7 +270,198 @@ fieldset.deploy-section { padding: calc(8px * var(--control-scale)) calc(12px * 
   min-width: 0;
 }
 
+/* 当前访问令牌：点击即可选中整段，方便复制。 */
+.deploy-token {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  margin-top: calc(8px * var(--control-scale));
+}
+
+.deploy-token-value {
+  padding: calc(4px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-subtle, var(--bg));
+  word-break: break-all;
+  cursor: text;
+  user-select: all;
+}
+
 @media (max-width: 640px) {
   .deploy-project { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .deploy-project-remove { grid-column: 2; justify-self: end; }
+}
+
+/* 部署后一次性展示的局域网凭据：用对话框保证一定可见，关闭后不再出现。 */
+.deploy-once-dialog {
+  max-height: min(85vh, 720px);
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: color-mix(in srgb, var(--warn) 8%, var(--elev));
+}
+
+.deploy-once-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8px * var(--control-scale));
+}
+
+.deploy-once-head h2 {
+  margin: 0;
+  font-size: 1.05em;
+}
+
+.deploy-once-hint {
+  margin: calc(6px * var(--control-scale)) 0 calc(10px * var(--control-scale));
+  color: var(--muted);
+}
+
+.deploy-once-list {
+  display: grid;
+  gap: calc(6px * var(--control-scale));
+  margin: 0;
+}
+
+.deploy-once-list > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+}
+
+.deploy-once-list dt {
+  min-width: 5em;
+  color: var(--muted);
+}
+
+.deploy-once-list dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  margin: 0;
+  min-width: 0;
+}
+
+.deploy-once-token {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  margin-top: calc(8px * var(--control-scale));
+}
+
+.deploy-once code {
+  word-break: break-all;
+  user-select: all;
+}
+
+/* 字段标签 + 问号提示。 */
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+}
+
+.field-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+  outline: none;
+}
+
+.field-hint-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(16px * var(--control-scale));
+  height: calc(16px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: calc(11px * var(--control-scale));
+  line-height: 1;
+  user-select: none;
+}
+
+.field-hint:hover .field-hint-icon,
+.field-hint:focus .field-hint-icon {
+  border-color: var(--fg);
+  color: var(--fg);
+}
+
+.field-hint-tip {
+  display: none;
+  position: absolute;
+  z-index: 40;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(280px, 70vw);
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--elev);
+  color: var(--fg);
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  white-space: normal;
+  box-shadow: 0 8px 22px #00000066;
+  pointer-events: none;
+}
+
+.field-hint:hover .field-hint-tip,
+.field-hint:focus .field-hint-tip,
+.field-hint:focus-within .field-hint-tip {
+  display: block;
+}
+
+/* 带尾部操作按钮的输入框（例如重置密码）。 */
+.field-control {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+}
+
+.field-control input,
+.field-control select {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-control .btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* 图标按钮：复制/已复制，只显示图标。 */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: calc(26px * var(--control-scale));
+  height: calc(26px * var(--control-scale));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  color: var(--fg);
+  border-color: var(--fg);
+}
+
+.icon-btn:focus-visible {
+  outline: 2px solid var(--accent, var(--fg));
+  outline-offset: 1px;
 }

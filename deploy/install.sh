@@ -39,7 +39,7 @@ usage() {
   -h, --help     显示本帮助
 
 角色由 QUBIUS_SECONDARY 控制：0 = 主实例 qubius，1 = 副实例 co-qubius。
-env 变量（QUBIUS_*）来自 \${QUBIUS_CONFIG_DIR:-\$HOME/.config/qubius}/env 或显式导出的环境变量。
+env 变量（QUBIUS_*）来自 \${QUBIUS_CONFIG_DIR:-<checkout>/.qubius}/env 或显式导出的环境变量。
 测试时可设 QUBIUS_SKIP_CRONTAB=1 避免修改真实 crontab。
 EOF
 }

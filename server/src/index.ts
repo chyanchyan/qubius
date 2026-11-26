@@ -11,6 +11,7 @@ import { createAppServer, createSession } from "./http.js";
 import { loadProjectPermissions, resolvePermission } from "./project-permissions.js";
 import { PushService } from "./push.js";
 import { mergeProjectLists, readProjectsFile } from "./project-source.js";
+import type { AuthTokenState } from "./credential-reset.js";
 import { ArchiveSweeper } from "./retention.js";
 import { Runtime } from "./runtime.js";
 import { ScheduleRunner, ScheduleStore } from "./schedules.js";
@@ -25,12 +26,12 @@ import { TerminalManager } from "./terminal.js";
 import { TerminalController } from "./terminal-http.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, "../..");
 
-// Windows / macOS 上没有 start-all.sh 帮忙 source env：手工 `npm start` 时也把
-// 部署生成的 env 补进来，否则 QUBIUS_AUTH / QUBIUS_PROJECTS_FILE 等只会出现在部署任务里。
-const manualStartReadsConfigDir = process.platform === "win32" || process.platform === "darwin";
-if (manualStartReadsConfigDir && !process.env.QUBIUS_ENV) {
-  const envFile = path.join(deployConfigDir(), "env");
+// 手工 `npm start` 时也读取 checkout 内的 <配置目录>/env，让 quickstart、部署页
+// 和服务进程看到同一份配置。部署脚本启动时会设置 QUBIUS_ENV，这里不重复读取。
+if (!process.env.QUBIUS_ENV) {
+  const envFile = path.join(deployConfigDir(process.env, process.platform, repoRoot), "env");
   if (fs.existsSync(envFile)) {
     try {
       const stored = parseEnvFile(fs.readFileSync(envFile, "utf8"), process.env);
@@ -51,18 +52,17 @@ function configPath(): string {
   // 新变量优先，旧变量保留兼容。
   const fromEnv = envCompat("QUBIUS_CONFIG");
   if (fromEnv) return path.resolve(fromEnv);
+  // 兼容旧布局：仓库根的 config.yaml 优先。
   const local = path.resolve(here, "../../config.yaml");
-  // Windows / macOS 的页面部署把配置写在配置目录；仓库根目录没有 config.yaml 时
-  // 回落到部署生成的配置，这样不设 QUBIUS_CONFIG 也能手工重启服务。
-  if (manualStartReadsConfigDir && !fs.existsSync(local)) {
-    const secondary = envCompat("QUBIUS_SECONDARY") === "1";
-    const deployed = path.join(deployConfigDir(), secondary ? "config-secondary.yaml" : "config.yaml");
-    if (fs.existsSync(deployed)) return deployed;
-  }
-  return local;
+  if (fs.existsSync(local)) return local;
+  // 默认布局：配置在 <checkout>/.qubius/config.yaml，不设 QUBIUS_CONFIG 也能手工重启。
+  const secondary = envCompat("QUBIUS_SECONDARY") === "1";
+  return path.join(
+    deployConfigDir(process.env, process.platform, repoRoot),
+    secondary ? "config-secondary.yaml" : "config.yaml",
+  );
 }
 
-const repoRoot = path.resolve(here, "../..");
 const configFile = configPath();
 // 冷启动：配置文件还不存在时用 bootstrap 默认配置启动，保证部署页能打开。
 const setupRequired = !fs.existsSync(configFile);
@@ -73,6 +73,10 @@ if (setupRequired) {
 } else {
   config = loadConfig(configFile);
 }
+// 部署页要和当前实际使用的配置目录一致：仓库根有旧 config.yaml 时，
+// 页面继续读写那个目录，而不是另算一个 .qubius/。
+process.env.QUBIUS_CONFIG_DIR ??= config.configDir;
+process.env.QUBIUS_REPO_DIR ??= repoRoot;
 // 未配置 allowedHosts 时默认只允许回环主机（失败关闭），公网/局域网访问需显式配置。
 const effectiveHosts = config.allowedHosts ?? [...DEFAULT_ALLOWED_HOSTS];
 const defaultHosts = effectiveHosts.length === DEFAULT_ALLOWED_HOSTS.length
@@ -84,13 +88,36 @@ if (defaultHosts) {
   );
 }
 const authToken = resolveAuthToken(config);
-if (authToken) {
-  if (config.auth && !config.authToken) {
-    console.log(`已启用 API 访问令牌（自动生成：${path.join(config.dataDir, AUTH_TOKEN_FILE)}）`);
-  } else {
-    console.log("已启用 API 访问令牌");
-  }
-}
+/** 令牌来源，供 /api/config 和启动日志说明「去哪里看令牌」。 */
+const authTokenSource: "config" | "env" | "file" | undefined = authToken
+  ? config.authToken
+    ? "config"
+    : envCompat("QUBIUS_AUTH_TOKEN")
+      ? "env"
+      : "file"
+  : undefined;
+const authTokenFile = authTokenSource === "file" ? path.join(config.dataDir, AUTH_TOKEN_FILE) : undefined;
+/** 可变的令牌状态：部署页重置令牌后立即生效，不需要重启服务。 */
+const authTokenState: AuthTokenState = {
+  ...(authToken ? { current: authToken } : {}),
+  ...(authTokenSource ? { source: authTokenSource } : {}),
+  ...(authTokenFile ? { file: authTokenFile } : {}),
+};
+// 启动时打印一份「实际生效的位置和值」，排查「配置改在哪 / 为什么没生效」时先看这里。
+const envFileForLog = path.join(config.configDir, "env");
+console.log(`[config] 配置文件：${configFile}`);
+console.log(
+  `[config] 配置目录：${config.configDir}；env：${envFileForLog}`
+    + (fs.existsSync(envFileForLog) ? "" : "（不存在）"),
+);
+console.log(
+  `[config] 数据目录：${config.dataDir}；监听：${config.host}:${config.port}；角色：${config.role}`,
+);
+console.log(`[config] allowedHosts：${effectiveHosts.join("、")}`);
+console.log(
+  `[config] 访问令牌：${authToken ? `已启用（来源：${authTokenSource}${authTokenFile ? `，文件：${authTokenFile}` : ""}）` : "未启用"}`
+    + `；归档：${config.archive ? config.archive.dir : "未启用"}`,
+);
 // 隔离项目按对话建子目录，根目录可能还没创建；失败时项目会显示为不可用。
 for (const project of config.projects) {
   if (!project.isolated) continue;
@@ -298,9 +325,13 @@ const server = createAppServer({
   schedules: scheduleStore,
   scheduleRunner,
   setupRequired,
+  configFile,
+  ...(authTokenSource ? { authTokenSource } : {}),
+  ...(authTokenFile ? { authTokenFile } : {}),
   skills: { store: skillStore, configDir: claudeConfigDir },
   sdkConfigDir: claudeConfigDir,
   authToken,
+  authTokenState,
   shutdownToken,
   shutdown: (reason) => runShutdown(reason, 0),
   ...(terminalController ? { terminal: terminalController } : {}),

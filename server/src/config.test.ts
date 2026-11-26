@@ -310,7 +310,7 @@ test("冷启动 bootstrap：文件不存在也能得到可用配置和内置普�
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 8787);
   assert.equal(config.configDir, path.dirname(file));
-  assert.equal(config.dataDir, path.join(home, ".local", "share", "qubius"));
+  assert.equal(config.dataDir, path.join(repoRoot, ".qubius", "data"));
   assert.equal(config.maxConcurrent, 4);
   assert.equal(config.archive, undefined);
   assert.deepEqual(config.allowedHosts, [...DEFAULT_ALLOWED_HOSTS]);
@@ -377,15 +377,22 @@ test("冷启动 bootstrap：主实例端口和数据目录可覆盖，非法值�
   assert.equal(legacy.port, 9000);
 });
 
-test("冷启动 bootstrap 的数据目录遵循 XDG_DATA_HOME", () => {
+test("冷启动 bootstrap 的数据目录默认在 checkout 的 .qubius/data", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "remote-coder-bootstrap-"));
-  const xdg = path.join(home, "xdg-data");
-  const config = bootstrapConfig(path.join(home, "config.yaml"), home, {
+  const repoRoot = path.join(home, "repo");
+  const config = bootstrapConfig(path.join(home, "config.yaml"), repoRoot, {
     HOME: home,
-    XDG_DATA_HOME: xdg,
+    // 旧的 XDG 变量不再影响默认目录。
+    XDG_DATA_HOME: path.join(home, "xdg-data"),
   });
-  assert.equal(config.dataDir, path.join(xdg, "qubius"));
-  assert.equal(config.projects[0]?.path, path.join(xdg, "qubius", "chat"));
+  assert.equal(config.dataDir, path.join(repoRoot, ".qubius", "data"));
+  assert.equal(config.projects[0]?.path, path.join(repoRoot, ".qubius", "data", "chat"));
+  // 显式 QUBIUS_DATA_PRIMARY 仍然优先。
+  const explicit = bootstrapConfig(path.join(home, "config.yaml"), repoRoot, {
+    HOME: home,
+    QUBIUS_DATA_PRIMARY: path.join(home, "custom"),
+  });
+  assert.equal(explicit.dataDir, path.join(home, "custom"));
 });
 
 test("terminal 默认开启，配置文件优先于 QUBIUS_TERMINAL", () => {
@@ -526,6 +533,40 @@ test("allowedHosts 未配置时默认只允许回环主机，显式配置仍生�
   assert.throws(() => loadConfig(file, {}), /allowedHosts 不能为空数组/);
 });
 
+test("部署 env 的 QUBIUS_ALLOWED_HOSTS 会追加到 allowedHosts", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-coder-config-"));
+  const file = path.join(dir, "config.yaml");
+  fs.writeFileSync(file, ["listen: 127.0.0.1:8787", ""].join("\n"));
+  assert.deepEqual(
+    loadConfig(file, { QUBIUS_ALLOWED_HOSTS: "qa.example.com, [2001:db8::1]" }).allowedHosts,
+    ["127.0.0.1", "localhost", "[::1]", "qa.example.com", "[2001:db8::1]"],
+  );
+  // 配置文件里的显式列表仍然保留，env 只做追加。
+  fs.writeFileSync(file, ["listen: 127.0.0.1:8787", "allowedHosts: [example.com]", ""].join("\n"));
+  assert.deepEqual(
+    loadConfig(file, { QUBIUS_ALLOWED_HOSTS: "qa.example.com" }).allowedHosts,
+    ["example.com", "qa.example.com"],
+  );
+  // 公网域名由部署模板直接写进 config.yaml，不靠 env 额外合并，
+  // 因此手工启动时不会把部署脚本的占位默认值也放进来。
+  assert.deepEqual(
+    loadConfig(file, { QUBIUS_PUBLIC_HOST: "code.example.com" }).allowedHosts,
+    ["example.com"],
+  );
+});
+
+test("approvalTimeoutMinutes 未写进 config.yaml 时读取部署 env", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-coder-config-"));
+  const file = path.join(dir, "config.yaml");
+  fs.writeFileSync(file, ["listen: 127.0.0.1:8787", ""].join("\n"));
+  assert.equal(loadConfig(file, { QUBIUS_APPROVAL_TIMEOUT_MINUTES: "0" }).approvalTimeoutMinutes, 0);
+  assert.equal(loadConfig(file, { QUBIUS_APPROVAL_TIMEOUT_MINUTES: "60" }).approvalTimeoutMinutes, 60);
+  assert.throws(
+    () => loadConfig(file, { QUBIUS_APPROVAL_TIMEOUT_MINUTES: "1441" }),
+    /QUBIUS_APPROVAL_TIMEOUT_MINUTES/,
+  );
+});
+
 test("auth 和 authToken 可从 YAML 与环境变量读取", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-coder-config-"));
   const file = path.join(dir, "config.yaml");
@@ -542,6 +583,9 @@ test("auth 和 authToken 可从 YAML 与环境变量读取", () => {
   });
   assert.equal(fromEnv.auth, true);
   assert.equal(fromEnv.authToken, "fedcba9876543210");
+  // 部署向导关闭令牌时写 QUBIUS_AUTH=0，显式关闭。
+  assert.equal(loadConfig(file, { QUBIUS_AUTH: "0" }).auth, false);
+  assert.equal(loadConfig(file, {}).auth, undefined);
 
   // YAML 已写 auth 时环境变量不覆盖；未写时环境变量生效。
   fs.writeFileSync(file, [...base, "auth: false", ""].join("\n"));

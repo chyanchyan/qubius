@@ -2,9 +2,12 @@ node_modules/
 dist/
 data/
 /config.yaml
-deploy/env
-deploy/env.bak.*
-deploy/env.*.local
+/config-secondary.yaml
+/deploy/env
+/deploy/env.bak.*
+/deploy/env.*.local
+# 默认配置、env、数据和日志都收敛在仓库内的这一个目录，不提交。
+/.qubius/
 *.log
 .DS_Store
 web/dist/

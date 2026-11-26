@@ -150,22 +150,24 @@ test("能找到监听端口并停止对应进程", async (t) => {
   }
 });
 
-test("默认配置目录与部署脚本一致", () => {
+test("默认配置目录在 checkout 内的 .qubius", () => {
   assert.equal(
-    defaultConfigDir({ HOME: "/home/me" }, "linux"),
-    path.posix.join("/home/me/.config", "qubius"),
+    defaultConfigDir({ HOME: "/home/me" }, "linux", "/srv/qubius"),
+    "/srv/qubius/.qubius",
+  );
+  // XDG 不再影响默认目录。
+  assert.equal(
+    defaultConfigDir({ HOME: "/home/me", XDG_CONFIG_HOME: "/srv/config" }, "linux", "/srv/qubius"),
+    "/srv/qubius/.qubius",
   );
   assert.equal(
-    defaultConfigDir({ HOME: "/home/me", XDG_CONFIG_HOME: "/srv/config" }, "linux"),
-    path.posix.join("/srv/config", "qubius"),
+    defaultConfigDir({ APPDATA: String.raw`C:\Users\me\AppData\Roaming` }, "win32", String.raw`C:\src\qubius`),
+    String.raw`C:\src\qubius\.qubius`,
   );
+  // 部署脚本导出的 QUBIUS_REPO_DIR 优先于 cwd。
   assert.equal(
-    defaultConfigDir({ APPDATA: String.raw`C:\Users\me\AppData\Roaming` }, "win32"),
-    String.raw`C:\Users\me\AppData\Roaming\qubius`,
-  );
-  assert.equal(
-    defaultConfigDir({ USERPROFILE: String.raw`C:\Users\me` }, "win32"),
-    String.raw`C:\Users\me\AppData\Roaming\qubius`,
+    defaultConfigDir({ USERPROFILE: String.raw`C:\Users\me`, QUBIUS_REPO_DIR: String.raw`D:\projects\qubius` }, "win32"),
+    String.raw`D:\projects\qubius\.qubius`,
   );
 });
 

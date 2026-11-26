@@ -25,15 +25,33 @@ function form(overrides: Partial<DeployForm> = {}): DeployForm {
     secondaryPort: 8788,
     publicHost: "",
     publicHostSecondary: "",
+    allowedHostsExtra: "",
     lanHost: "",
-    configDir: "/home/me/.config/qubius",
+    configDir: "/home/me/qubius/.qubius",
     primaryDir: "/home/me/qubius",
     secondaryDir: "/home/me/co-qubius",
-    dataPrimary: "/home/me/.local/share/qubius",
-    dataSecondary: "/home/me/.local/share/co-qubius",
+    dataPrimary: "/home/me/qubius/.qubius/data",
+    dataSecondary: "/home/me/co-qubius/.qubius/data",
     primaryRepoUrl: "http://gitea.example.com/example/qubius.git",
     secondaryRepoUrl: "http://gitea.example.com/example/qubius.git",
     primaryRef: "main",
+    authMode: "off",
+    authToken: "",
+    authTokenSet: false,
+    terminal: true,
+    maxConcurrent: 4,
+    approvalTimeoutMinutes: 10,
+    limits: {
+      transcriptBytes: 8 * 1024 * 1024,
+      transcriptMessages: 5000,
+      messageText: 200000,
+      requestBodyBytes: 28000000,
+      historyPage: 200,
+    },
+    lanEnabled: false,
+    lanAuthUser: "qubius",
+    lanAuthPassword: "",
+    lanAuthPasswordSet: false,
     archiveDir: "",
     archiveRetentionDays: 30,
     nodeBin: "",
@@ -291,7 +309,7 @@ test("步骤顺序和摘要随场景变化", () => {
 test("Windows 使用盘符路径占位符和明确的双实例限制", () => {
   const primary = wizardPlaceholders("win32", "primary");
   assert.match(primary.checkout, /^[A-Za-z]:\\/);
-  assert.match(primary.data, /AppData\\Local\\qubius$/);
+  assert.match(primary.data, /\.qubius\\data$/);
   const secondary = wizardPlaceholders("win32", "secondary");
   assert.match(secondary.checkout, /co-qubius$/);
 

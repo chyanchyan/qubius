@@ -120,43 +120,58 @@ npm run build
 npm start         # 服务和页面都在 http://127.0.0.1:8787
 ```
 
-服务默认读取仓库根目录的 `config.yaml`，也可以用 `--config <路径>` 或环境变量 `QUBIUS_CONFIG` 指定其他位置。如果需要开机自启、日志轮转和双实例互备，参见 [双实例部署与运维](docs/deployment.md)。
+配置、env、数据和日志默认都在当前 checkout 的 `.qubius/` 里（已 gitignore）；服务读取 `.qubius/config.yaml`，仓库根有旧 `config.yaml` 时优先沿用。也可以用 `--config <路径>` 或环境变量 `QUBIUS_CONFIG` 指定其他位置。如果需要开机自启、日志轮转和双实例互备，参见 [双实例部署与运维](docs/deployment.md)。
 
-### 快捷部署（Linux）
+### 命令行入口（make，跨平台）
 
-配置好 env（至少 `QUBIUS_PRIMARY_DIR` 和端口，见 [双实例部署与运维](docs/deployment.md)）后，可以在仓库根用 make 按入口层级部署：
+`make` 是统一的启动/部署入口，内部通过 Node 执行：Linux 转给 `deploy/*.sh`（systemd、flock、双实例），Windows/macOS 由 `deploy/cli.mjs` 用 Node 完成同样的启动/停止，部署走 `deploy/deploy-job.mjs`。npm 脚本（`npm start`、`npm run quickstart`、`npm run dev:all`）仍然保留。
 
 ```bash
-make deploy       # 本地：构建并重启本机实例，只保证 127.0.0.1 可访问
-make deploy-lan   # 局域网：再启动/重启 lan-proxy 局域网入口
+make              # 列出全部目标
+make quickstart   # 首次启动：npm 源、配置/数据目录、端口
+make run          # 开发模式：服务端 + Vite
+make build        # 构建 server + web
+make start        # 启动启用的实例（缺构建先构建）
+make restart      # 重启
+make stop         # 停止实例和局域网入口
+make status       # 显示配置路径、健康状态、局域网凭据文件
+
+make deploy       # 本地：构建并重启，只保证 127.0.0.1 可访问
+make deploy-lan   # 局域网：再启动/重启 lan-proxy（缺凭据时生成并打印一次）
 make deploy-wan   # 公网：再应用 edgectl 公网入口（交互确认）
 ```
 
-部署的是 env 里 `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR` 指向的 checkout，不是当前目录。检测到 systemd user unit 已接管时用 `systemctl --user restart`，否则交给 `deploy/start-all.sh --restart`。`make deploy` 不会停止已经运行的局域网/公网入口；非交互环境应用公网入口时加 `QUBIUS_EDGE_YES=1`。
+默认部署当前 checkout，配置和数据都在它的 `.qubius/` 里；需要双实例、非默认端口或自定义路径时，在 `/deploy` 页面或 `deploy/env` 里配置。检测到 systemd user unit 已接管时用 `systemctl --user restart`，否则交给 `deploy/start-all.sh --restart`。`make deploy` 不会停止已经运行的局域网/公网入口；非交互环境应用公网入口时加 `QUBIUS_EDGE_YES=1`。
 
 ### Windows 图形化部署
 
 Windows 上没有 bash/systemd 时，`/deploy` 页面由 `deploy/deploy-job.mjs` 完成部署：生成 `config.yaml`、按需 `npm ci` / `npm run build`、停掉旧进程、按新配置启动，并用 `/api/health` 校验。需要 Node.js 22+ 和 git 在 PATH 里，也可以在页面「Node 路径」里填 `node.exe` 的绝对路径。
 
-1. 在仓库目录运行 `npm run quickstart`（可选择 npm 源和配置目录），或手动运行 `npm ci && npm run build && npm start`。没有 `config.yaml` 时服务也会启动，并进入首次部署模式。
+1. 在仓库目录运行 `npm run quickstart`（可选择 npm 源、配置目录和数据目录，默认都在当前 checkout 的 `.qubius/`），或手动运行 `npm ci && npm run build && npm start`。没有 `config.yaml` 时服务也会启动，并进入首次部署模式。
 2. 打开 `http://127.0.0.1:8787/deploy`。首次运行会进入部署向导，按步骤确认使用方式、Checkout 路径、数据目录和端口；只在本机使用时访问域名保持 `localhost` 即可。需要完整参数时可以切到「完整部署表单」。
 3. 点「保存并部署」。任务日志在 `<配置目录>\deploy.log`，实例日志在 `<数据目录>\qubius.log`，pid 写在 `<数据目录>\qubius.pid`。
 
 向导在 Windows 上会使用盘符路径的占位符，并提示不需要 bash/systemd。「主副双实例」可以在同一台机器运行两个 checkout，但副实例的同步/回滚按钮和公网入口仍不可用；开机自启仍要靠「任务计划程序」。
 
-Windows 的默认目录是配置 `%APPDATA%\qubius`、数据 `%LOCALAPPDATA%\qubius`；可以用 env 里的 `QUBIUS_CONFIG_DIR`、`QUBIUS_DATA_PRIMARY` 等覆盖。部署后要手工重启，直接 `npm start` 即可，它会自动读取 `%APPDATA%\qubius` 里生成的配置和 env；副实例要加 `QUBIUS_SECONDARY=1`。
+Windows 和 Linux/macOS 的默认目录一致：配置、env、数据和日志都在当前 checkout 的 `.qubius/` 里（`config.yaml`、`env`、`data/`），整个目录已 gitignore；可以用 env 里的 `QUBIUS_CONFIG_DIR`、`QUBIUS_DATA_PRIMARY` 等覆盖。部署后要手工重启，直接 `npm start` 即可，它会自动读取 `.qubius/` 里生成的配置和 env；副实例要加 `QUBIUS_SECONDARY=1`。
 
-需要局域网 Basic 认证入口时，在配置目录里创建 `lan-proxy.credentials`（一行 `user:password`），部署任务会顺带启动 `deploy/lan-proxy.mjs`。
+需要局域网 Basic 认证入口时，在部署页勾选「启用局域网入口」，填用户名、密码留空即可自动生成；部署成功后会一次性显示访问地址、用户名、登录密码和 API 访问令牌（关闭后不再显示）。凭据写在配置目录的 `lan-proxy.credentials`（`user:password`，`0600`），部署任务会顺带启动 `deploy/lan-proxy.mjs`。命令行用 `make deploy-lan`：缺少凭据时自动生成并在终端打印一次。
+
+部署页每个字段旁都有问号提示，悬停或聚焦可查看详细说明。局域网密码和访问令牌都支持在页面上重置：密码立即写盘，运行中的局域网入口会在响应后自动重启；令牌立即生效，旧令牌保留 60 秒宽限，不需要重启服务。重置结果会一次性弹出并显示重启/生效说明，提供复制图标。
+
+Windows 上也可以用上面的 make 目标（`make start/stop/restart/status/deploy/deploy-lan`）：Makefile 只调用 Node，`start/stop` 由 `deploy/cli.mjs` 通过 pidfile 管理进程，部署走 `deploy/deploy-job.mjs`。`npm start` 仍然可用。
 
 Windows 部署**不做**这些事：安装 systemd/logrotate/crontab、公网入口（edge）、副实例的「同步主功能/回滚」、开机自启。需要开机自启时，用「任务计划程序」登记 `node server\dist\index.js`（工作目录设为仓库根目录）。
 
 ## 配置
 
+配置只有两个入口：首次运行的 `npm run quickstart`（选择 npm 源、配置目录、数据目录和端口），以及启动后的 `/deploy` 部署向导（访问域名、访问令牌、归档、终端、并发/超时等全部参数）。两者默认都写入当前 checkout 的 `.qubius/`，这个目录已 gitignore；不需要手工同时维护 `config.yaml` 和 env 两份。
+
 `config.yaml` 的常用字段如下，完整说明见 [参考手册](docs/reference.md#配置)：
 
 ```yaml
 listen: 127.0.0.1:8787        # 只能是 127.0.0.1 或 localhost
-dataDir: ./data               # 会话、worktree、密钥都放在这里
+dataDir: ./data               # 相对 .qubius/ 解析；会话、worktree、密钥都放在这里
 maxConcurrent: 4              # 同时进行的对话数初始值，之后可在设置页修改
 
 # 通过域名或局域网地址访问时，必须在这里列出实际主机名
@@ -171,19 +186,20 @@ projects:
 
 - **`projects`** 是白名单，页面不能提交白名单以外的路径。运行中也可以在主页的「管理项目」里添加或删除跟踪的 git 仓库，或者填仓库名称和母目录直接新建一个 git 仓库，都不需要重启。另外始终有一个内置的「普通对话」项目，目录在 `<dataDir>/chat`。
 - **`permission`** 决定 agent 的操作要不要确认：`default` 表示改动和命令都要确认；`acceptEdits`（默认值）表示工作区内自动放行；`plan` 只做规划；`auto` 由模型判断，拿不准时再确认；`bypassPermissions` 全部放行，不建议使用。页面上也可以修改。
-- **`allowedHosts`** 不配置时只允许 `127.0.0.1`、`localhost` 和 `[::1]`，用来防御 DNS rebinding 攻击。通过反向代理或局域网访问时，要把实际的主机名加进来。
+- **`allowedHosts`** 不配置时只允许 `127.0.0.1`、`localhost` 和 `[::1]`，用来防御 DNS rebinding 攻击。通过反向代理或局域网访问时，要把实际的主机名加进来；部署页的「公网域名」由模板写进 `config.yaml`，「额外允许的访问域名」写进 env 的 `QUBIUS_ALLOWED_HOSTS`，启动时合并，重新部署不会丢。部署页「当前环境」里能看到实际生效的完整列表。
+- **`limits`**、访问令牌、归档、终端开关、并发上限和确认超时都在部署页的完整表单里（`limits` 在「高级限制」折叠区），由向导写入 env；不需要为了这些参数手工编辑 `config.yaml`。
 - 非 git 目录可以设置 `isolated: true`，这样每个对话会在 `<path>/<对话 id>` 子目录里运行。
 
 ### 访问令牌
 
-在环境变量或 env 文件里设置 `QUBIUS_AUTH=1` 后，首次启动会生成令牌，保存在 `dataDir/auth-token`：
+在部署向导里把「访问令牌」设为「自动生成」（或 env 里 `QUBIUS_AUTH=1`）后，首次启动会生成令牌，保存在 `dataDir/auth-token`，默认就是 `.qubius/data/auth-token`：
 
 ```bash
-cat ./data/auth-token
-curl -H "X-Qubius-Token: $(cat ./data/auth-token)" http://127.0.0.1:8787/api/settings
+cat .qubius/data/auth-token
+curl -H "X-Qubius-Token: $(cat .qubius/data/auth-token)" http://127.0.0.1:8787/api/settings
 ```
 
-浏览器第一次收到 401 时会弹出输入框，保存后会记住令牌。你也可以用 `QUBIUS_AUTH_TOKEN` 直接指定一个令牌（至少 16 个字符）。`/api/health` 不需要令牌。
+浏览器第一次收到 401 时会弹出输入框，并直接显示令牌文件路径；登录后到 `/deploy` 的「当前环境」点「显示当前访问令牌」即可复制。你也可以用 `QUBIUS_AUTH_TOKEN` 直接指定一个令牌（至少 16 个字符）。`/api/health` 不需要令牌。
 
 ### 模型接口
 
@@ -214,7 +230,7 @@ code.example.com {
 
 使用反向代理时要注意三点：
 
-- 把 `code.example.com` 加进 `allowedHosts`，否则 `/api` 请求会返回 403。
+- 在部署页把「公网域名」填成 `code.example.com`（或写进 env 的 `QUBIUS_PUBLIC_HOST`），否则 `/api` 请求会返回 403。
 - 关闭响应缓冲（上面的 `flush_interval -1`），否则页面的实时状态流会卡住。
 - 建议同时开启访问令牌。
 

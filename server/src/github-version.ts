@@ -87,12 +87,64 @@ function readGithubRemote(repoRoot: string): string | undefined {
   }
 }
 
-/** 显式配置优先；没有 github remote 的项目也能用 QUBIUS_GITHUB_REPO=owner/repo 指定镜像。 */
-function resolveRepo(repoRoot: string): string | undefined {
-  const configured = process.env.QUBIUS_GITHUB_REPO?.trim();
-  if (configured && REPO_RE.test(configured)) return configured;
-  const remote = readGithubRemote(repoRoot);
-  return remote ? githubRepoFromRemote(remote) : undefined;
+/** 读取所有 remote（fetch 地址），按名字去重。 */
+function readRemotes(repoRoot: string): Array<{ name: string; url: string }> {
+  let text: string;
+  try {
+    text = execFileSync("git", ["-C", repoRoot, "remote", "-v"], {
+      encoding: "utf8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return [];
+  }
+  const remotes: Array<{ name: string; url: string }> = [];
+  const seen = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    // 形如：origin\tgit@github.com:owner/repo.git (fetch)
+    const match = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
+    if (!match) continue;
+    const [, name, url, kind] = match;
+    if (kind !== "fetch" || !name || !url || seen.has(name)) continue;
+    seen.add(name);
+    remotes.push({ name, url });
+  }
+  return remotes;
+}
+
+/**
+ * 解析 GitHub 镜像仓库。优先级：
+ *   1. QUBIUS_GITHUB_REPO，接受 owner/repo 或完整的 GitHub URL；
+ *   2. 名为 github 的 remote；
+ *   3. 其它 remote 里第一个 github.com 地址（优先 origin）。
+ *
+ * 第 3 条是为了“本地仓库就是 GitHub、origin 指向 github.com”的常见情况：
+ * 只用 remote 名字判断会漏掉这种配置。
+ */
+export function resolveGithubRepo(
+  repoRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const configured = env.QUBIUS_GITHUB_REPO?.trim();
+  if (configured) {
+    if (REPO_RE.test(configured)) return configured;
+    const fromUrl = githubRepoFromRemote(configured);
+    if (fromUrl) return fromUrl;
+  }
+  const named = readGithubRemote(repoRoot);
+  const namedRepo = named ? githubRepoFromRemote(named) : undefined;
+  if (namedRepo) return namedRepo;
+
+  const remotes = readRemotes(repoRoot);
+  const origin = remotes.find((remote) => remote.name === "origin");
+  const originRepo = origin ? githubRepoFromRemote(origin.url) : undefined;
+  if (originRepo) return originRepo;
+  for (const remote of remotes) {
+    const repo = githubRepoFromRemote(remote.url);
+    if (repo) return repo;
+  }
+  return undefined;
 }
 
 /**
@@ -108,14 +160,19 @@ export async function fetchGithubVersion(options: {
   now?: () => Date;
 }): Promise<GithubVersionState> {
   const checkedAt = (options.now ?? (() => new Date()))().toISOString();
-  const repo = resolveRepo(options.repoRoot);
+  const repo = resolveGithubRepo(options.repoRoot);
   const base: GithubVersionState = {
     status: "unknown",
     checkedAt,
     ...(repo ? { repo } : {}),
     ...(options.current ? { current: options.current } : {}),
   };
-  if (!repo) return { ...base, error: "没有找到 GitHub 镜像" };
+  if (!repo) {
+    return {
+      ...base,
+      error: "没有找到 GitHub 镜像：设置 QUBIUS_GITHUB_REPO=owner/repo，或让 origin 指向 github.com",
+    };
+  }
 
   let response: Response;
   try {

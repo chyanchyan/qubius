@@ -111,19 +111,23 @@ export function wizardPlaceholders(platform: string, role: WizardRole): WizardPl
   if (isWindowsPlatform(platform)) {
     return role === "primary"
       ? {
-        checkout: String.raw`C:\Users\you\qubius`,
-        data: String.raw`C:\Users\you\AppData\Local\qubius`,
-        archive: String.raw`C:\Users\you\qubius-archive`,
+        checkout: String.raw`C:\src\qubius`,
+        data: String.raw`C:\src\qubius\.qubius\data`,
+        archive: String.raw`C:\src\qubius\.qubius\archive`,
       }
       : {
-        checkout: String.raw`C:\Users\you\co-qubius`,
-        data: String.raw`C:\Users\you\AppData\Local\co-qubius`,
-        archive: String.raw`C:\Users\you\co-qubius-archive`,
+        checkout: String.raw`C:\src\co-qubius`,
+        data: String.raw`C:\src\co-qubius\.qubius\data`,
+        archive: String.raw`C:\src\co-qubius\.qubius\archive`,
       };
   }
   return role === "primary"
-    ? { checkout: "/srv/qubius", data: "/srv/qubius-data", archive: "/srv/qubius-archive" }
-    : { checkout: "/srv/co-qubius", data: "/srv/co-qubius-data", archive: "/srv/co-qubius-archive" };
+    ? { checkout: "/srv/qubius", data: "/srv/qubius/.qubius/data", archive: "/srv/qubius/.qubius/archive" }
+    : {
+      checkout: "/srv/co-qubius",
+      data: "/srv/co-qubius/.qubius/data",
+      archive: "/srv/co-qubius/.qubius/archive",
+    };
 }
 
 export interface RoleFieldKeys {
@@ -378,6 +382,28 @@ export function wizardSummaryGroups(
     rows: [
       { label: "使用方式", value: SCENARIO_LABEL[scenario] },
       { label: "配置目录", value: form.configDir || "—", mono: true },
+      { label: "额外域名", value: form.allowedHostsExtra.trim() || "—", mono: true },
+      {
+        label: "访问令牌",
+        value: form.authMode === "off"
+          ? "关闭"
+          : form.authMode === "auto"
+            ? "自动生成"
+            : form.authTokenSet
+              ? "自定义（已设置，留空保持）"
+              : "自定义",
+      },
+      { label: "命令行页", value: form.terminal ? "开启" : "关闭" },
+      {
+        label: "局域网入口",
+        value: form.lanEnabled ? `已启用（${form.lanAuthUser || "qubius"}）` : "未启用",
+      },
+      {
+        label: "并发 / 确认超时",
+        value: `${form.maxConcurrent} / ${
+          form.approvalTimeoutMinutes === 0 ? "不自动拒绝" : `${form.approvalTimeoutMinutes} 分钟`
+        }`,
+      },
       {
         label: "会话归档",
         value: form.archiveDir.trim()

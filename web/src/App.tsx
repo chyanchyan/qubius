@@ -333,6 +333,22 @@ function AgentBadge({ running, limit, speed }: { running: number; limit: number;
  */
 function TokenPrompt({ onClose }: { onClose: () => void }) {
   const [value, setValue] = useState(() => readApiToken());
+  /** 自动生成的令牌在数据目录的 auth-token；健康检查只返回路径，不返回令牌。 */
+  const [tokenFile, setTokenFile] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/health")
+      .then((response) => response.json())
+      .then((data: { authTokenFile?: unknown }) => {
+        if (!cancelled && typeof data.authTokenFile === "string") setTokenFile(data.authTokenFile);
+      })
+      .catch(() => {
+        // 健康检查失败不影响手动输入令牌。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   function onSubmit(event: FormEvent) {
     event.preventDefault();
     // 按钮在空值时已禁用；这里再挡一次隐式提交（例如回车）。
@@ -353,6 +369,9 @@ function TokenPrompt({ onClose }: { onClose: () => void }) {
         <p className="dialog-description">
           服务端启用了访问令牌（auth / QUBIUS_AUTH_TOKEN），请输入后继续。
         </p>
+        {tokenFile && (
+          <p className="dialog-description mono">令牌文件：{tokenFile}</p>
+        )}
         <label className="field dialog-field">
           <span>访问令牌</span>
           <input

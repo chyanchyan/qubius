@@ -671,16 +671,32 @@ export interface RequestError extends Error {
   kind?: string;
   jobId?: string;
   remainingPids?: number[];
+  currentDataDir?: string;
+  targetDataDir?: string;
+  sessions?: number;
 }
 
 function requestError(message: string, response?: Response, data?: unknown): RequestError {
   const error = new Error(message) as RequestError;
   if (response) error.status = response.status;
   if (data && typeof data === "object") {
-    const record = data as { code?: unknown; kind?: unknown; jobId?: unknown; remainingPids?: unknown };
+    const record = data as {
+      code?: unknown;
+      kind?: unknown;
+      jobId?: unknown;
+      remainingPids?: unknown;
+      currentDataDir?: unknown;
+      targetDataDir?: unknown;
+      sessions?: unknown;
+    };
     if (typeof record.code === "string" && record.code) error.code = record.code;
     if (typeof record.kind === "string" && record.kind) error.kind = record.kind;
     if (typeof record.jobId === "string" && record.jobId) error.jobId = record.jobId;
+    if (typeof record.currentDataDir === "string") error.currentDataDir = record.currentDataDir;
+    if (typeof record.targetDataDir === "string") error.targetDataDir = record.targetDataDir;
+    if (typeof record.sessions === "number" && Number.isInteger(record.sessions)) {
+      error.sessions = record.sessions;
+    }
     if (Array.isArray(record.remainingPids)) {
       const pids = record.remainingPids.filter(
         (pid): pid is number => typeof pid === "number" && Number.isInteger(pid),

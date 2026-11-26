@@ -42,6 +42,8 @@ export function parseArgs(argv) {
     else if (arg.startsWith("--registry=")) options.registry = arg.slice("--registry=".length);
     else if (arg === "--config-dir") options.configDir = argv[++index];
     else if (arg.startsWith("--config-dir=")) options.configDir = arg.slice("--config-dir=".length);
+    else if (arg === "--data-dir") options.dataDir = argv[++index];
+    else if (arg.startsWith("--data-dir=")) options.dataDir = arg.slice("--data-dir=".length);
     else if (arg === "--port") options.port = argv[++index];
     else if (arg.startsWith("--port=")) options.port = arg.slice("--port=".length);
     else if (arg === "--loglevel") options.loglevel = argv[++index];
@@ -256,15 +258,19 @@ export function isAbsolutePath(value, platform = process.platform) {
   return platform === "win32" ? path.win32.isAbsolute(value) : path.posix.isAbsolute(value);
 }
 
-/** 与 server/src/deploy.ts 的语义一致：POSIX 用 XDG_CONFIG_HOME，Windows 用 %APPDATA%。 */
-export function defaultConfigDir(env = process.env, platform = process.platform) {
-  if (platform === "win32") {
-    const appData = (env.APPDATA ?? "").trim();
-    if (appData) return path.win32.join(appData, "qubius");
-    return path.win32.join(homeOf(env), "AppData", "Roaming", "qubius");
-  }
-  const base = (env.XDG_CONFIG_HOME ?? "").trim() || path.posix.join(homeOf(env), ".config");
-  return path.posix.join(base, "qubius");
+/** 默认仓库根：部署脚本导出的 QUBIUS_REPO_DIR，否则用当前工作目录。 */
+export function defaultRepoRoot(env = process.env) {
+  const configured = String(env.QUBIUS_REPO_DIR ?? "").trim();
+  return configured || process.cwd();
+}
+
+/**
+ * 与 server/src/deploy.ts 一致：配置、env、数据和日志都收敛到 checkout 内的
+ * .qubius/（已 gitignore），不再使用 XDG 或 %APPDATA%。
+ */
+export function defaultConfigDir(env = process.env, platform = process.platform, repoRoot = defaultRepoRoot(env)) {
+  const join = platform === "win32" ? path.win32.join : path.posix.join;
+  return join(repoRoot, ".qubius");
 }
 
 /** 配置目录必须是绝对路径；返回规范化后的路径或抛错。 */

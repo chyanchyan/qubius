@@ -41,15 +41,16 @@ mkdir -p "$TMP/home" "$TMP/config" "$TMP/data"
 # 1. 默认值：主实例。
 out=$(probe)
 IFS='|' read -r role instance cfgdir datadir port cfgfile service proxy repo host <<<"$out"
+REPO=$(cd "$HERE/.." && pwd)
 assert_eq "$role" primary role
 assert_eq "$instance" qubius instance
-assert_eq "$cfgdir" "$TMP/config/qubius" config-dir
-assert_eq "$datadir" "$TMP/data/qubius" data-dir
+assert_eq "$cfgdir" "$REPO/.qubius" config-dir
+assert_eq "$datadir" "$REPO/.qubius/data" data-dir
 assert_eq "$port" 8787 port
-assert_eq "$cfgfile" "$TMP/config/qubius/config.yaml" config-file
+assert_eq "$cfgfile" "$REPO/.qubius/config.yaml" config-file
 assert_eq "$service" qubius.service service
 assert_eq "$proxy" qubius-proxy.service proxy-service
-assert_eq "$repo" "$(cd "$HERE/.." && pwd)" repo-dir
+assert_eq "$repo" "$REPO" repo-dir
 assert_eq "$host" code.example.com public-host
 
 # 2. 开关：QUBIUS_SECONDARY=1 切到副实例。
@@ -57,9 +58,9 @@ out=$(probe '' QUBIUS_SECONDARY=1)
 IFS='|' read -r role instance cfgdir datadir port cfgfile service proxy repo host <<<"$out"
 assert_eq "$role" secondary role
 assert_eq "$instance" co-qubius instance
-assert_eq "$datadir" "$TMP/data/co-qubius" data-dir
+assert_eq "$datadir" "$TMP/home/co-qubius/.qubius/data" data-dir
 assert_eq "$port" 8788 port
-assert_eq "$cfgfile" "$TMP/config/qubius/config-secondary.yaml" config-file
+assert_eq "$cfgfile" "$REPO/.qubius/config-secondary.yaml" config-file
 assert_eq "$service" co-qubius.service service
 assert_eq "$proxy" co-qubius-proxy.service proxy-service
 assert_eq "$host" code-bak.example.com public-host
@@ -106,7 +107,8 @@ fi
 printf 'port={{QUBIUS_PORT}}\n' >"$TMP/tpl"
 QUBIUS_PORT=1234 node "$HERE/render.mjs" "$TMP/tpl" "$TMP/out"
 assert_eq "$(cat "$TMP/out")" "port=1234" render
-if node "$HERE/render.mjs" "$TMP/tpl" "$TMP/out2" >/dev/null 2>&1; then
+# 调用方进程可能刚好在 qubius 服务环境里（导出了 QUBIUS_PORT），显式清掉再测。
+if env -u QUBIUS_PORT node "$HERE/render.mjs" "$TMP/tpl" "$TMP/out2" >/dev/null 2>&1; then
   fail "缺少模板变量时应当失败"
 fi
 

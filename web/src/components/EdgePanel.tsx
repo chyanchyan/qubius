@@ -18,6 +18,7 @@ import {
   type EdgePlanView,
   type EdgeView,
 } from "../api-edge";
+import { Hint } from "./FieldHint";
 import "./EdgePanel.css";
 
 /* 和部署页保持一致：把浏览器 fetch 的英文 TypeError 换成中文提示。 */
@@ -687,6 +688,7 @@ export function EdgePanel({ configDir }: { configDir?: string }) {
               onChange={(event) => setConfirmExisting(event.target.checked)}
             />
             我确认替换已有的公网入口配置
+            <Hint text="计划里检测到已有入口配置；勾选后才允许覆盖远端配置。" />
           </label>
         )}
         {plan.requiresForceReclaim && (
@@ -701,7 +703,10 @@ export function EdgePanel({ configDir }: { configDir?: string }) {
 
         <div className="edge-apply">
           <label className="field">
-            当前主实例公网域名
+            <span className="field-label">
+              当前主实例公网域名
+              <Hint text="必须和计划里的主实例公网域名完全一致，防止把入口应用到错误域名。" />
+            </span>
             <input
               value={confirmDomain}
               placeholder="例如 code.example.com"
@@ -722,6 +727,7 @@ export function EdgePanel({ configDir }: { configDir?: string }) {
               }}
             />
             我已确认以上差异，要应用公网入口
+            <Hint text="查看完注册表差异和远端差异后勾选，才会真正执行 apply。" />
           </label>
           <div className="edge-actions">
             <button
@@ -894,7 +900,10 @@ export function EdgePanel({ configDir }: { configDir?: string }) {
                 强制回收会结束占用入口锁的残留进程，需要输入 <code className="edge-command">RECLAIM</code> 确认。
               </p>
               <label className="field">
-                确认短语
+                <span className="field-label">
+                  确认短语
+                  <Hint text="输入大写 RECLAIM 才会执行强制回收；回收会结束占用入口锁的残留进程。" />
+                </span>
                 <input
                   value={reclaimConfirm}
                   placeholder="RECLAIM"
@@ -945,7 +954,10 @@ export function EdgePanel({ configDir }: { configDir?: string }) {
               </p>
               <div className="edge-form-grid">
                 <label className="field">
-                  备份文件名
+                  <span className="field-label">
+                    备份文件名
+                    <Hint text="服务端保留的入口备份文件名，例如 edge-backup-<jobId>.Caddyfile。" />
+                  </span>
                   <input
                     value={backup}
                     placeholder="edge-backup-<jobId>.Caddyfile"
@@ -957,7 +969,10 @@ export function EdgePanel({ configDir }: { configDir?: string }) {
                   />
                 </label>
                 <label className="field">
-                  当前远端 sha
+                  <span className="field-label">
+                    当前远端 sha
+                    <Hint text="远端 Caddyfile 当前的 sha，用于确认恢复基线。" />
+                  </span>
                   <input
                     value={remoteSha}
                     placeholder="当前远端 Caddyfile 的 sha"
@@ -969,7 +984,10 @@ export function EdgePanel({ configDir }: { configDir?: string }) {
                   />
                 </label>
                 <label className="field">
-                  当前主实例公网域名
+                  <span className="field-label">
+                    当前主实例公网域名
+                    <Hint text="恢复时用于生成入口配置的主实例访问域名。" />
+                  </span>
                   <input
                     value={restoreDomain}
                     placeholder="例如 code.example.com"

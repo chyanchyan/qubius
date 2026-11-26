@@ -93,6 +93,7 @@ export function renderConfigYaml(options) {
     port,
     publicHost,
     maxConcurrent = 4,
+    approvalTimeoutMinutes = 10,
     archiveDir = "",
     archiveRetentionDays = 30,
     archiveInstance = role === "secondary" ? "bak" : "main",
@@ -124,6 +125,7 @@ export function renderConfigYaml(options) {
     .join(", ");
   lines.push(`allowedHosts: [${hostList}]`);
   lines.push(`maxConcurrent: ${maxConcurrent}`);
+  lines.push(`approvalTimeoutMinutes: ${approvalTimeoutMinutes}`);
   lines.push("# limits 可选，不写时使用默认值；也可以用环境变量覆盖（见 README）。");
   if (archiveDir) {
     lines.push("archive:");

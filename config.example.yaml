@@ -1,4 +1,6 @@
-# 复制为 config.yaml 后再改。不要把 API key 写进这个文件。
+# 通常不需要手工复制：首次运行用 `npm run quickstart`，其余配置在 /deploy 向导里完成。
+# 向导把配置写到当前 checkout 的 .qubius/config.yaml（并同步 .qubius/env），整个目录已 gitignore。
+# 这个文件只是字段参考。不要把 API key 写进配置文件。
 
 # primary（默认）或 secondary。secondary 会在页面顶部显示同步/回滚按钮，
 # 需要 secondary.primaryRepo 指向主实例的 checkout。
@@ -9,6 +11,8 @@ listen: 127.0.0.1:8787
 # 校验 /api 请求的 Host 头。未配置时默认 ["127.0.0.1", "localhost", "[::1]"]，
 # 只接受本机访问。通过局域网、反向代理或公网域名访问时必须显式列出实际主机名：
 # lan-proxy 会把 Host 改写成 127.0.0.1:<port>，edgectl 则转发原域名。
+# 部署页的「公网域名」会由模板写进这里；「额外允许的访问域名」写进 env 的
+# QUBIUS_ALLOWED_HOSTS，启动时和这里的列表合并，重新部署不会丢。
 # allowedHosts: [127.0.0.1, localhost, "[::1]", code.example.com]
 
 # 可选 API 访问令牌。配置后所有 /api 请求（/api/health 除外）都要带
@@ -24,6 +28,7 @@ listen: 127.0.0.1:8787
 # terminal: false
 
 # 会话、worktree 和密钥都放在这里。相对路径相对于本文件所在目录。
+# 默认布局是 <checkout>/.qubius/config.yaml + <checkout>/.qubius/data。
 dataDir: ./data
 
 # 会话归档。会话列表里超过 retentionDays 的会话会先完整复制到 dir（含图片和 Claude
@@ -43,6 +48,7 @@ maxConcurrent: 4
 # 等待确认（提问/授权）多久没人回应就自动拒绝，单位分钟，默认 10。
 # 户外使用、手机可能很久才看到通知时，可以调大，例如 60。
 # 设为 0 表示不自动拒绝，界面上也不再显示倒计时。
+# 部署向导会写进 env 的 QUBIUS_APPROVAL_TIMEOUT_MINUTES，这里不写也会生效。
 # approvalTimeoutMinutes: 10
 
 # 会话裁剪、请求体与历史分页上限；下面是默认值，可不写。

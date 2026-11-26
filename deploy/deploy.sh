@@ -65,6 +65,8 @@ for cmd in curl git; do
 done
 if [[ $MODE != local ]]; then
   command -v ss >/dev/null 2>&1 || qubius_die "缺少命令：ss（局域网入口检查需要）"
+  # 没有凭据时自动生成并打印一次，避免 deploy-lan 因为缺文件而启动失败。
+  qubius_ensure_lan_credentials
 fi
 
 # ── 角色信息：与 start-all.sh 的默认值保持一致 ──────────────────────────────
@@ -324,6 +326,20 @@ if [[ $MODE == wan ]]; then
 
   echo "应用公网入口（127.0.0.1:$API_PORT）"
   "$NODE_BIN" "$HERE/edge-deploy.mjs" "${EDGE_ARGS[@]}"
+fi
+
+# 局域网/公网部署后把自动生成的访问令牌打印一次，方便直接填进浏览器。
+if [[ $MODE != local ]]; then
+  for role in primary secondary; do
+    if [[ $role == primary && $QUBIUS_START_PRIMARY != 1 ]] \
+      || [[ $role == secondary && $QUBIUS_START_SECONDARY != 1 ]]; then
+      continue
+    fi
+    token_file=${ROLE_DATA[$role]}/auth-token
+    if [[ -f $token_file ]]; then
+      qubius_info "${ROLE_LABEL[$role]} API 访问令牌（只显示这一次）：$(<"$token_file")"
+    fi
+  done
 fi
 
 echo "部署完成：$MODE"

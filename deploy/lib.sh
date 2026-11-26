@@ -25,8 +25,10 @@ qubius_repo_root() {
   (cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && pwd)
 }
 
+# 默认把配置、env、数据都收敛到 checkout 内的 .qubius/（已 gitignore），
+# 不再依赖 ~/.config、~/.local/share 或 %APPDATA%。
 qubius_default_config_dir() {
-  printf '%s\n' "${XDG_CONFIG_HOME:-${HOME}/.config}/qubius"
+  printf '%s\n' "$(qubius_repo_root)/.qubius"
 }
 
 qubius_env_file() {
@@ -95,11 +97,14 @@ qubius_load_env() {
 qubius_apply_defaults() {
   QUBIUS_USER=${QUBIUS_USER:-$(id -un)}
   QUBIUS_HOME=${QUBIUS_HOME:-$HOME}
+  # 默认全部落在代码目录：当前 checkout 是主实例，数据在 <checkout>/.qubius/data。
+  # 副实例默认是 $HOME/co-qubius 这份 checkout，数据同样放在它自己的 .qubius/data。
+  QUBIUS_REPO_DIR=$(qubius_repo_root)
   QUBIUS_CONFIG_DIR=${QUBIUS_CONFIG_DIR:-$(qubius_default_config_dir)}
-  QUBIUS_PRIMARY_DIR=${QUBIUS_PRIMARY_DIR:-$QUBIUS_HOME/qubius}
+  QUBIUS_PRIMARY_DIR=${QUBIUS_PRIMARY_DIR:-$QUBIUS_REPO_DIR}
   QUBIUS_SECONDARY_DIR=${QUBIUS_SECONDARY_DIR:-$QUBIUS_HOME/co-qubius}
-  QUBIUS_DATA_PRIMARY=${QUBIUS_DATA_PRIMARY:-${XDG_DATA_HOME:-$QUBIUS_HOME/.local/share}/qubius}
-  QUBIUS_DATA_SECONDARY=${QUBIUS_DATA_SECONDARY:-${XDG_DATA_HOME:-$QUBIUS_HOME/.local/share}/co-qubius}
+  QUBIUS_DATA_PRIMARY=${QUBIUS_DATA_PRIMARY:-$QUBIUS_PRIMARY_DIR/.qubius/data}
+  QUBIUS_DATA_SECONDARY=${QUBIUS_DATA_SECONDARY:-$QUBIUS_SECONDARY_DIR/.qubius/data}
   QUBIUS_PRIMARY_PORT=$(qubius_port "${QUBIUS_PRIMARY_PORT:-8787}")
   QUBIUS_SECONDARY_PORT=$(qubius_port "${QUBIUS_SECONDARY_PORT:-8788}")
   QUBIUS_PRIMARY_REF=${QUBIUS_PRIMARY_REF:-main}
@@ -113,9 +118,11 @@ qubius_apply_defaults() {
 
   # 可选项：留空表示不启用。
   QUBIUS_LAN_HOST=${QUBIUS_LAN_HOST:-}
+  QUBIUS_LAN_USER=${QUBIUS_LAN_USER:-qubius}
   QUBIUS_ARCHIVE_DIR=${QUBIUS_ARCHIVE_DIR:-}
   QUBIUS_ARCHIVE_RETENTION_DAYS=${QUBIUS_ARCHIVE_RETENTION_DAYS:-30}
   QUBIUS_MAX_CONCURRENT=${QUBIUS_MAX_CONCURRENT:-4}
+  QUBIUS_APPROVAL_TIMEOUT_MINUTES=${QUBIUS_APPROVAL_TIMEOUT_MINUTES:-10}
   QUBIUS_PROJECTS_FILE=${QUBIUS_PROJECTS_FILE:-}
   QUBIUS_START_PRIMARY=$(qubius_bool "${QUBIUS_START_PRIMARY:-1}" 1)
   QUBIUS_START_SECONDARY=$(qubius_bool "${QUBIUS_START_SECONDARY:-1}" 1)
@@ -131,13 +138,18 @@ qubius_apply_defaults() {
     || qubius_die "QUBIUS_ARCHIVE_RETENTION_DAYS 必须是整数"
   [[ $QUBIUS_MAX_CONCURRENT =~ ^[0-9]+$ ]] \
     || qubius_die "QUBIUS_MAX_CONCURRENT 必须是整数"
+  [[ $QUBIUS_APPROVAL_TIMEOUT_MINUTES =~ ^[0-9]+$ ]] \
+    || qubius_die "QUBIUS_APPROVAL_TIMEOUT_MINUTES 必须是整数"
+  (( QUBIUS_APPROVAL_TIMEOUT_MINUTES <= 1440 )) \
+    || qubius_die "QUBIUS_APPROVAL_TIMEOUT_MINUTES 必须在 0 到 1440 之间"
 
   local name
   for name in QUBIUS_USER QUBIUS_HOME QUBIUS_CONFIG_DIR QUBIUS_PRIMARY_DIR QUBIUS_SECONDARY_DIR \
     QUBIUS_DATA_PRIMARY QUBIUS_DATA_SECONDARY QUBIUS_PRIMARY_PORT QUBIUS_SECONDARY_PORT \
     QUBIUS_PRIMARY_REF QUBIUS_PUBLIC_HOST QUBIUS_PUBLIC_HOST_SECONDARY \
     QUBIUS_PRIMARY_REPO_URL QUBIUS_SECONDARY_REPO_URL QUBIUS_SECONDARY QUBIUS_REPO_DIR \
-    QUBIUS_LAN_HOST QUBIUS_ARCHIVE_DIR QUBIUS_ARCHIVE_RETENTION_DAYS QUBIUS_MAX_CONCURRENT \
+    QUBIUS_LAN_HOST QUBIUS_LAN_USER QUBIUS_ARCHIVE_DIR QUBIUS_ARCHIVE_RETENTION_DAYS QUBIUS_MAX_CONCURRENT \
+    QUBIUS_APPROVAL_TIMEOUT_MINUTES \
     QUBIUS_PROJECTS_FILE QUBIUS_START_PRIMARY QUBIUS_START_SECONDARY QUBIUS_START_LAN QUBIUS_CLONE_PEER \
     QUBIUS_GITEA_URL QUBIUS_GITEA_OWNER QUBIUS_GITEA_TOKEN QUBIUS_NODE_BIN \
     QUBIUS_AUTH QUBIUS_AUTH_TOKEN QUBIUS_VAPID_SUBJECT; do
@@ -311,4 +323,41 @@ qubius_require_dir() {
 
 qubius_require_cmd() {
   command -v "$1" >/dev/null 2>&1 || qubius_die "缺少命令：$1"
+}
+
+# ── 局域网登录凭据 ──────────────────────────────────────────────────────────
+# 默认文件：$QUBIUS_CONFIG_DIR/lan-proxy.credentials，一行 user:password。
+qubius_lan_credentials_file() {
+  local configured=${LAN_PROXY_CREDENTIALS:-}
+  if [[ -n $configured ]]; then
+    if [[ $configured == /* ]]; then
+      printf '%s\n' "$configured"
+    else
+      printf '%s/%s\n' "$QUBIUS_CONFIG_DIR" "$configured"
+    fi
+    return 0
+  fi
+  printf '%s/lan-proxy.credentials\n' "$QUBIUS_CONFIG_DIR"
+}
+
+# 缺失时生成一份并打印一次；已存在则不动（部署页会显示当前用户名和“密码已设置”）。
+qubius_ensure_lan_credentials() {
+  local file user pass node
+  file=$(qubius_lan_credentials_file)
+  if [[ -f $file ]]; then
+    return 0
+  fi
+  user=${QUBIUS_LAN_USER:-qubius}
+  [[ $user =~ ^[^[:space:]:]{1,64}$ ]] \
+    || qubius_die "QUBIUS_LAN_USER 只能包含非空白、非冒号字符（1-64）"
+  node=$(qubius_resolve_node)
+  pass=$("$node" -e 'process.stdout.write(require("node:crypto").randomBytes(12).toString("base64url"))') \
+    || qubius_die "无法生成局域网密码"
+  mkdir -p "$(dirname "$file")"
+  (umask 077; printf '%s:%s\n' "$user" "$pass" >"$file")
+  chmod 600 "$file" 2>/dev/null || true
+  qubius_info "已生成局域网登录凭据（只显示这一次）："
+  qubius_info "  用户名：$user"
+  qubius_info "  密码：$pass"
+  qubius_info "  文件：$file"
 }

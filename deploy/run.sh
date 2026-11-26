@@ -45,4 +45,6 @@ printf '%s\n' "$$" > "$PIDFILE"
 trap 'rm -f "$PIDFILE"' EXIT
 
 cd "$REPO"
+# 服务端用 QUBIUS_REPO_DIR 推导 <checkout>/.qubius 的默认配置/数据目录。
+export QUBIUS_REPO_DIR=$REPO
 exec "$NODE_BIN" server/dist/index.js
