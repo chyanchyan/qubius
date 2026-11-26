@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -12,6 +13,7 @@ import type { Runtime } from "./runtime.js";
 import { tryLockSession, unlockSession } from "./session-lock.js";
 import { Store } from "./store.js";
 import type { Effort } from "./types.js";
+import { createWorktree } from "./worktree.js";
 
 const ID = "33333333-3333-4333-8333-333333333333";
 const ID2 = "44444444-4444-4444-8444-444444444444";
@@ -149,6 +151,10 @@ test("归档接口：列表、详情、恢复、删除和状态", async () => {
     const session = createSession(harness, ID);
     const transcript = writeSdkTranscript(harness, ID);
     await harness.archive.archive(session);
+    // 定期快照：本机副本还在且没有删除意图时，归档列表不重复显示它。
+    const hidden = await json(`${harness.url}/api/archive/sessions?projectId=p1`);
+    assert.equal(hidden.status, 200);
+    assert.equal(hidden.body.sessions.length, 0);
     // 归档列表只显示已经不在 SSD 上的会话；这里模拟到期清理。
     harness.store.remove(ID);
 
@@ -568,6 +574,87 @@ test("删除 isolated 会话会删掉它自己的目录", async () => {
     const deleted = await json(`${harness.url}/api/sessions/${ID2}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);
     assert.equal(fs.existsSync(cwd), false);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("冷备完成后清理失败：归档列表显示待清理，重试只补未完成步骤", {
+  skip: typeof process.getuid === "function" && process.getuid() === 0,
+}, async () => {
+  const harness = await startHarness();
+  try {
+    // 真实 git 仓库 + worktree，模拟 Windows 上「注册项已删、目录被占用」的清理失败。
+    const git = (...args: string[]) => execFileSync("git", ["-C", harness.projectPath, ...args], {
+      encoding: "utf8",
+    });
+    execFileSync("git", ["init", "-b", "main", harness.projectPath], { encoding: "utf8" });
+    git("config", "user.name", "Test");
+    git("config", "user.email", "test@example.com");
+    fs.writeFileSync(path.join(harness.projectPath, "a.txt"), "one\n");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+
+    const created = await createWorktree({
+      projectPath: harness.projectPath,
+      projectId: "p1",
+      sessionId: ID2,
+      dataDir: harness.dataDir,
+    });
+    harness.store.create({
+      id: ID2,
+      projectId: "p1",
+      projectPath: harness.projectPath,
+      title: "旧对话",
+      providerId: "prov",
+      providerName: "服务商",
+      model: "model-x",
+      effort: "high",
+      cwd: created.cwd,
+      branch: created.branch,
+      git: true,
+      prompt: "你好",
+    });
+    fs.writeFileSync(path.join(created.cwd, "work.txt"), "work\n");
+
+    // 目录父级不可写：git 删掉注册项后无法再删目录，降级递归删除也会失败。
+    const worktreesParent = path.dirname(created.cwd);
+    fs.chmodSync(worktreesParent, 0o555);
+    try {
+      const failed = await json(`${harness.url}/api/sessions/${ID2}`, { method: "DELETE" });
+      assert.equal(failed.status, 500);
+      assert.match(failed.body.error, /无法清理对话目录/);
+      assert.ok(harness.store.get(ID2));
+    } finally {
+      fs.chmodSync(worktreesParent, 0o755);
+    }
+
+    // 冷备已完成并打上待清理标记；归档列表仍要显示它（以前会被一刀切隐藏）。
+    const meta = await harness.archive.meta(ID2);
+    assert.equal(meta?.pendingDelete, true);
+    const archivedAt = meta!.archivedAt;
+    const list = await json(`${harness.url}/api/archive/sessions?projectId=p1`);
+    assert.equal(list.status, 200);
+    const pending = list.body.sessions.find((item: { id: string }) => item.id === ID2);
+    assert.ok(pending);
+    assert.equal(pending.pendingDelete, true);
+    assert.equal(pending.local, true);
+
+    // 重试：跳过重复冷备，只补删目录和会话。
+    const retry = await json(`${harness.url}/api/sessions/${ID2}`, { method: "DELETE" });
+    assert.equal(retry.status, 200);
+    assert.equal(harness.store.get(ID2), undefined);
+    assert.equal(fs.existsSync(created.cwd), false);
+    const after = await harness.archive.meta(ID2);
+    assert.equal(after?.pendingDelete, undefined);
+    assert.equal(after?.archivedAt, archivedAt);
+
+    const list2 = await json(`${harness.url}/api/archive/sessions?projectId=p1`);
+    assert.equal(list2.status, 200);
+    const normal = list2.body.sessions.find((item: { id: string }) => item.id === ID2);
+    assert.ok(normal);
+    assert.equal(normal.local, false);
+    assert.equal(normal.pendingDelete, undefined);
   } finally {
     await harness.close();
   }

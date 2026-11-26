@@ -2158,6 +2158,11 @@ h1 { font-size: var(--fs-15); font-weight: 600; margin: calc(4px * var(--control
   border-top: 0;
 }
 
+/* 冷备完成但本机清理失败：不显眼地标出来，操作区只留「重试清理」。 */
+.archive-row.pending-cleanup {
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
 .archive-text {
   flex: 1;
   min-width: 0;

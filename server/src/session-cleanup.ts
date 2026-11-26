@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionCore } from "./types.js";
-import { removeWorktree, restoreWorktree } from "./worktree.js";
+import { removeDirWithRetry, removeWorktree, restoreWorktree } from "./worktree.js";
 
 /**
  * 隔离项目里属于这个对话自己的目录。只接受 <项目目录>/<对话 id>，
@@ -24,12 +24,12 @@ export function isolatedWorkspace(session: SessionCore): string | null {
  */
 export async function removeSessionWorkspace(session: SessionCore): Promise<void> {
   if (session.git && session.cwd !== session.projectPath) {
-    await removeWorktree(session.projectPath, session.cwd, session.branch);
+    await removeWorktree(session.projectPath, session.cwd, session.branch, { sessionId: session.id });
     return;
   }
   const workspace = isolatedWorkspace(session);
   if (workspace) {
-    await fs.promises.rm(workspace, { recursive: true, force: true });
+    await removeDirWithRetry(workspace);
   }
 }
 
@@ -39,12 +39,12 @@ export async function removeSessionWorkspace(session: SessionCore): Promise<void
  */
 export async function removeRestoredWorkspace(session: SessionCore): Promise<void> {
   if (session.git && session.cwd !== session.projectPath) {
-    await removeWorktree(session.projectPath, session.cwd);
+    await removeWorktree(session.projectPath, session.cwd, undefined, { sessionId: session.id });
     return;
   }
   const workspace = isolatedWorkspace(session);
   if (workspace) {
-    await fs.promises.rm(workspace, { recursive: true, force: true });
+    await removeDirWithRetry(workspace);
   }
 }
 

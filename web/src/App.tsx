@@ -17,7 +17,7 @@ import {
 import { createPortal } from "react-dom";
 import { answerBody } from "./answers";
 import { ARCHIVE_RESTORE_NOTE, deleteDetail } from "./archive-copy";
-import { filterArchivedSessions } from "./archive-search";
+import { filterArchivedSessions, isPendingCleanup } from "./archive-search";
 import { instanceBrand } from "./brand";
 import { useAttachments } from "./Attachments";
 import {
@@ -1184,7 +1184,12 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     () => filterArchivedSessions(archived, archiveQuery),
     [archived, archiveQuery],
   );
-  const [archivedBusy, setArchivedBusy] = useState<{ id: string; action: "restore" | "delete" } | null>(null);
+  /* 冷备完成但本机副本没删掉的条目数：在面板顶部提示，用户不用往下翻。 */
+  const pendingCleanupCount = useMemo(
+    () => archived.filter(isPendingCleanup).length,
+    [archived],
+  );
+  const [archivedBusy, setArchivedBusy] = useState<{ id: string; action: "restore" | "delete" | "cleanup" } | null>(null);
   const [sweeping, setSweeping] = useState(false);
   const [showSchedules, setShowSchedules] = useState(false);
   const archiveSeq = useRef(0);
@@ -1297,6 +1302,33 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
       setArchivedBusy(null);
       // 删除成功后也刷新一次，修正在途旧响应可能带回来的数据。
       void refreshArchive();
+    }
+  }
+
+  /* 冷备已完成、本机副本上次没删掉：重试 DELETE。服务端会复用现有归档，
+     只补做没完成的步骤，不会重新复制整份 transcript。 */
+  async function onCleanupArchived(item: ArchivedSession) {
+    if (archivedBusy) return;
+    setArchivedBusy({ id: item.id, action: "cleanup" });
+    setError("");
+    try {
+      await deleteSession(item.id);
+      removedIds.current.set(item.id, Date.now());
+      setSessions((current) => current.filter((entry) => entry.id !== item.id));
+      setSelectedIds((current) => {
+        if (!current.has(item.id)) return current;
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
+    } catch (reason) {
+      reportActionError(reason instanceof Error ? reason.message : "清理失败");
+    } finally {
+      setArchivedBusy(null);
+      // 成功时条目会变成普通归档（本机副本没了），失败时保留「待清理」状态；
+      // 两种情况都以服务端结果为准。
+      void refreshArchive();
+      void refreshSessions();
     }
   }
 
@@ -1952,6 +1984,9 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
           <div className="archive-panel-head">
             <span className="archive-path">
               {archiveStatus.instance ?? "main"} · 列表保留 {archiveStatus.retentionDays ?? 30} 天 · 到期归档到冷存储
+              {pendingCleanupCount > 0 && (
+                <span className="error"> · {pendingCleanupCount} 条待清理</span>
+              )}
             </span>
             <div className="archive-search" role="search">
               <input
@@ -1979,32 +2014,50 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
           {visibleArchived.map((item) => {
             const restoring = archivedBusy?.id === item.id && archivedBusy.action === "restore";
             const deleting = archivedBusy?.id === item.id && archivedBusy.action === "delete";
+            const cleaning = archivedBusy?.id === item.id && archivedBusy.action === "cleanup";
             const rowBusy = Boolean(archivedBusy) || sweeping || Boolean(archiveStatus?.sweeping);
+            /* 冷备已完成、本机副本还在：恢复会被服务端拒绝，只能重试清理。 */
+            const pendingCleanup = isPendingCleanup(item);
             return (
-              <div className="archive-row" key={item.id}>
+              <div className={pendingCleanup ? "archive-row pending-cleanup" : "archive-row"} key={item.id}>
                 <div className="archive-text">
                   <strong className="convo-title">{item.title}</strong>
                   <span className="convo-sub">{item.summary}</span>
                   <span className="archive-meta">
+                    {pendingCleanup && <span className="error">待清理 · 本机副本仍在 · </span>}
                     更新 {formatArchiveTime(item.updatedAt)} · 归档 {formatArchiveTime(item.archivedAt)} · {item.messageCount} 条
                   </span>
                 </div>
-                <button
-                  className="text-btn"
-                  disabled={rowBusy}
-                  aria-label={`恢复归档「${item.title}」`}
-                  onClick={() => void onRestoreArchived(item)}
-                >
-                  {restoring ? "恢复中" : "恢复"}
-                </button>
-                <button
-                  className="text-btn danger"
-                  disabled={rowBusy}
-                  aria-label={`永久删除归档「${item.title}」`}
-                  onClick={() => void onDeleteArchived(item)}
-                >
-                  {deleting ? "删除中" : "删除"}
-                </button>
+                {pendingCleanup ? (
+                  <button
+                    className="text-btn"
+                    disabled={rowBusy}
+                    title="重新删除本机副本；归档已完成，不会重复写入"
+                    aria-label={`重试清理「${item.title}」`}
+                    onClick={() => void onCleanupArchived(item)}
+                  >
+                    {cleaning ? "清理中" : "重试清理"}
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      className="text-btn"
+                      disabled={rowBusy}
+                      aria-label={`恢复归档「${item.title}」`}
+                      onClick={() => void onRestoreArchived(item)}
+                    >
+                      {restoring ? "恢复中" : "恢复"}
+                    </button>
+                    <button
+                      className="text-btn danger"
+                      disabled={rowBusy}
+                      aria-label={`永久删除归档「${item.title}」`}
+                      onClick={() => void onDeleteArchived(item)}
+                    >
+                      {deleting ? "删除中" : "删除"}
+                    </button>
+                  </>
+                )}
               </div>
             );
           })}
