@@ -304,7 +304,8 @@ summary:focus-visible {
   .agent-badge-label { display: none; }
 
   /* 窄屏上配置 chips 换行后全部可见，不再藏在很窄的横向滚动区里。
-     操作按钮单独占下一行，避免 chips 被右侧按钮挤成三四层。 */
+     当前轮在跑时还有快捷键提示，这时让 chips 独占一行，避免被右侧按钮
+     挤成三四层；空闲时（没有提示）交给下面的粗指针规则与按钮同排。 */
   .composer-actions {
     flex-wrap: wrap;
     row-gap: calc(2px * var(--control-scale));
@@ -317,6 +318,18 @@ summary:focus-visible {
   }
 
   .composer-end { margin-left: auto; }
+}
+
+/* 手指输入的窄屏空闲态：chips 和发送按钮同排，整块输入区少占一行。
+   提示出现时（active）会占掉横向空间，此时保持上面 chips 独占一行的布局。 */
+@media (max-width: 560px) and (pointer: coarse) {
+  .composer-actions:not([data-hint]) {
+    flex-wrap: nowrap;
+  }
+
+  .composer-actions:not([data-hint]) .chips {
+    flex: 1 1 auto;
+  }
 }
 
 .font-btn {
@@ -1691,7 +1704,8 @@ summary:focus-visible {
 .composer-box textarea {
   resize: none;
   width: 100%;
-  min-height: calc(62px * var(--control-scale));
+  /* 单行高度起步，按内容自动长到上面的 max-height；空态不再预留两行空白。 */
+  min-height: calc(34px * var(--control-scale));
   max-height: calc(180px * var(--control-scale));
   border: 0;
   outline: none;

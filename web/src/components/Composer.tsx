@@ -66,16 +66,12 @@ export const Composer = memo(function Composer({
   stopDisabled?: boolean;
 }) {
   /* value 变化（发送后清空、恢复多行草稿、听写追加）后重新按内容量一次高度。
-     发送后清空能恢复默认行高；恢复草稿时不会停留在两行内部滚动。 */
+     发送后清空能回落到单行；空态下占位文字在窄屏换行时也能完整显示，
+     不会因为单行高度把提示裁掉。 */
   useEffect(() => {
     const node = textareaRef.current;
     if (!node) return;
-    if (value === "") {
-      node.style.height = "auto";
-      return;
-    }
-    node.style.height = "auto";
-    node.style.height = `${node.scrollHeight}px`;
+    grow(node);
   }, [value, textareaRef]);
 
   /* 左滑把整个输入框切换成「上方文字编辑框 + 下方大语音按钮」，
@@ -166,7 +162,8 @@ export const Composer = memo(function Composer({
   }
 
   /* 两套底部面板高度不同：量出当前面板的高度，让外层高度平滑过渡，
-     切换模式时不会整块瞬变。chips 换行等宽度变化也会同步更新。 */
+     切换模式时不会整块瞬变。chips 换行、提示出现等宽度变化也会同步更新；
+     active 直接进依赖，提示出现导致的高度变化当帧就量到，不留一帧裁切。 */
   const actionsRef = useRef<HTMLDivElement>(null);
   const voicePadRef = useRef<HTMLDivElement>(null);
   const [bottomHeight, setBottomHeight] = useState<number | undefined>(undefined);
@@ -180,7 +177,7 @@ export const Composer = memo(function Composer({
     const observer = new ResizeObserver(sync);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [voiceMode]);
+  }, [voiceMode, active]);
 
   return (
     <form
@@ -220,7 +217,7 @@ export const Composer = memo(function Composer({
           ref={textareaRef}
           value={value}
           placeholder={placeholder}
-          rows={2}
+          rows={1}
           onChange={(event) => {
             setValue(event.target.value);
             grow(event.target);
@@ -254,6 +251,7 @@ export const Composer = memo(function Composer({
             ref={actionsRef}
             className="composer-bottom-panel composer-actions"
             data-active={!voiceMode}
+            data-hint={active ? "true" : undefined}
             aria-hidden={voiceMode}
             inert={voiceMode}
           >
@@ -350,5 +348,8 @@ function grow(node: HTMLTextAreaElement) {
   /* CSS 已经用 max-height: calc(180px * var(--control-scale)) 限制了上限，
      这里只需要先归零再按内容撑开，避免每敲一个字都同步读取 computed style。 */
   node.style.height = "auto";
+  /* 内容（空态下是占位文字）只有一行时保持 auto：高度跟着字号缩放，
+     调大/调小字号后不用等下一次输入才纠正。多行才写死像素高度。 */
+  if (node.scrollHeight <= node.offsetHeight) return;
   node.style.height = `${node.scrollHeight}px`;
 }

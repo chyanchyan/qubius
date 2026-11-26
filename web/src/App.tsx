@@ -2194,7 +2194,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
         onSubmit={onCreate}
         value={prompt}
         setValue={setPrompt}
-        placeholder="要做的事，可以粘贴或添加图片/文本文件"
+        placeholder="要做的事，可粘贴图片/文件"
         canSend={canSend}
         sendLabel={busy ? "正在创建" : "开始对话"}
         textareaRef={inputRef}
@@ -3192,7 +3192,7 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
         onSubmit={onSend}
         value={prompt}
         setValue={setPrompt}
-        placeholder="继续这个对话，可以粘贴或添加图片/文本文件"
+        placeholder="继续这个对话，可粘贴图片/文件"
         canSend={canSend}
         sendLabel={queueMode ? "排队发送" : "发送"}
         textareaRef={inputRef}
