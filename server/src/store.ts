@@ -3,6 +3,7 @@ import path from "node:path";
 import { removeSessionImages } from "./images.js";
 import {
   applySdkMessage,
+  assistantOutputText,
   capMessageText,
   clip,
   detectWorkflowSkill,
@@ -163,6 +164,13 @@ export class Store {
   private usageCache = new Map<string, { key: string; totals: UsageTotals }>();
   /** 各会话的实时输出速度计；只在内存里，进程重启后从零开始。 */
   private tokenRates = new Map<string, TokenRateMeter>();
+  /**
+   * 子 agent 最近一次输出块的到达时间：会话 -> taskId -> 毫秒时间戳。
+   * 子 agent 没有流式增量，整块内容到达时要按距上一块的时间均摊速度。
+   */
+  private subagentOutputAt = new Map<string, Map<string, number>>();
+  /** 收到过子 agent 流式增量的会话：此时以增量为准，完整消息不再重复计数。 */
+  private subagentStreams = new Set<string>();
   /** 最近一次落盘失败的会话，供 flush() 重试/上报。 */
   private failures = new Map<string, Error>();
   private emitTimers = new Map<string, NodeJS.Timeout>();
@@ -1112,7 +1120,7 @@ export class Store {
     const current = this.require(id);
     const next = applySdkMessage(current, message, this.seenSet(id));
     // 去重命中（next === current）时这条消息没有生效，不能再计一次速度。
-    if (next !== current) this.noteStreamTokens(id, message);
+    if (next !== current) this.noteOutputTokens(id, message);
     this.commit(next);
     // result 落定旧工作流的 endedAt 之后，再切到排队中的下一轮工作流。
     // 只有消息确实被应用（uuid 去重未命中）才推进 deferred，避免重放 result
@@ -1122,29 +1130,64 @@ export class Store {
   }
 
   /**
-   * 顶栏的实时速度：所有 agent 的流式增量（正文、思考、工具输入）都按字符
-   * 估算后记入当前会话的速度计。子 agent 的正文不进本地 transcript，但它们
-   * 同样在消耗输出 token，所以这里不看 parent_tool_use_id。
+   * 顶栏的实时速度：主 agent 的流式增量（正文、思考、工具输入）按字符估算后
+   * 记入当前会话的速度计。
+   *
+   * 子 agent 的输出不经过流式增量：SDK 只把它的正文/思考/工具输入作为完整
+   * 消息下发（开启 forwardSubagentText 后连正文和思考一起转发）。等整块到达
+   * 再按它生成的时间区间均摊，否则速度会在到达瞬间冲出几十倍。子 agent 的
+   * 完整消息不进本地 transcript，但同样消耗输出 token，所以这里不看
+   * parent_tool_use_id。若将来 CLI 也开始下发子 agent 增量，则以增量为准，
+   * 不再重复统计完整消息。
    */
-  private noteStreamTokens(id: string, message: SdkMessage): void {
-    if (message.type !== "stream_event") return;
-    const event = message.event;
-    if (!event || event.type !== "content_block_delta" || !event.delta) return;
-    const delta = event.delta;
-    const text = delta.type === "text_delta"
-      ? delta.text
-      : delta.type === "thinking_delta"
-        ? delta.thinking
-        : delta.type === "input_json_delta"
-          ? delta.partial_json
-          : undefined;
+  private noteOutputTokens(id: string, message: SdkMessage): void {
+    if (message.type === "stream_event") {
+      const event = message.event;
+      if (!event || event.type !== "content_block_delta" || !event.delta) return;
+      const delta = event.delta;
+      const text = delta.type === "text_delta"
+        ? delta.text
+        : delta.type === "thinking_delta"
+          ? delta.thinking
+          : delta.type === "input_json_delta"
+            ? delta.partial_json
+            : undefined;
+      if (!text) return;
+      this.meter(id).note(text);
+      if (message.parent_tool_use_id || message.agent_id) this.subagentStreams.add(id);
+      return;
+    }
+    if (message.type !== "assistant") return;
+    // 主线程的完整消息与流式增量内容重复，只统计子 agent 的。
+    const taskId = message.agent_id || message.parent_tool_use_id;
+    if (!taskId || this.subagentStreams.has(id)) return;
+    const text = assistantOutputText(message);
     if (!text) return;
+    const now = Date.now();
+    const runStartedAt = Date.parse(
+      this.sessions.get(id)?.subagents.find((item) => item.taskId === taskId)?.runStartedAt ?? "",
+    );
+    let from = Number.isFinite(runStartedAt) ? runStartedAt : now;
+    const last = this.subagentOutputAt.get(id)?.get(taskId);
+    // 续跑时 runStartedAt 会重置，取两者中较晚的起点，避免把新一块摊到上一轮。
+    if (typeof last === "number" && last > from) from = last;
+    if (!(from <= now)) from = now;
+    this.meter(id).noteSpan(text, from, now);
+    let outputAt = this.subagentOutputAt.get(id);
+    if (!outputAt) {
+      outputAt = new Map();
+      this.subagentOutputAt.set(id, outputAt);
+    }
+    outputAt.set(taskId, now);
+  }
+
+  private meter(id: string): TokenRateMeter {
     let meter = this.tokenRates.get(id);
     if (!meter) {
       meter = new TokenRateMeter();
       this.tokenRates.set(id, meter);
     }
-    meter.note(text);
+    return meter;
   }
 
   private seenSet(id: string): Set<string> {
@@ -1290,6 +1333,8 @@ export class Store {
     this.pending.delete(id);
     this.usageCache.delete(id);
     this.tokenRates.delete(id);
+    this.subagentOutputAt.delete(id);
+    this.subagentStreams.delete(id);
     this.failures.delete(id);
     const emitTimer = this.emitTimers.get(id);
     if (emitTimer) clearTimeout(emitTimer);

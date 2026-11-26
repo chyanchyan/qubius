@@ -26,6 +26,22 @@ test("TokenRateMeter：窗口滑出后自动归零", () => {
   assert.equal(meter.rate(2_000), 0);
 });
 
+test("TokenRateMeter.noteSpan：整块内容按生成区间均摊，不在到达瞬间形成尖峰", () => {
+  const meter = new TokenRateMeter();
+  // 4 个 token 在最近 4 秒内生成，窗口只覆盖最后 2 秒，记一半（按桶对齐会略少）。
+  meter.noteSpan("你好世界", 6_000, 10_000);
+  const rate = meter.rate(10_000);
+  assert.ok(rate >= 0.8 && rate <= 1, `unexpected rate ${rate}`);
+  // 生成区间完全落在窗口内时全部计入。
+  const quick = new TokenRateMeter();
+  quick.noteSpan("你好世界", 9_000, 10_000);
+  assert.equal(quick.rate(10_000), 2);
+  // 区间非法（相同时间）时退回即时计入。
+  const instant = new TokenRateMeter();
+  instant.noteSpan("abcd", 10_000, 10_000);
+  assert.equal(instant.rate(10_000), 0.5);
+});
+
 test("TokenRateMeter：同一桶多次累加，跨桶按各自时间计算", () => {
   const meter = new TokenRateMeter();
   meter.note("abcd", 10);

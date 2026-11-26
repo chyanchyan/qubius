@@ -1276,6 +1276,26 @@ function contentBlocks(content: unknown): Array<{
   }>;
 }
 
+/**
+ * 一条完整 assistant 消息里模型真正生成的输出：正文、思考和工具输入。
+ *
+ * 主线程的输出速度用流式增量统计；子 agent 没有流式增量，只能等完整消息
+ * 到达后按整块内容估算，所以这里把三类输出拼在一起交给速度计。
+ */
+export function assistantOutputText(message: SdkMessage): string {
+  const parts: string[] = [];
+  for (const block of contentBlocks(message.message?.content)) {
+    if (block.type === "text") {
+      if (block.text) parts.push(block.text);
+    } else if (block.type === "thinking") {
+      if (block.thinking) parts.push(block.thinking);
+    } else if (block.type === "tool_use") {
+      parts.push(previewInput(block.input));
+    }
+  }
+  return parts.join("");
+}
+
 function previewInput(input: unknown): string {
   if (input == null) return "";
   if (typeof input === "string") return input;

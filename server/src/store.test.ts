@@ -1598,7 +1598,7 @@ test("stopBackgroundTasks 只补空摘要，没有 running 任务时不改 updat
   }
 });
 
-test("流式增量计入实时输出速度：子 agent 也算，重放帧不重复", async () => {
+test("流式增量计入实时输出速度：子 agent 增量同样计入，重放帧不重复", async () => {
   const dataDir = tempDir();
   let store: Store | undefined;
   try {
@@ -1625,11 +1625,68 @@ test("流式增量计入实时输出速度：子 agent 也算，重放帧不重�
     // 同一 uuid 的重放帧已被去重，不能重复计数。
     store.apply("s1", subagent);
     assert.equal(store.summary("s1").tokensPerSecond, 3);
+    // 已经收到子 agent 的流式增量后，同一块的完整消息不能再算一遍。
+    store.apply("s1", {
+      type: "assistant",
+      uuid: "d3",
+      parent_tool_use_id: "tool-1",
+      agent_id: "task-1",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "分析" }] },
+    });
+    assert.equal(store.summary("s1").tokensPerSecond, 3);
 
     // 速度只是内存里的显示数据，不落盘。
     await store.flush();
     const saved = readSession(dataDir, "s1") as SessionCore & { tokensPerSecond?: number };
     assert.equal(saved.tokensPerSecond, undefined);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("子 agent 的完整输出按生成区间计入速度，主线程完整消息不重复计数", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s2", "做点事"));
+    store.apply("s2", {
+      type: "system",
+      subtype: "task_started",
+      uuid: "t1",
+      task_id: "task-1",
+      task_type: "local_agent",
+      description: "开发",
+      timestamp: new Date(Date.now() - 4_000).toISOString(),
+    });
+    const output = {
+      type: "assistant" as const,
+      uuid: "a1",
+      parent_tool_use_id: "tool-1",
+      agent_id: "task-1",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "你好世界" },
+          { type: "tool_use", id: "tool-2", name: "Edit", input: { file: "a.ts" } },
+        ],
+      },
+    };
+    store.apply("s2", output);
+    // 约 8 个 token 在最近 4 秒内生成，2 秒窗口只摊到一半：约 2 tokens/s。
+    const rate = store.summary("s2").tokensPerSecond ?? 0;
+    assert.ok(rate === 1 || rate === 2, `unexpected rate ${rate}`);
+
+    // 重放的完整消息已被 uuid 去重；主线程的完整消息和流式增量重复，也不能计数。
+    store.apply("s2", output);
+    store.apply("s2", {
+      type: "assistant",
+      uuid: "a2",
+      parent_tool_use_id: null,
+      message: { role: "assistant", content: [{ type: "text", text: "你好世界" }] },
+    });
+    assert.equal(store.summary("s2").tokensPerSecond, rate);
   } finally {
     await store?.flush().catch(() => undefined);
     fs.rmSync(dataDir, { recursive: true, force: true });

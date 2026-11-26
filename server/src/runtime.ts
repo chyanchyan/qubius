@@ -1211,6 +1211,9 @@ export class Runtime {
       agentProgressSummaries: true,
       persistSession: true,
       includePartialMessages: true,
+      // 子 agent 的正文和思考默认不下发（只有工具调用/结果），CLI 也不会给它们
+      // 流式增量；开启后按完整消息转发，服务端才能把子 agent 的输出计入顶栏速度。
+      forwardSubagentText: true,
       // CLI 默认不回显 stdin 的 user 消息，必须显式开启：回滚/分叉的 forkPoint
       // 依赖回显里的 uuid 和回显前的 chain 指针（见 status.applySdkMessage）。
       extraArgs: { "replay-user-messages": null },
