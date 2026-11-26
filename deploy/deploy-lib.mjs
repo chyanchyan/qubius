@@ -5,6 +5,8 @@
 // 逻辑刻意与 deploy/lib.sh + deploy/install.sh 保持一致，方便测试。
 import crypto from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -562,6 +564,145 @@ export function proxyPlan({ restart = false, pidAlive = false, listening = false
   if (restart) return "restart";
   if (pidAlive || listening) return "keep";
   return "start";
+}
+
+// ── 局域网 IPv4 分类与地址选择 ──────────────────────────────────────────────
+// 只把私有/链路本地/CGNAT 段当作局域网地址。公网、回环、0.0.0.0、组播和保留段
+// 一律不自动选用，避免把公网网卡当成内网入口暴露出去。
+const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+
+/** 点分十进制 IPv4 -> 32 位无符号整数；非法地址（含前导零写法）返回 null。 */
+function ipv4ToInt(address) {
+  const text = String(address).trim();
+  const match = IPV4_RE.exec(text);
+  if (!match) return null;
+  const parts = match.slice(1);
+  const octets = parts.map((part) => Number(part));
+  if (octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return null;
+  // 拒绝 "010.0.0.1" 这类写法：不同工具可能按八进制解析，导致分类和实际不一致。
+  if (parts.some((part) => part.length > 1 && part.startsWith("0"))) return null;
+  const [a, b, c, d] = octets;
+  return (((a * 256 + b) * 256 + c) * 256 + d) >>> 0;
+}
+
+function ipv4InRange(value, network, prefix) {
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return ((value & mask) >>> 0) === ((network & mask) >>> 0);
+}
+
+const IPV4_RANGES = [
+  ["unspecified", ipv4ToInt("0.0.0.0"), 8],
+  ["loopback", ipv4ToInt("127.0.0.0"), 8],
+  ["private", ipv4ToInt("10.0.0.0"), 8],
+  ["private", ipv4ToInt("172.16.0.0"), 12],
+  ["private", ipv4ToInt("192.168.0.0"), 16],
+  ["shared", ipv4ToInt("100.64.0.0"), 10],
+  ["link-local", ipv4ToInt("169.254.0.0"), 16],
+  ["multicast", ipv4ToInt("224.0.0.0"), 4],
+  ["reserved", ipv4ToInt("240.0.0.0"), 4],
+  ["reserved", ipv4ToInt("192.0.0.0"), 24],
+  ["reserved", ipv4ToInt("192.0.2.0"), 24],
+  ["reserved", ipv4ToInt("198.18.0.0"), 15],
+  ["reserved", ipv4ToInt("198.51.100.0"), 24],
+  ["reserved", ipv4ToInt("203.0.113.0"), 24],
+];
+
+/**
+ * IPv4 分类：invalid / unspecified / loopback / private / shared / link-local /
+ * multicast / reserved / public。shared 是 100.64/10（CGNAT），与私有段一样可用作局域网。
+ */
+export function classifyIPv4(address) {
+  const value = ipv4ToInt(address);
+  if (value === null) return "invalid";
+  for (const [category, network, prefix] of IPV4_RANGES) {
+    if (ipv4InRange(value, network, prefix)) return category;
+  }
+  return "public";
+}
+
+const LAN_IPV4_CATEGORIES = new Set(["private", "shared", "link-local"]);
+
+/** 可自动选用的优先级：真实私有段 > CGNAT > 链路本地。 */
+const LAN_IPV4_PRIORITY = { private: 0, shared: 1, "link-local": 2 };
+
+/** 是否是可自动选用的局域网 IPv4（私有 / CGNAT / 链路本地）。 */
+export function isLanIPv4(address) {
+  return LAN_IPV4_CATEGORIES.has(classifyIPv4(address));
+}
+
+// RFC 1123 主机名：标签只含字母数字和连字符，不以连字符开头/结尾，可带结尾点。
+const HOSTNAME_RE = /^(?=.{1,253}\.?$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$/;
+
+/** 显式监听地址：合法 IPv4/IPv6 或主机名；像 IPv4 但越界/前导零的写法直接拒绝。 */
+function isValidListenHost(value) {
+  const text = String(value).trim();
+  if (!text) return false;
+  if (net.isIP(text) !== 0) return true;
+  // 纯数字点分但 net.isIP 不认（越界、前导零、段数不对），明确报错而不是当主机名。
+  if (/^[0-9.]+$/.test(text)) return false;
+  return HOSTNAME_RE.test(text);
+}
+
+const warnedPublicHosts = new Set();
+
+/**
+ * 选择局域网入口地址（lan-proxy 与 deploy-job 共用）：
+ * - LAN_PROXY_HOST / QUBIUS_LAN_HOST 显式指定优先；显式给公网 IPv4 时允许但告警。
+ * - 否则遍历网卡，只接受私有/CGNAT/链路本地 IPv4，跳过回环、docker 等虚拟网卡；
+ *   同时存在多类地址时按 private > shared > link-local 选择。
+ * - 找不到可用地址时抛错，提示显式设置，而不是退回公网或回环。
+ */
+export function lanAddress({
+  env = process.env,
+  interfaces = os.networkInterfaces(),
+  warn = (text) => console.warn(text),
+} = {}) {
+  const explicit = String(env.LAN_PROXY_HOST ?? "").trim() || String(env.QUBIUS_LAN_HOST ?? "").trim();
+  if (explicit) {
+    if (!isValidListenHost(explicit)) {
+      throw new Error(
+        `LAN_PROXY_HOST/QUBIUS_LAN_HOST 不是合法的 IP 或主机名：${explicit}（不能含空格或非法字符）`,
+      );
+    }
+    if (classifyIPv4(explicit) === "public" && !warnedPublicHosts.has(explicit)) {
+      warnedPublicHosts.add(explicit);
+      warn(
+        `警告：LAN_PROXY_HOST/QUBIUS_LAN_HOST 指定了公网地址 ${explicit}。`
+        + "局域网入口会用明文 HTTP 传输 Basic 凭据，公网可被嗅探或中间人截获；"
+        + "请改用私有地址，或把入口放在 TLS/VPN 之后。",
+      );
+    }
+    return explicit;
+  }
+  const skip = /^(lo|docker|br-|veth|virbr|tun|tap|cni)/;
+  let best = "";
+  let bestPriority = Infinity;
+  for (const [name, addrs] of Object.entries(interfaces)) {
+    if (skip.test(name) || !addrs) continue;
+    for (const addr of addrs) {
+      // 新版 Node 是 "IPv4"，老版本可能是数字 4。
+      const family = typeof addr.family === "string" ? addr.family : addr.family === 4 ? "IPv4" : "";
+      if (family !== "IPv4" || addr.internal) continue;
+      const priority = LAN_IPV4_PRIORITY[classifyIPv4(addr.address)];
+      if (priority === undefined || priority >= bestPriority) continue;
+      best = addr.address;
+      bestPriority = priority;
+    }
+  }
+  if (best) return best;
+  throw new Error(
+    "找不到可用的局域网 IPv4 地址（只接受 10/8、172.16/12、192.168/16、100.64/10、169.254/16）；"
+    + "请用 LAN_PROXY_HOST 或 QUBIUS_LAN_HOST 显式指定",
+  );
+}
+
+/**
+ * 生成局域网入口子进程的环境：监听地址使用调用方已经解析好的 host，
+ * 保证端口探活与子进程实际绑定的是同一个地址。LAN_PROXY_HOST 与
+ * QUBIUS_LAN_HOST 同时存在且不同时，也以解析结果为准。
+ */
+export function proxyChildEnv(env, host) {
+  return { ...env, LAN_PROXY_HOST: host };
 }
 
 /**

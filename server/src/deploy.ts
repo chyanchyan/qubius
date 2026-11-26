@@ -15,6 +15,7 @@ import {
 } from "./config.js";
 import { resolveDeployEnvFile, type DeployEnvSource } from "./deploy-env.js";
 import { jobTimestamp } from "./job-state.js";
+import { tryLanAddress } from "./lan-address.js";
 import {
   claim as claimOpsLock,
   clear as clearOpsLock,
@@ -1651,20 +1652,53 @@ function generateLanPassword(): string {
   return randomBytes(12).toString("base64url");
 }
 
-/** 与 deploy/lan-proxy.mjs 的 lanAddress() 保持一致：第一个非回环 IPv4。 */
-export function detectLanHost(): string | undefined {
-  const skip = /^(lo|docker|br-|veth|virbr|tun|tap|cni)/;
-  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
-    if (skip.test(name) || !addrs) continue;
-    for (const addr of addrs) {
-      if (addr.family === "IPv4" && !addr.internal) return addr.address;
-    }
+/**
+ * 合并进程 env 与部署 env 文件里的局域网地址变量：
+ * 进程 env 优先，其次 env 文件（QUBIUS_ENV > configDir/env > repo/deploy/env）。
+ * 这样服务端能读到 start-all 没有导出的 LAN_PROXY_HOST。
+ */
+export function deployLanEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  configDir?: string,
+  repoRoot?: string,
+): NodeJS.ProcessEnv {
+  if (!configDir) return { ...env };
+  const resolved = resolveDeployEnvFile(env, configDir, repoRoot);
+  if (!resolved.exists) return { ...env };
+  let stored: Record<string, string>;
+  try {
+    stored = parseEnvFile(fs.readFileSync(resolved.file, "utf8"), env);
+  } catch {
+    return { ...env };
   }
-  return undefined;
+  const merged: NodeJS.ProcessEnv = { ...env };
+  for (const key of ["LAN_PROXY_HOST", "QUBIUS_LAN_HOST"]) {
+    if (!nonEmpty(merged[key]) && nonEmpty(stored[key])) merged[key] = stored[key];
+  }
+  return merged;
+}
+
+/**
+ * 自动选择局域网 IPv4（忽略显式配置），保留给旧调用方。
+ * 新代码请用 lan-address.ts 的 lanAddress()/tryLanAddress()，它们会优先采用
+ * LAN_PROXY_HOST/QUBIUS_LAN_HOST。
+ */
+export function detectLanHost(): string | undefined {
+  return tryLanAddress({ env: {} });
 }
 
 function lanUrls(form: DeployForm, env: NodeJS.ProcessEnv): string[] {
-  const host = form.lanHost.trim() || nonEmpty(env.QUBIUS_LAN_HOST) || detectLanHost();
+  // LAN_PROXY_HOST 优先；表单值（QUBIUS_LAN_HOST）覆盖 env 文件里的同名值。
+  const qHost = form.lanHost.trim() || nonEmpty(env.QUBIUS_LAN_HOST) || "";
+  let host: string | undefined;
+  try {
+    host = tryLanAddress({ env: { ...env, QUBIUS_LAN_HOST: qHost } });
+  } catch (error) {
+    // 显式值非法时给出可读的 400，而不是静默退回自动地址。
+    throw new DeployValidationError(
+      error instanceof Error ? error.message : "内网入口地址无效",
+    );
+  }
   if (!host) return [];
   const urls: string[] = [];
   if (form.startPrimary) urls.push(`http://${host}:${form.primaryPort}`);
@@ -1876,7 +1910,8 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
       form.authToken = existingToken;
     }
     // 局域网凭据和部署后生效的令牌只在本次响应里返回一次；GET /api/deploy 不含密码。
-    const lanInfo = prepareLanInfo(form, configDir, env);
+    // env 文件里的 LAN_PROXY_HOST 可能没有导出到进程 env，这里显式合并后再算访问地址。
+    const lanInfo = prepareLanInfo(form, configDir, deployLanEnv(env, configDir, options.repoRoot));
     const authToken = deployedAuthToken(form, options.role ?? "primary");
     const oneTime: DeployOneTimeInfo | undefined = lanInfo || authToken
       ? {

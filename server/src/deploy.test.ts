@@ -1139,6 +1139,31 @@ test("applyDeploy 一次性返回局域网凭据和访问令牌，后续只保�
   assert.equal(derived.form.lanAuthPasswordSet, true);
 });
 
+test("applyDeploy 的局域网访问地址优先采用 env 文件里的 LAN_PROXY_HOST", () => {
+  const base = tmp();
+  const configDir = path.join(base, "config");
+  fs.mkdirSync(configDir, { recursive: true });
+  makeRepo(base);
+  // env 文件里的 LAN_PROXY_HOST 没有导出到进程 env；页面表单给的是 QUBIUS_LAN_HOST，
+  // 按优先级 LAN_PROXY_HOST 应胜出，和 lan-proxy 实际绑定的地址一致。
+  fs.writeFileSync(path.join(configDir, "env"), "LAN_PROXY_HOST=10.9.8.7\nQUBIUS_GITEA_TOKEN=keep\n");
+  const result = applyDeploy({
+    body: {
+      ...validForm(base),
+      configDir,
+      lanEnabled: true,
+      lanHost: "192.168.1.10",
+      lanAuthUser: "lanuser",
+      lanAuthPassword: "secret-pass-123",
+    },
+    repoRoot: base,
+    env: { HOME: base, QUBIUS_CONFIG_DIR: configDir, QUBIUS_LAN_HOST: "192.168.1.10" },
+    platform: "darwin",
+  });
+  assert.ok("jobId" in result, `期望启动部署任务，实际：${JSON.stringify(result)}`);
+  assert.deepEqual(result.oneTime?.lan?.urls, ["http://10.9.8.7:8787"]);
+});
+
 test("detectRepoUrl 只返回 http(s) origin", () => {
   const dir = tmp();
   execFileSync("git", ["init", "-q", dir]);

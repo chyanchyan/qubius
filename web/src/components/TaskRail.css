@@ -53,10 +53,16 @@
 .task-rail-failed { color: var(--red); }
 
 .task-rail-more {
-  padding-left: calc(22px * var(--control-scale));
+  align-self: flex-start;
+  padding: 0 0 0 calc(22px * var(--control-scale));
+  border: 0;
+  background: transparent;
   color: var(--muted);
   font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
 }
+.task-rail-more:hover { color: var(--fg); text-decoration: underline; }
 
 .task-rail-list {
   display: flex;

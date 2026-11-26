@@ -58,7 +58,7 @@
 | `QUBIUS_ALLOWED_HOSTS` | 额外允许的 Host（逗号或空白分隔），启动时追加到 `allowedHosts`；公网域名由模板直接写进 config.yaml | 空 |
 | `QUBIUS_MAX_CONCURRENT` / `QUBIUS_APPROVAL_TIMEOUT_MINUTES` | 并发上限和确认超时（分钟，0 表示不自动拒绝） | `4` / `10` |
 | `QUBIUS_LIMIT_*` / `QUBIUS_HISTORY_PAGE` | 会话/请求上限；完整表单的「高级限制」折叠区也可以改 | 见 `docs/reference.md#配置` |
-| `QUBIUS_LAN_HOST` | 内网入口绑定地址；留空取第一个非回环 IPv4 | 空 |
+| `QUBIUS_LAN_HOST` | 内网入口绑定地址（也接受 `LAN_PROXY_HOST`，后者优先）；留空时自动选择私有/链路本地/CGNAT IPv4，不会选公网或回环地址 | 空 |
 | `QUBIUS_ARCHIVE_DIR` / `QUBIUS_ARCHIVE_RETENTION_DAYS` | 归档根目录和列表保留天数（到期后会话归档到冷存储并永久保留）；目录留空不归档 | 空 / `30` |
 | `QUBIUS_PROJECTS_FILE` | 额外项目白名单 YAML；内置会加入另一实例的 checkout。主页的「管理项目」添加或删除仓库时写这里，文件变化会热加载 | 空 |
 | `QUBIUS_NODE_BIN` | Node.js 22+ 可执行文件；留空依次找 PATH 和 `~/.nvm` | 空 |
@@ -79,6 +79,8 @@
 - Host 校验默认只允许回环地址。通过局域网、反向代理或公网域名访问时，必须在 `allowedHosts` 里显式列出实际主机名；只开监听端口而不配置 Host 白名单会得到 403。
 - `acceptEdits` 不是沙箱：它只根据命令文本里的字面路径做启发式判断，`sh script.sh`、`npm run ...`、`make ...`、`curl -d @.env ...` 都会直接执行，下载的脚本和 Makefile 内容不会被检查。处理不可信仓库、网页或依赖时，把项目权限改成 `default`，并用专用系统用户 / 容器运行；不要在该用户下放 SSH key、云凭据和浏览器 cookie。
 - Markdown 里的外部图片默认显示为“点击加载”，不会在页面打开时自动请求；同源、`data:` 和 `blob:` 图片仍直接显示。
+- lan-proxy 的绑定地址按以下顺序确定：`LAN_PROXY_HOST`（或 `QUBIUS_LAN_HOST`）显式指定 > 自动选择私有/链路本地/CGNAT IPv4（`10/8`、`172.16/12`、`192.168/16`、`100.64/10`、`169.254/16`，优先级依次为 private > CGNAT > 链路本地）。回环、`0.0.0.0`、组播、保留段和公网地址都不会被自动选中；找不到可用地址时启动失败并提示显式设置。显式值必须是合法 IP 或主机名，公网地址会被接受但会打印告警。端口探活和子进程监听使用同一个解析结果，`LAN_PROXY_HOST` 与 `QUBIUS_LAN_HOST` 并存时以 `LAN_PROXY_HOST` 为准。部署页的一次性局域网地址和「重置局域网密码」返回的地址也使用同一套解析；进程环境里没有 `LAN_PROXY_HOST` 时会从部署 env 文件（`QUBIUS_ENV` > `<configDir>/env` > `<repo>/deploy/env`）读取，因此页面/重置/代理三方看到的是同一个地址。
+- lan-proxy 会把原始 `Host` 写入 `X-Forwarded-Host` 再改写成上游回环地址。服务端在请求缺少 `Sec-Fetch-Site` 时回退检查 `Origin`（没有则 `Referer`）：`Origin` 主机在 `allowedHosts` 里，或来源是回环且 `Origin` 主机等于 `X-Forwarded-Host`（即局域网入口改写前的 Host）时放行；`Origin` 为 `null` 或无法解析时拒绝。带有 `Sec-Fetch-Site` 的请求仍只按原有的跨站判断，不会再按 `Origin` 二次校验，避免局域网入口被误杀。
 - lan-proxy 用明文 HTTP 传 Basic 认证，只适合可信局域网；同网段可嗅探密码。默认同一 IP 认证失败 5 次锁定 5 分钟（`LAN_PROXY_MAX_FAILURES` / `LAN_PROXY_LOCK_MS` 可调），跨不可信网络请用 TLS 或 SSH/VPN 隧道。
 - `QUBIUS_GITEA_TOKEN` 只放在本机 env 或调用时导出；`create-repos.sh` 只从环境读取，不打印。
 - 私有仓库的 git 凭据用 credential helper 或 SSH key，不要把 token 拼进仓库 URL。

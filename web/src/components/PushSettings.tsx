@@ -21,7 +21,8 @@ function readableError(reason: unknown, fallback: string): string {
   return message;
 }
 
-/** 部署页的推送通知区块：开关本机订阅、查看服务端订阅数、发送测试通知。 */
+/** 推送通知区块：开关本机订阅、查看服务端订阅数、发送测试通知。
+    部署页和设置页共用，文案和布局保持一致。 */
 export function PushSettings() {
   const [supported] = useState(() => pushSupported());
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">(() => getPermission());
@@ -157,10 +158,10 @@ export function PushSettings() {
   }
 
   return (
-    <section className="deploy-section" aria-labelledby="deploy-push-title">
-      <h2 id="deploy-push-title">推送通知</h2>
+    <section className="deploy-section" aria-labelledby="push-settings-title">
+      <h2 id="push-settings-title">推送通知</h2>
       <p className="muted">
-        iPhone / iPad 需要先点「分享 → 添加到主屏幕」，再从主屏幕图标打开；iOS 16.4 及以上才支持网页推送。
+        对话完成、失败或等待你确认时会推送通知。iPhone / iPad 需要先点「分享 → 添加到主屏幕」，再从主屏幕图标打开；iOS 16.4 及以上才支持网页推送。
       </p>
       <Notice tone="info">状态：{pushStatusText}</Notice>
       <div className="actions">

@@ -16,6 +16,7 @@ import {
 } from "../api";
 import { testSettingsProvider, type ProviderPricing } from "../api-usage";
 import { Notice, useDialogs } from "../ui";
+import { PushSettings } from "./PushSettings";
 import "./SettingsPage.css";
 
 type PricingKey = "input" | "output" | "cacheRead" | "cacheWrite";
@@ -589,6 +590,8 @@ export function SettingsPage() {
           <Notice tone="success" onDismiss={() => setTokenMessage("")}>{tokenMessage}</Notice>
         )}
       </article>
+      {/* 推送通知：本机订阅开关，和上面的服务端设置分开；部署页里保留同一个组件的实例。 */}
+      <PushSettings />
       {/* 底部 sticky 保存栏同时承载保存反馈；整个页面滚到哪都能保存。 */}
       <div className="settings-savebar settings-savebar-bottom">
         {error && <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice>}

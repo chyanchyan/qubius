@@ -1465,7 +1465,13 @@ summary:focus-visible {
   color: var(--green);
 }
 
-.composer { margin: 0 calc(8px * var(--control-scale)) calc(8px * var(--control-scale)); flex: none; }
+/* 底部安全区：主屏独立网页（viewport-fit=cover）里 Home Indicator 会压在
+   输入框和发送键上，底部外边距至少留出安全区高度；普通标签页/桌面 env()
+   为 0，仍然使用 8px 基准间距。 */
+.composer {
+  margin: 0 calc(8px * var(--control-scale)) max(calc(8px * var(--control-scale)), env(safe-area-inset-bottom, 0px));
+  flex: none;
+}
 
 /* 左滑切换语音输入模式：上方文字编辑框 + 下方整宽大语音按钮。
    两套底部面板交叉滑动，外层高度由 Composer 量出来平滑过渡；
@@ -2047,6 +2053,25 @@ h1 { font-size: var(--fs-15); font-weight: 600; margin: calc(4px * var(--control
   }
 
   .menu-item { min-height: calc(40px * var(--control-scale)); }
+}
+
+/* 浅色主题 + 安装到主屏幕的独立网页：iOS 的 black-translucent 状态栏用
+   白字，而浅色顶栏是浅色背景，状态栏文字看不清。只在顶部安全区铺一条
+   深色衬底，让白字保持可读。普通浏览器标签页、桌面布局和深色模式（状态栏
+   区域本来就与深色顶栏一致）都不受影响；pointer-events:none 也不会挡住
+   顶部安全区里的任何交互。 */
+@media (display-mode: standalone) and (prefers-color-scheme: light) {
+  body::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: env(safe-area-inset-top, 0px);
+    background: #181818;
+    pointer-events: none;
+    z-index: 100;
+  }
 }
 
 /* 浅色主题：变量在 :root 之后覆盖，组件本身不需要感知主题。 */

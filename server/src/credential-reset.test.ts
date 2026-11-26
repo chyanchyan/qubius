@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { resetAuthToken, resetLanPassword, type AuthTokenState } from "./credential-reset.js";
+import {
+  lanProxyChildEnv,
+  resetAuthToken,
+  resetLanPassword,
+  type AuthTokenState,
+} from "./credential-reset.js";
 import type { AppConfig } from "./config.js";
 
 function tmp(): string {
@@ -57,6 +62,24 @@ test("重置局域网密码：写盘、保留用户名、返回访问地址和�
   const second = resetLanPassword({ config, configDir: base, repoRoot: base, env });
   assert.equal(second.result.user, "newuser");
   assert.notEqual(second.result.password, result.password);
+});
+
+test("重置局域网密码：env 文件里的 LAN_PROXY_HOST 优先于 QUBIUS_LAN_HOST", () => {
+  const base = tmp();
+  const config = configAt(base);
+  const credentials = path.join(base, "lan-proxy.credentials");
+  fs.writeFileSync(credentials, "qubius:old-password\n");
+  // 进程 env 只有 QUBIUS_LAN_HOST；env 文件里的 LAN_PROXY_HOST 没有导出，需要服务端自己读。
+  fs.writeFileSync(path.join(base, "env"), "LAN_PROXY_HOST=10.9.8.7\n");
+  const env = { QUBIUS_LAN_HOST: "192.168.1.10" };
+  const { result } = resetLanPassword({ config, configDir: base, repoRoot: base, env });
+  assert.deepEqual(result.urls, ["http://10.9.8.7:8787"]);
+
+  // 重启代理也用同一解析结果，子进程会绑定到 LAN_PROXY_HOST。
+  const childEnv = lanProxyChildEnv(config, base, env, credentials);
+  assert.equal(childEnv.LAN_PROXY_HOST, "10.9.8.7");
+  assert.equal(childEnv.LAN_PROXY_PORT, "8787");
+  assert.equal(childEnv.QUBIUS_LAN_HOST, "192.168.1.10");
 });
 
 test("重置 API 令牌：立即更新状态、写 env，并保留其它配置", () => {

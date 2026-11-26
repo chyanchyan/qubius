@@ -292,6 +292,7 @@ npm run build         # 构建服务端和前端
 - [参考手册](docs/reference.md)：全部配置字段、会话机制、页面功能、归档规则和 HTTP 接口。
 - [双实例部署与运维](docs/deployment.md)：主实例和副实例互备、部署脚本、页面部署、systemd、仓库迁移。
 - [公网入口（edge）](docs/edge.md)：用 edgectl 管理 VPS 上 Caddy 站点的设计和操作步骤。
+- [备份与恢复](docs/backup.md)：用 `make backup` 生成可校验的目录快照，用 `make restore BACKUP=<目录>` 恢复配置、数据与归档。
 
 ## License
 

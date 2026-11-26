@@ -34,6 +34,26 @@
   font-size: var(--fs-12);
 }
 
+/* 推送通知区块复用 PushSettings 的 .deploy-section 结构。DeployPage.css 随
+   部署页懒加载，直接打开设置页时不一定已经加载，这里补一份卡片外观，
+   保证两种进入顺序下都用同一套边框、间距和标题样式。 */
+.settings-page > .deploy-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+  margin: calc(12px * var(--control-scale)) 0 0;
+  padding: calc(10px * var(--control-scale)) calc(12px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+}
+
+.settings-page > .deploy-section > h2 {
+  margin: 0;
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
 /* 可折叠配置卡片：<details> 保持表单元素在 DOM 里，折叠不影响提交。 */
 /* 覆盖 .provider 的 flex 布局，让 summary 保持浏览器原生的展开/收起行为。 */
 .provider.settings-provider { display: block; }

@@ -233,6 +233,68 @@ function hostAllowed(allowed: readonly string[] | undefined, hostHeader: string)
   });
 }
 
+/** Origin/Referer 的主机是否等于 lan-proxy 改写前的原始 Host。 */
+function forwardedHostMatches(forwardedHost: string, origin: URL): boolean {
+  const forwarded = splitHost(forwardedHost);
+  if (!forwarded.host) return false;
+  // 与 hostAllowed 的规则一致：原始 Host 带端口时精确比较，不带端口时只比主机名。
+  return forwarded.hasPort
+    ? forwarded.host === origin.host
+    : forwarded.hostname === origin.hostname;
+}
+
+export interface OriginSource {
+  origin?: string;
+  referer?: string;
+  remoteAddress?: string;
+  forwardedHost?: string;
+  allowedHosts?: readonly string[];
+}
+
+/**
+ * 缺少 Sec-Fetch-Site 时的 Origin/Referer 回退校验：
+ * - Origin（没有则 Referer）都没有时放行，兼容 curl/原生客户端；
+ * - 主机在 allowedHosts 里直接放行；
+ * - 经 lan-proxy 转发（来源是回环）且 Origin 主机等于改写前原 Host
+ *   （x-forwarded-host）时也放行，局域网入口改 Host 后不会误杀；
+ * - 解析失败或 Origin 为 "null" 时报 403。
+ *
+ * 独立成纯函数便于测试非回环来源伪造 x-forwarded-host 的代码路径。
+ */
+export function originSourceAllowed({
+  origin = "",
+  referer = "",
+  remoteAddress,
+  forwardedHost = "",
+  allowedHosts,
+}: OriginSource): boolean {
+  const source = origin.trim() || referer.trim();
+  if (!source) return true;
+  if (source.toLowerCase() === "null") return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(source);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  if (!parsed.host) return false;
+  if (hostAllowed(allowedHosts, parsed.host)) return true;
+  if (!isLoopbackAddress(remoteAddress)) return false;
+  const forwarded = forwardedHost.trim();
+  return Boolean(forwarded) && forwardedHostMatches(forwarded, parsed);
+}
+
+function originAllowed(req: IncomingMessage, allowedHosts: readonly string[] | undefined): boolean {
+  return originSourceAllowed({
+    origin: headerValue(req.headers.origin),
+    referer: headerValue(req.headers.referer),
+    remoteAddress: req.socket.remoteAddress,
+    forwardedHost: headerValue(req.headers["x-forwarded-host"]),
+    allowedHosts,
+  });
+}
+
 function validateApiRequest(
   req: IncomingMessage,
   method: string,
@@ -240,8 +302,14 @@ function validateApiRequest(
   tokenState: AuthTokenState,
   pathname: string,
 ): void {
-  if (headerValue(req.headers["sec-fetch-site"]).toLowerCase() === "cross-site") {
+  const fetchSite = headerValue(req.headers["sec-fetch-site"]).trim().toLowerCase();
+  if (fetchSite === "cross-site") {
     throw new HttpError(403, "跨站请求被拒绝");
+  }
+  // 浏览器带了 Sec-Fetch-Site 时已经声明了来源关系（lan-proxy 会把 Host 改写成回环，
+  // 再按 Origin 比较会误杀局域网访问），只在缺失/为空时回退到 Origin/Referer。
+  if (!fetchSite && !originAllowed(req, allowedHosts)) {
+    throw new HttpError(403, "来源不被允许");
   }
   if (!hostAllowed(allowedHosts, headerValue(req.headers.host))) {
     throw new HttpError(403, "Host 不被允许");

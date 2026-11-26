@@ -1,0 +1,133 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  boardEntryMatches,
+  filterBoardEntries,
+  isBoardEntryAlwaysVisible,
+  type BoardEntry,
+} from "./board-filter";
+import type { Pending, Session } from "./api";
+
+function approval(): Pending {
+  return {
+    requestId: "req-1",
+    kind: "permission",
+    toolName: "Bash",
+    inputPreview: "rm -rf build",
+  };
+}
+
+function session(id: string, extra: Partial<Session> = {}): Session {
+  return {
+    id,
+    projectId: "p",
+    title: id,
+    summary: "",
+    providerId: "x",
+    providerName: "X",
+    model: "m",
+    effort: "high",
+    phase: "completed",
+    git: true,
+    cwd: "/tmp",
+    isolated: false,
+    subagentDone: 0,
+    subagentTotal: 0,
+    subagents: [],
+    pending: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...extra,
+  };
+}
+
+function entry(extra: Partial<Session> = {}): BoardEntry {
+  return { kind: "session", session: session("id", extra) };
+}
+
+function ids(entries: BoardEntry[]): string[] {
+  return entries.map((item) => (
+    item.kind === "session" ? item.session.id : item.pending.id
+  ));
+}
+
+test("按标题匹配，大小写不敏感", () => {
+  const entries = [
+    entry({ id: "a", title: "Fix Login Bug" }),
+    entry({ id: "b", title: "整理文档" }),
+  ];
+  assert.deepEqual(ids(filterBoardEntries(entries, "login")), ["a"]);
+  assert.deepEqual(ids(filterBoardEntries(entries, "LOGIN BUG")), ["a"]);
+  assert.deepEqual(ids(filterBoardEntries(entries, "文档")), ["b"]);
+});
+
+test("按摘要和分支名匹配", () => {
+  const entries = [
+    entry({ id: "a", title: "a", summary: "重构会话列表" }),
+    entry({ id: "b", title: "b", branch: "qubius/Feature-X" }),
+    entry({ id: "c", title: "c", summary: "无关内容", branch: "main" }),
+  ];
+  assert.deepEqual(ids(filterBoardEntries(entries, "会话")), ["a"]);
+  assert.deepEqual(ids(filterBoardEntries(entries, "feature-x")), ["b"]);
+  assert.deepEqual(ids(filterBoardEntries(entries, "main")), ["c"]);
+});
+
+test("查询词两端空白会被忽略", () => {
+  const entries = [entry({ id: "a", title: "Alpha" })];
+  assert.deepEqual(ids(filterBoardEntries(entries, "  alpha  ")), ["a"]);
+  assert.deepEqual(ids(filterBoardEntries(entries, "   ")), ["a"]);
+});
+
+test("空查询返回全部行的副本", () => {
+  const entries = [entry({ id: "a" }), entry({ id: "b" })];
+  const filtered = filterBoardEntries(entries, "");
+  assert.deepEqual(ids(filtered), ["a", "b"]);
+  assert.notEqual(filtered, entries);
+});
+
+test("创建中的占位行始终保留", () => {
+  const pending: BoardEntry = {
+    kind: "pending",
+    pending: {
+      id: "pending-1",
+      projectId: "p",
+      title: "新对话",
+      startedAt: Date.now(),
+      knownIds: new Set<string>(),
+    },
+  };
+  const entries: BoardEntry[] = [entry({ id: "a", title: "Alpha" }), pending];
+  assert.deepEqual(ids(filterBoardEntries(entries, "alpha")), ["a", "pending-1"]);
+  assert.deepEqual(ids(filterBoardEntries(entries, "zzz")), ["pending-1"]);
+});
+
+test("等待确认的会话始终保留", () => {
+  const waiting = entry({
+    id: "waiting",
+    title: "需要授权",
+    phase: "needs_input",
+    pending: approval(),
+  });
+  const entries: BoardEntry[] = [entry({ id: "other", title: "其他" }), waiting];
+  assert.deepEqual(ids(filterBoardEntries(entries, "其他")), ["other", "waiting"]);
+  assert.deepEqual(ids(filterBoardEntries(entries, "zzz")), ["waiting"]);
+  assert.equal(isBoardEntryAlwaysVisible(waiting), true);
+  assert.equal(isBoardEntryAlwaysVisible(entry({ id: "done" })), false);
+});
+
+test("运行中的会话始终保留", () => {
+  const running = entry({ id: "running", title: "后台跑", phase: "running" });
+  const entries: BoardEntry[] = [entry({ id: "other", title: "其他" }), running];
+  assert.deepEqual(ids(filterBoardEntries(entries, "zzz")), ["running"]);
+});
+
+test("boardEntryMatches 只判断元数据，不包含始终可见规则", () => {
+  const waiting = entry({
+    id: "waiting",
+    title: "需要授权",
+    pending: approval(),
+  });
+  assert.equal(boardEntryMatches(waiting, "授权"), true);
+  assert.equal(boardEntryMatches(waiting, "zzz"), false);
+  assert.equal(boardEntryMatches(waiting, "  "), true);
+});

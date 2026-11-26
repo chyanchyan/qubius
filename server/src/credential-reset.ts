@@ -5,13 +5,14 @@ import path from "node:path";
 import { AUTH_TOKEN_FILE } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import {
-  detectLanHost,
+  deployLanEnv,
   lanCredentialsFile,
   mergeEnvText,
   readLanCredentials,
   writeLanCredentials,
 } from "./deploy.js";
 import { resolveDeployEnvFile } from "./deploy-env.js";
+import { tryLanAddress } from "./lan-address.js";
 
 /** 运行中的服务端令牌状态；重置后立即切换，旧令牌保留 60 秒宽限。 */
 export interface AuthTokenState {
@@ -141,6 +142,31 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
   return !isAlive(pid);
 }
 
+/**
+ * 启动/重启 lan-proxy 时使用的子进程环境。
+ * 先合并 env 文件再按 LAN_PROXY_HOST > QUBIUS_LAN_HOST > 自动 的顺序解析，
+ * 保证重启后的代理绑定地址与部署页/凭据重置展示的地址一致。
+ */
+export function lanProxyChildEnv(
+  config: AppConfig,
+  repoRoot: string,
+  env: NodeJS.ProcessEnv,
+  credentialsFile: string,
+): NodeJS.ProcessEnv {
+  const lanEnv = deployLanEnv(env, config.configDir, repoRoot);
+  const host = tryLanAddress({ env: lanEnv });
+  return {
+    ...lanEnv,
+    QUBIUS_CONFIG_DIR: config.configDir,
+    QUBIUS_REPO_DIR: repoRoot,
+    QUBIUS_SECONDARY: config.role === "secondary" ? "1" : "0",
+    LAN_PROXY_PORT: String(config.port),
+    LAN_PROXY_UPSTREAM_PORT: String(config.port),
+    LAN_PROXY_CREDENTIALS: credentialsFile,
+    ...(host ? { LAN_PROXY_HOST: host } : {}),
+  };
+}
+
 async function restartProcess(
   config: AppConfig,
   repoRoot: string,
@@ -172,16 +198,7 @@ async function restartProcess(
   try {
     const child = spawn(process.execPath, [script], {
       cwd: repoRoot,
-      env: {
-        ...env,
-        QUBIUS_CONFIG_DIR: config.configDir,
-        QUBIUS_REPO_DIR: repoRoot,
-        QUBIUS_SECONDARY: config.role === "secondary" ? "1" : "0",
-        LAN_PROXY_PORT: String(config.port),
-        LAN_PROXY_UPSTREAM_PORT: String(config.port),
-        LAN_PROXY_CREDENTIALS: credentialsFile,
-        ...(nonEmpty(env.QUBIUS_LAN_HOST) ? { LAN_PROXY_HOST: nonEmpty(env.QUBIUS_LAN_HOST)! } : {}),
-      },
+      env: lanProxyChildEnv(config, repoRoot, env, credentialsFile),
       detached: true,
       windowsHide: true,
       stdio: ["ignore", fd, fd],
@@ -227,8 +244,10 @@ export function resetLanPassword(options: {
   const password = randomBytes(12).toString("base64url");
   writeLanCredentials(credentialsFile, user, password);
 
-  const status = lanProxyRunning(options.config, options.repoRoot, env);
-  const host = nonEmpty(env.QUBIUS_LAN_HOST) ?? detectLanHost();
+  const lanEnv = deployLanEnv(env, options.configDir, options.repoRoot);
+  const status = lanProxyRunning(options.config, options.repoRoot, lanEnv);
+  // LAN_PROXY_HOST 优先，其次 QUBIUS_LAN_HOST，最后自动选择，与 lan-proxy 一致。
+  const host = tryLanAddress({ env: lanEnv });
   const urls = host ? [`http://${host}:${options.config.port}`] : [];
   const restart: ResetLanResult["restart"] = status.running ? "scheduled" : "none";
   return {

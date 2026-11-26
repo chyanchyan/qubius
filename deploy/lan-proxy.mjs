@@ -9,9 +9,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { lanAddress } from "./deploy-lib.mjs";
 import { createFailureLimiter } from "./lan-proxy-limit.mjs";
 
 // Windows 上 new URL(...).pathname 是 /D:/... 形式，必须用 fileURLToPath。
@@ -20,18 +20,6 @@ const credentialsFile =
   process.env.LAN_PROXY_CREDENTIALS || path.join(scriptDir, "lan-proxy.credentials");
 const upstreamHost = process.env.LAN_PROXY_UPSTREAM_HOST || "127.0.0.1";
 const upstreamPort = Number(process.env.LAN_PROXY_UPSTREAM_PORT || 8787);
-
-function lanAddress() {
-  if (process.env.LAN_PROXY_HOST) return process.env.LAN_PROXY_HOST;
-  const skip = /^(lo|docker|br-|veth|virbr|tun|tap|cni)/;
-  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
-    if (skip.test(name) || !addrs) continue;
-    for (const addr of addrs) {
-      if (addr.family === "IPv4" && !addr.internal) return addr.address;
-    }
-  }
-  throw new Error("找不到局域网 IPv4 地址，请用 LAN_PROXY_HOST 指定");
-}
 
 function loadCredential() {
   const raw = fs.readFileSync(credentialsFile, "utf8").trim();
@@ -93,9 +81,21 @@ function forwardHeaders(req) {
   const headers = {};
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase();
-    if (lower === "host" || lower === "authorization" || HOP_BY_HOP.has(lower)) continue;
+    // x-forwarded-host 由代理按真实 Host 重新写入，忽略客户端自带的值，避免伪造。
+    if (
+      lower === "host"
+      || lower === "authorization"
+      || lower === "x-forwarded-host"
+      || HOP_BY_HOP.has(lower)
+    ) {
+      continue;
+    }
     if (value !== undefined) headers[name] = value;
   }
+  // 原始 Host（局域网地址）留给 server 在缺少 Sec-Fetch-Site 时做同源回退校验；
+  // Host 本身改写成上游回环地址，上游只监听 127.0.0.1。
+  const originalHost = req.headers.host;
+  if (typeof originalHost === "string" && originalHost) headers["x-forwarded-host"] = originalHost;
   headers.host = `${upstreamHost}:${upstreamPort}`;
   return headers;
 }

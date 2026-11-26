@@ -13,7 +13,6 @@
 // 只读取环境变量，不把用户输入拼进命令行；状态/日志路径由 server 指定。
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -29,9 +28,11 @@ import {
   gitDirty,
   gitHead,
   jobTimestamp,
+  lanAddress,
   needsBuild,
   needsInstall,
   parseEnvFile,
+  proxyChildEnv,
   proxyPlan,
   readDeployStamp,
   redactUrl,
@@ -383,7 +384,6 @@ const archiveDir = envValue("QUBIUS_ARCHIVE_DIR") ? abs(envValue("QUBIUS_ARCHIVE
 const archiveRetentionDays = envInt("QUBIUS_ARCHIVE_RETENTION_DAYS", 30);
 const projectsFileRaw = envValue("QUBIUS_PROJECTS_FILE");
 const projectsFile = projectsFileRaw ? abs(projectsFileRaw) : "";
-const lanHost = envValue("QUBIUS_LAN_HOST") || "";
 const nodeBin = envValue("QUBIUS_NODE_BIN") ? abs(envValue("QUBIUS_NODE_BIN")) : process.execPath;
 // 部署行为开关：忙碌保护（FORCE/WAIT）与“无变化也强制重启”（RESTART）。
 const deployForce = envBool("QUBIUS_DEPLOY_FORCE", false);
@@ -1000,10 +1000,16 @@ async function stopProxy(entry) {
 
 /** 无变化部署时只确保局域网入口存活，不主动重启它。 */
 async function ensureProxyAlive(entry) {
+  const credentials = envValue("LAN_PROXY_CREDENTIALS") || path.join(configDir, "lan-proxy.credentials");
+  if (!fs.existsSync(credentials)) {
+    // 没有凭据时 startProxy 会直接跳过；不要因为“找不到局域网地址”让部署失败。
+    await startProxy(entry);
+    return;
+  }
   const pidfile = path.join(entry.dataDir, "lan-proxy.pid");
   const pid = readPid(pidfile);
   const pidAlive = Boolean(pid && isAlive(pid) && isNodeProcess(pid));
-  const host = lanAddress();
+  const host = proxyLanAddress(entry);
   const listening = Boolean(host && (await isPortListening(host, entry.port)));
   const plan = proxyPlan({ restart: false, pidAlive, listening });
   if (plan === "keep") {
@@ -1013,17 +1019,16 @@ async function ensureProxyAlive(entry) {
   await startProxy(entry);
 }
 
-/** 与 deploy/lan-proxy.mjs 的 lanAddress() 保持一致，用来校验它真的监听上了。 */
-function lanAddress() {
-  if (lanHost) return lanHost;
-  const skip = /^(lo|docker|br-|veth|virbr|tun|tap|cni)/;
-  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
-    if (skip.test(name) || !addrs) continue;
-    for (const addr of addrs) {
-      if (addr.family === "IPv4" && !addr.internal) return addr.address;
-    }
+/**
+ * 局域网地址与 lan-proxy.mjs 共用 deploy-lib 的实现，用来校验它真的监听上了。
+ * env 文件里的 QUBIUS_LAN_HOST/LAN_PROXY_HOST 也要参与，显式指定优先。
+ */
+function proxyLanAddress(entry) {
+  try {
+    return lanAddress({ env: baseChildEnv() });
+  } catch (error) {
+    fail(`proxy-${entry.role}`, error instanceof Error ? error.message : String(error));
   }
-  return "";
 }
 
 async function startProxy(entry) {
@@ -1037,19 +1042,17 @@ async function startProxy(entry) {
     say(`缺少 ${script}，跳过 ${entry.label} LAN 入口`);
     return;
   }
-  const host = lanAddress();
-  if (!host) {
-    fail(`proxy-${entry.role}`, `找不到局域网 IPv4 地址，请设置 QUBIUS_LAN_HOST`);
-  }
+  const host = proxyLanAddress(entry);
   const logFile = path.join(entry.dataDir, "lan-proxy.log");
   const pidfile = path.join(entry.dataDir, "lan-proxy.pid");
-  const env = {
+  // 探活和子进程用同一个 host：显式 LAN_PROXY_HOST 优先，避免两个变量并存时
+  // 子进程监听一个地址、部署任务却在另一个地址探活而误判失败。
+  const env = proxyChildEnv({
     ...serverEnv(entry),
     LAN_PROXY_PORT: String(entry.port),
     LAN_PROXY_UPSTREAM_PORT: String(entry.port),
     LAN_PROXY_CREDENTIALS: credentials,
-  };
-  if (lanHost) env.LAN_PROXY_HOST = lanHost;
+  }, host);
   say(`启动 ${entry.label} LAN 入口（${host}:${entry.port}）`);
   const fd = fs.openSync(logFile, "a");
   let child;

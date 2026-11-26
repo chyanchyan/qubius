@@ -6,12 +6,15 @@
 # npm 脚本（npm start / npm run quickstart / npm run dev:all）仍然保留。
 
 .PHONY: help run dev quickstart build install start stop restart status pull \
-	deploy deploy-lan deploy-wan test test-deploy
+	deploy deploy-lan deploy-wan test test-deploy backup restore
 
 .DEFAULT_GOAL := help
 
+# 恢复来源目录，用法：make restore BACKUP=<备份目录>
+BACKUP ?=
+
 help:
-	@node -e "console.log(['用法：make <目标>','','开发：','  run / dev      启动服务端 + Vite 开发服务器','  quickstart     首次启动：选择 npm 源、配置/数据目录和端口','  build          构建 server + web','  test           服务端测试','  test-deploy    部署脚本测试','','运行：','  start          启动启用的实例（缺构建先构建）','  restart        重启启用的实例','  stop           停止实例和局域网入口','  status         显示配置目录、健康状态和局域网凭据文件','  install        Linux：渲染配置/systemd/logrotate 并构建','  pull           从 origin 快进当前 checkout','','部署：','  deploy         本地部署：构建并重启，只保证 127.0.0.1','  deploy-lan     本地部署 + 局域网入口（缺凭据时生成并打印一次）','  deploy-wan     局域网部署 + 公网入口（交互确认）','','npm 等方式仍然可用：npm start / npm run quickstart / npm run dev:all'].join('\n'))"
+	@node -e "console.log(['用法：make <目标>','','开发：','  run / dev      启动服务端 + Vite 开发服务器','  quickstart     首次启动：选择 npm 源、配置/数据目录和端口','  build          构建 server + web','  test           服务端 + 前端测试','  test-deploy    部署脚本测试','','运行：','  start          启动启用的实例（缺构建先构建）','  restart        重启启用的实例','  stop           停止实例和局域网入口','  status         显示配置目录、健康状态和局域网凭据文件','  install        Linux：渲染配置/systemd/logrotate 并构建','  pull           从 origin 快进当前 checkout','','部署：','  deploy         本地部署：构建并重启，只保证 127.0.0.1','  deploy-lan     本地部署 + 局域网入口（缺凭据时生成并打印一次）','  deploy-wan     局域网部署 + 公网入口（交互确认）','','备份/恢复：','  backup         备份配置和数据目录','  restore        从备份恢复：make restore BACKUP=<备份目录>','','npm 等方式仍然可用：npm start / npm run quickstart / npm run dev:all'].join('\n'))"
 
 # ── 开发 ────────────────────────────────────────────────────────────────────
 # 同时启动服务端（127.0.0.1:8787）和前端 Vite（127.0.0.1:5173，/api 代理到服务端）。
@@ -29,10 +32,18 @@ build:
 	npm run build
 
 test:
-	npm test
+	npm run test:all
 
 test-deploy:
 	npm run test:deploy
+
+# 备份/恢复配置与数据目录，脚本实现在 deploy/backup.mjs、deploy/restore.mjs。
+backup:
+	node deploy/backup.mjs
+
+restore:
+	@node -e "if (!process.argv[1]) { console.error('用法：make restore BACKUP=<备份目录>'); process.exit(2); }" "$(BACKUP)"
+	node deploy/restore.mjs "$(BACKUP)"
 
 # ── 运行与部署（跨平台入口）────────────────────────────────────────────────
 # deploy/cli.mjs 在 Linux 上调用 deploy/*.sh；Windows/macOS 用 Node 启动/停止，

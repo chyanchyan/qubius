@@ -18,6 +18,7 @@ import {
   TASK_POLL_MS,
 } from "../background-tasks";
 import { formatToolDuration } from "../tool-summary";
+import { taskRailTasks } from "../task-rail-view";
 import { useNow } from "../useNow";
 import "./TaskRail.css";
 
@@ -92,7 +93,17 @@ export function TaskRail({ session }: { session: Session }) {
     () => sortTasksForDisplay(session.backgroundTasks ?? []),
     [session.backgroundTasks],
   );
-  const visibleTasks = useMemo(() => tasks.slice(0, MAX_TASKS), [tasks]);
+  /* 与历史消息一样在渲染期校正：切换会话时立即回到收起、不展开全部的状态。 */
+  const bodyId = useId();
+  const [rail, setRail] = useState({ sessionId: session.id, open: false, showAll: false });
+  if (rail.sessionId !== session.id) setRail({ sessionId: session.id, open: false, showAll: false });
+  const open = rail.sessionId === session.id ? rail.open : false;
+  const showAll = rail.sessionId === session.id ? rail.showAll : false;
+  /* 默认只展示 MAX_TASKS 条，展开后显示全部；排序不变，只是截断位置不同。 */
+  const visibleTasks = useMemo(
+    () => taskRailTasks(tasks, showAll, MAX_TASKS),
+    [tasks, showAll],
+  );
   const counts = useMemo(() => countTasks(tasks), [tasks]);
   const runningCount = counts.running;
   /* 只比较运行中任务 id 的集合，避免每个 SSE 帧都重启轮询循环。 */
@@ -101,12 +112,6 @@ export function TaskRail({ session }: { session: Session }) {
     [tasks],
   );
   const now = useNow(runningCount > 0 ? TASK_POLL_MS : 60_000);
-
-  /* 与历史消息一样在渲染期校正：切换会话时立即回到收起状态。 */
-  const bodyId = useId();
-  const [rail, setRail] = useState({ sessionId: session.id, open: false });
-  if (rail.sessionId !== session.id) setRail({ sessionId: session.id, open: false });
-  const open = rail.sessionId === session.id ? rail.open : false;
 
   /* 轮询循环读取最新任务列表，避免闭包拿到旧的 status。 */
   const tasksRef = useRef(tasks);
@@ -345,7 +350,7 @@ export function TaskRail({ session }: { session: Session }) {
         type="button"
         aria-expanded={open}
         aria-controls={open ? bodyId : undefined}
-        onClick={() => setRail({ sessionId: session.id, open: !open })}
+        onClick={() => setRail({ sessionId: session.id, open: !open, showAll })}
       >
         <span className="task-rail-title">后台任务 {tasks.length}</span>
         <span className="task-rail-running" data-active={runningCount > 0 ? "true" : undefined}>
@@ -467,7 +472,24 @@ export function TaskRail({ session }: { session: Session }) {
             );
           })}
           {hiddenCount > 0 && (
-            <div className="task-rail-more">还有 {hiddenCount} 个未显示</div>
+            <button
+              className="task-rail-more"
+              type="button"
+              aria-expanded={false}
+              onClick={() => setRail({ sessionId: session.id, open, showAll: true })}
+            >
+              显示全部（{hiddenCount}）
+            </button>
+          )}
+          {showAll && tasks.length > MAX_TASKS && (
+            <button
+              className="task-rail-more"
+              type="button"
+              aria-expanded
+              onClick={() => setRail({ sessionId: session.id, open, showAll: false })}
+            >
+              收起
+            </button>
           )}
         </div>
       )}

@@ -17,7 +17,9 @@ export PATH="$(dirname "$NODE_BIN"):$PATH"
 export QUBIUS_SECONDARY
 export LAN_PROXY_PORT=$QUBIUS_PORT
 export LAN_PROXY_UPSTREAM_PORT=$QUBIUS_PORT
-if [[ -n ${QUBIUS_LAN_HOST:-} ]]; then
+# 显式 LAN_PROXY_HOST 优先（包括 env 文件里未 export 的赋值）；其次用 QUBIUS_LAN_HOST。
+export LAN_PROXY_HOST=${LAN_PROXY_HOST:-}
+if [[ -z ${LAN_PROXY_HOST} && -n ${QUBIUS_LAN_HOST:-} ]]; then
   export LAN_PROXY_HOST=$QUBIUS_LAN_HOST
 fi
 # 凭据文件默认放在配置目录；允许调用者用 LAN_PROXY_CREDENTIALS 覆盖。

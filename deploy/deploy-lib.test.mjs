@@ -11,11 +11,15 @@ import {
   backupNodeModules,
   buildDirtyStatus,
   busyDecision,
+  classifyIPv4,
   cleanupNodeModulesPrev,
   deployDecision,
   deployPorts,
   discardStaging,
+  isLanIPv4,
+  lanAddress,
   needsInstall,
+  proxyChildEnv,
   proxyPlan,
   parseEnvFile,
   readDeployStamp,
@@ -333,6 +337,181 @@ test("proxyPlan：重启 / 存活 / 启动", () => {
   assert.equal(proxyPlan({ pidAlive: true }), "keep");
   assert.equal(proxyPlan({ listening: true }), "keep");
   assert.equal(proxyPlan({}), "start");
+});
+
+// ── 局域网地址分类 ──────────────────────────────────────────────────────────
+test("classifyIPv4：私有段边界", () => {
+  assert.equal(classifyIPv4("10.0.0.0"), "private");
+  assert.equal(classifyIPv4("10.255.255.255"), "private");
+  assert.equal(classifyIPv4("9.255.255.255"), "public");
+  assert.equal(classifyIPv4("11.0.0.0"), "public");
+
+  assert.equal(classifyIPv4("172.16.0.0"), "private");
+  assert.equal(classifyIPv4("172.31.255.255"), "private");
+  assert.equal(classifyIPv4("172.15.255.255"), "public");
+  assert.equal(classifyIPv4("172.32.0.0"), "public");
+
+  assert.equal(classifyIPv4("192.168.0.0"), "private");
+  assert.equal(classifyIPv4("192.168.255.255"), "private");
+  assert.equal(classifyIPv4("192.167.255.255"), "public");
+  assert.equal(classifyIPv4("192.169.0.0"), "public");
+});
+
+test("classifyIPv4：CGNAT、链路本地、回环、0.0.0.0、组播、保留与公网", () => {
+  assert.equal(classifyIPv4("100.64.0.0"), "shared");
+  assert.equal(classifyIPv4("100.127.255.255"), "shared");
+  assert.equal(classifyIPv4("100.63.255.255"), "public");
+  assert.equal(classifyIPv4("100.128.0.0"), "public");
+
+  assert.equal(classifyIPv4("169.254.0.1"), "link-local");
+  assert.equal(classifyIPv4("169.254.255.255"), "link-local");
+  assert.equal(classifyIPv4("169.253.255.255"), "public");
+
+  assert.equal(classifyIPv4("127.0.0.1"), "loopback");
+  assert.equal(classifyIPv4("127.255.255.255"), "loopback");
+  assert.equal(classifyIPv4("0.0.0.0"), "unspecified");
+  assert.equal(classifyIPv4("224.0.0.1"), "multicast");
+  assert.equal(classifyIPv4("240.0.0.1"), "reserved");
+  assert.equal(classifyIPv4("255.255.255.255"), "reserved");
+  assert.equal(classifyIPv4("192.0.2.1"), "reserved");
+  assert.equal(classifyIPv4("198.18.0.1"), "reserved");
+  assert.equal(classifyIPv4("198.51.100.1"), "reserved");
+  assert.equal(classifyIPv4("203.0.113.10"), "reserved");
+  assert.equal(classifyIPv4("8.8.8.8"), "public");
+
+  assert.equal(classifyIPv4("not-an-ip"), "invalid");
+  assert.equal(classifyIPv4("999.1.1.1"), "invalid");
+  assert.equal(classifyIPv4("1.2.3"), "invalid");
+  assert.equal(classifyIPv4("010.0.0.1"), "invalid");
+});
+
+test("isLanIPv4 只接受私有 / CGNAT / 链路本地", () => {
+  for (const address of ["10.1.2.3", "172.20.0.1", "192.168.1.5", "100.64.1.2", "169.254.9.9"]) {
+    assert.equal(isLanIPv4(address), true, address);
+  }
+  for (const address of ["8.8.8.8", "127.0.0.1", "0.0.0.0", "224.0.0.1", "203.0.113.1"]) {
+    assert.equal(isLanIPv4(address), false, address);
+  }
+});
+
+const quiet = () => {};
+const interfacesOf = (entries) => Object.fromEntries(entries.map(([name, address, extra = {}]) => [
+  name,
+  [{ address, family: "IPv4", internal: false, ...extra }],
+]));
+
+test("lanAddress：显式 LAN_PROXY_HOST / QUBIUS_LAN_HOST 优先", () => {
+  const interfaces = interfacesOf([["eth0", "192.168.1.5"]]);
+  assert.equal(
+    lanAddress({ env: { LAN_PROXY_HOST: "10.0.0.9", QUBIUS_LAN_HOST: "192.168.1.5" }, interfaces, warn: quiet }),
+    "10.0.0.9",
+  );
+  assert.equal(
+    lanAddress({ env: { QUBIUS_LAN_HOST: "10.1.1.1" }, interfaces, warn: quiet }),
+    "10.1.1.1",
+  );
+  // 空字符串等同于未设置，回退自动选择。
+  assert.equal(
+    lanAddress({ env: { LAN_PROXY_HOST: "  ", QUBIUS_LAN_HOST: "" }, interfaces, warn: quiet }),
+    "192.168.1.5",
+  );
+});
+
+test("lanAddress：自动跳过公网/回环/docker，按 private > shared > link-local 选择", () => {
+  const interfaces = Object.assign(
+    interfacesOf([
+      ["eth0", "8.8.8.8"],
+      ["eth1", "169.254.10.20"],
+      ["lo", "127.0.0.1", { internal: true }],
+      ["docker0", "10.1.1.1"],
+      ["eth2", "100.64.3.4"],
+    ]),
+    { eth3: [{ address: "::1", family: "IPv6", internal: true }] },
+  );
+  // CGNAT 优先于链路本地，即使链路本地网卡排在前面。
+  assert.equal(lanAddress({ env: {}, interfaces, warn: quiet }), "100.64.3.4");
+
+  // 私有段优先于 CGNAT/链路本地，与网卡顺序无关。
+  const mixed = interfacesOf([
+    ["eth0", "8.8.8.8"],
+    ["eth1", "169.254.10.20"],
+    ["eth2", "100.64.3.4"],
+    ["eth3", "10.20.30.40"],
+  ]);
+  assert.equal(lanAddress({ env: {}, interfaces: mixed, warn: quiet }), "10.20.30.40");
+
+  const privateOnly = interfacesOf([
+    ["eth0", "8.8.8.8"],
+    ["eth1", "192.168.10.20"],
+  ]);
+  assert.equal(lanAddress({ env: {}, interfaces: privateOnly, warn: quiet }), "192.168.10.20");
+});
+
+test("lanAddress：没有可用私有地址时报错并提示显式设置", () => {
+  const interfaces = interfacesOf([
+    ["eth0", "8.8.8.8"],
+    ["lo", "127.0.0.1", { internal: true }],
+    ["docker0", "10.0.0.1"],
+  ]);
+  assert.throws(
+    () => lanAddress({ env: {}, interfaces, warn: quiet }),
+    /LAN_PROXY_HOST|QUBIUS_LAN_HOST/,
+  );
+});
+
+test("lanAddress：显式公网地址允许但告警，私有地址不告警", () => {
+  const warnings = [];
+  assert.equal(
+    lanAddress({
+      env: { LAN_PROXY_HOST: "8.8.8.8" },
+      interfaces: interfacesOf([]),
+      warn: (text) => warnings.push(text),
+    }),
+    "8.8.8.8",
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /公网地址/);
+  assert.match(warnings[0], /Basic/);
+
+  const quietWarnings = [];
+  assert.equal(
+    lanAddress({
+      env: { LAN_PROXY_HOST: "192.168.1.8" },
+      interfaces: interfacesOf([]),
+      warn: (text) => quietWarnings.push(text),
+    }),
+    "192.168.1.8",
+  );
+  assert.deepEqual(quietWarnings, []);
+});
+
+test("lanAddress：显式值校验，非法地址给出明确错误", () => {
+  for (const bad of ["bad host", "999.1.1.1", "1.2.3", "010.0.0.1"]) {
+    assert.throws(
+      () => lanAddress({ env: { LAN_PROXY_HOST: bad }, interfaces: interfacesOf([]), warn: quiet }),
+      /不是合法的 IP 或主机名/,
+      bad,
+    );
+  }
+  // 合法主机名和 IPv6 可以显式设置。
+  assert.equal(
+    lanAddress({ env: { LAN_PROXY_HOST: "lan.local" }, interfaces: interfacesOf([]), warn: quiet }),
+    "lan.local",
+  );
+  assert.equal(
+    lanAddress({ env: { LAN_PROXY_HOST: "::1" }, interfaces: interfacesOf([]), warn: quiet }),
+    "::1",
+  );
+});
+
+test("proxyChildEnv：两个显式变量并存时子进程环境与探活地址一致", () => {
+  const env = { LAN_PROXY_HOST: "10.0.0.9", QUBIUS_LAN_HOST: "192.168.1.5" };
+  const host = lanAddress({ env, interfaces: interfacesOf([["eth0", "172.20.0.2"]]), warn: quiet });
+  const childEnv = proxyChildEnv({ FOO: "bar", LAN_PROXY_HOST: "192.168.1.5" }, host);
+  // 探活和子进程都使用 LAN_PROXY_HOST 的解析结果，而不是 QUBIUS_LAN_HOST。
+  assert.equal(host, "10.0.0.9");
+  assert.equal(childEnv.LAN_PROXY_HOST, host);
+  assert.equal(childEnv.FOO, "bar");
 });
 
 // ── staging / 切换 / 回滚 ────────────────────────────────────────────────────

@@ -19,6 +19,12 @@ import { answerBody } from "./answers";
 import { addPending, hasPending, removePending } from "./pending-actions";
 import { ARCHIVE_RESTORE_NOTE, deleteDetail } from "./archive-copy";
 import { filterArchivedSessions, isPendingCleanup } from "./archive-search";
+import {
+  boardEntryMatches,
+  filterBoardEntries,
+  isBoardEntryAlwaysVisible,
+  type BoardEntry,
+} from "./board-filter";
 import { instanceBrand } from "./brand";
 import { useAttachments } from "./Attachments";
 import {
@@ -718,11 +724,6 @@ function mergeSessions(
   return [...merged.values()].sort(compareSessions);
 }
 
-/** 列表行：真实会话，或发送后还在创建的本地占位行。 */
-type BoardEntry =
-  | { kind: "session"; session: Session }
-  | { kind: "pending"; pending: PendingSession };
-
 /** 置顶优先，其余按创建时间倒序。 */
 function compareSessionOrder(
   a: { pinned?: boolean; createdAt: string },
@@ -1156,6 +1157,10 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   const [error, setError] = useState("");
   /* 加载失败才给「重新加载」；创建/删除/权限等操作错误只允许关闭提示。 */
   const [errorRetry, setErrorRetry] = useState(false);
+  /* 归档成功的提示与错误提示分开：成功时仍可继续操作，且带「查看归档」入口。 */
+  const [archiveNotice, setArchiveNotice] = useState("");
+  /* 项目页会话搜索：按标题、摘要、分支名过滤，不改变选择/归档逻辑。 */
+  const [boardQuery, setBoardQuery] = useState("");
   const [busy, setBusy] = useState(false);
   /* listReady：本次列表请求已结束；listLoaded：至少成功加载过一次。
      失败时 listReady 为 true 但 listLoaded 仍为 false，不能显示「还没有对话」。 */
@@ -1390,8 +1395,11 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   }
 
   /* 依次归档一组会话：单项失败不阻断其余项，成功的立刻从列表和选中集合里移除。 */
-  async function archiveSessions(targets: Session[]): Promise<string[]> {
+  async function archiveSessions(
+    targets: Session[],
+  ): Promise<{ failed: string[]; archived: number }> {
     const failed: string[] = [];
+    let archived = 0;
     for (const target of targets) {
       // 单独删除或已经在别的流程里删除的，不重复处理。
       if (deletingIdsRef.current.has(target.id) || removedIds.current.has(target.id)) continue;
@@ -1406,11 +1414,12 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
           return next;
         });
         setSwipeOpenId((current) => (current === target.id ? "" : current));
+        archived += 1;
       } catch {
         failed.push(target.title);
       }
     }
-    return failed;
+    return { failed, archived };
   }
 
   async function onClearAll() {
@@ -1466,15 +1475,19 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     clearingRef.current = true;
     setClearing(true);
     setError("");
-    let failed: string[] = [];
+    setArchiveNotice("");
+    let result: { failed: string[]; archived: number } = { failed: [], archived: 0 };
     try {
-      failed = await archiveSessions(targets);
+      result = await archiveSessions(targets);
     } finally {
       clearingRef.current = false;
       setClearing(false);
     }
     void refreshArchive();
-    if (failed.length > 0) reportActionError(`${failed.length} 个对话没有归档：${failed.join("、")}`);
+    if (result.archived > 0) setArchiveNotice(`已归档 ${result.archived} 个对话`);
+    if (result.failed.length > 0) {
+      reportActionError(`${result.failed.length} 个对话没有归档：${result.failed.join("、")}`);
+    }
   }
 
   async function onArchiveSelected() {
@@ -1493,17 +1506,19 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     clearingRef.current = true;
     setClearing(true);
     setError("");
-    let failed: string[] = [];
+    setArchiveNotice("");
+    let result: { failed: string[]; archived: number } = { failed: [], archived: 0 };
     try {
-      failed = await archiveSessions(targets);
+      result = await archiveSessions(targets);
     } finally {
       clearingRef.current = false;
       setClearing(false);
     }
     void refreshArchive();
-    if (failed.length > 0) {
+    if (result.archived > 0) setArchiveNotice(`已归档 ${result.archived} 个对话`);
+    if (result.failed.length > 0) {
       // 失败项仍在选中集合里，方便直接重试；保持选择模式。
-      reportActionError(`${failed.length} 个对话没有归档：${failed.join("、")}`);
+      reportActionError(`${result.failed.length} 个对话没有归档：${result.failed.join("、")}`);
       return;
     }
     setSelectMode(false);
@@ -1573,11 +1588,13 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     deletingIdsRef.current.add(target.id);
     setDeletingIds(new Set(deletingIdsRef.current));
     setError("");
+    setArchiveNotice("");
     try {
       await deleteSession(target.id);
       removedIds.current.set(target.id, Date.now());
       setSessions((current) => current.filter((item) => item.id !== target.id));
       setSwipeOpenId((current) => (current === target.id ? "" : current));
+      setArchiveNotice(`已归档「${target.title}」`);
       void refreshArchive();
     } catch (reason) {
       reportActionError(reason instanceof Error ? reason.message : "归档失败");
@@ -1941,13 +1958,28 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   ];
 
   /* 真实会话和“创建中”占位行一起排序：置顶优先，其余按创建时间倒序。 */
-  const boardEntries = useMemo<BoardEntry[]>(() => {
+  const allBoardEntries = useMemo<BoardEntry[]>(() => {
     const entries: BoardEntry[] = [
       ...sessions.map((session) => ({ kind: "session" as const, session })),
       ...pendingSessions.map((pending) => ({ kind: "pending" as const, pending })),
     ];
     return entries.sort(compareBoardEntries);
   }, [sessions, pendingSessions]);
+  /* 搜索只影响渲染：排序、选择集合和「全选/归档」仍按完整会话列表计算。 */
+  const boardEntries = useMemo(
+    () => filterBoardEntries(allBoardEntries, boardQuery),
+    [allBoardEntries, boardQuery],
+  );
+  const trimmedBoardQuery = boardQuery.trim();
+  /* 不匹配但必须保留的行数，用来在搜索提示里说明它们仍然可见。 */
+  const alwaysVisibleCount = useMemo(
+    () => (trimmedBoardQuery
+      ? allBoardEntries.filter(
+          (entry) => isBoardEntryAlwaysVisible(entry) && !boardEntryMatches(entry, trimmedBoardQuery),
+        ).length
+      : 0),
+    [allBoardEntries, trimmedBoardQuery],
+  );
 
   return (
     <section className="chat">
@@ -2145,12 +2177,40 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
           </button>
         </div>
       )}
+      {allBoardEntries.length > 0 && (
+        <div className="archive-bar board-search-bar" role="search">
+          <div className="archive-search">
+            <input
+              type="search"
+              value={boardQuery}
+              placeholder="搜索标题、摘要或分支"
+              aria-label="搜索对话"
+              onChange={(event) => setBoardQuery(event.target.value)}
+            />
+            {boardQuery !== "" && (
+              <button className="text-btn" type="button" onClick={() => setBoardQuery("")}>
+                清除
+              </button>
+            )}
+          </div>
+          {trimmedBoardQuery && (
+            <span className="archive-path">
+              匹配 {boardEntries.length - alwaysVisibleCount} 个
+              {alwaysVisibleCount > 0 && ` · ${alwaysVisibleCount} 个待确认/运行中始终显示`}
+            </span>
+          )}
+        </div>
+      )}
       <div className="thread">
         {!listReady && boardEntries.length === 0 && <InlineLoading label="正在加载对话" />}
         {listReady && !listLoaded && boardEntries.length === 0 && (
           <p className="empty">对话列表暂时没有加载出来。</p>
         )}
-        {listLoaded && boardEntries.length === 0 && <p className="empty">还没有对话。在下面写下要做的事。</p>}
+        {listLoaded && boardEntries.length === 0 && (
+          trimmedBoardQuery
+            ? <p className="empty">没有匹配「{trimmedBoardQuery}」的对话。</p>
+            : <p className="empty">还没有对话。在下面写下要做的事。</p>
+        )}
         {boardEntries.map((entry) => (
           entry.kind === "pending"
             ? <PendingSessionRow key={entry.pending.id} pending={entry.pending} />
@@ -2209,6 +2269,22 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
           } : undefined}
         >
           {error}
+        </Notice>
+      )}
+      {archiveNotice && (
+        <Notice
+          tone="success"
+          className="dock-notice"
+          onDismiss={() => setArchiveNotice("")}
+          action={archiveStatus?.enabled ? {
+            label: "查看归档",
+            onClick: () => {
+              setShowArchive(true);
+              void refreshArchive();
+            },
+          } : undefined}
+        >
+          {archiveNotice}
         </Notice>
       )}
       {draft.restored && (

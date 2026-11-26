@@ -70,7 +70,9 @@ async function withProxy(fn) {
   fs.writeFileSync(credentials, "user:pass\n", { mode: 0o600 });
   const upstreamPort = await freePort();
   const proxyPort = await freePort();
-  const upstream = http.createServer((_req, res) => {
+  const seen = [];
+  const upstream = http.createServer((req, res) => {
+    seen.push(req.headers);
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("upstream");
   });
@@ -99,7 +101,7 @@ async function withProxy(fn) {
     } catch (error) {
       throw new Error(`lan-proxy 没有启动：${error.message}\n${stderr}`);
     }
-    return await fn({ port: proxyPort });
+    return await fn({ port: proxyPort, upstreamPort, seen });
   } finally {
     child.kill("SIGTERM");
     if (child.exitCode === null) {
@@ -142,6 +144,21 @@ test("跨站请求 403 且不累计失败", async () => {
       assert.equal((await request(port, { authorization: basic("user:wrong") })).status, 401);
     }
     assert.equal((await request(port, { authorization: basic("user:pass") })).status, 200);
+  });
+});
+
+test("转发时把原始 Host 写入 x-forwarded-host，并把 Host 改写为上游地址", async () => {
+  await withProxy(async ({ port, upstreamPort, seen }) => {
+    const res = await request(port, {
+      authorization: basic("user:pass"),
+      host: "192.168.1.5:8787",
+      // 客户端自带的 x-forwarded-host 必须被代理覆盖，不能伪造原始 Host。
+      "x-forwarded-host": "evil.example",
+    });
+    assert.equal(res.status, 200);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].host, `127.0.0.1:${upstreamPort}`);
+    assert.equal(seen[0]["x-forwarded-host"], "192.168.1.5:8787");
   });
 });
 
