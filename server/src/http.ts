@@ -1012,8 +1012,12 @@ export function createAppServer(options: {
       }
       const projectId = url.searchParams.get("projectId") || undefined;
       const sessions = (await ctx.archive.list(projectId))
-        // 到期前会做快照；还在 SSD 上的会话不必同时显示在归档列表里。
-        .filter((entry) => !store.get(entry.id));
+        // local 告诉前端本机是否还有同名会话：恢复/清理的按钮要看它。
+        .map((entry) => ({ ...entry, local: Boolean(store.get(entry.id)) }))
+        // 到期前会做快照；还在 SSD 上的会话默认不必重复显示在归档列表里。
+        // 但手动删除时冷备已完成、本机清理失败（pendingDelete）的条目必须
+        // 露出来，否则用户既删不掉会话、也看不到归档，只能手工修磁盘。
+        .filter((entry) => !entry.local || entry.pendingDelete === true);
       sendJson(res, 200, { enabled: true, sessions });
       return;
     }
@@ -1562,7 +1566,7 @@ export async function createSession(
   // 创建目录/ worktree 可能耗时；如果此时开始退出，回滚并拒绝。
   const discardWorkspace = async () => {
     if (info.git) {
-      await removeWorktree(project.path, cwd, branch).catch(() => undefined);
+      await removeWorktree(project.path, cwd, branch, { sessionId: id }).catch(() => undefined);
     } else if (info.isolated) {
       try {
         fs.rmSync(cwd, { recursive: true, force: true });
@@ -1679,9 +1683,22 @@ async function deleteSession(
     try {
       await removeSessionWorkspace(latest);
     } catch (error) {
-      throw new HttpError(500, error instanceof Error ? error.message : "无法清理对话目录");
+      const reason = error instanceof Error ? error.message : "无法清理对话目录";
+      // 冷备已经在上面完成，这里失败只差本机副本；归档列表会把它显示成
+      // 「待清理」，用户结束占用目录的进程后可以直接重试（不会重复冷备）。
+      throw new HttpError(
+        500,
+        `无法清理对话目录 ${latest.cwd}：${reason}。`
+        + "目录可能被终端或后台进程占用，请先结束它们，再在归档面板点「重试清理」",
+      );
     }
     ctx.store.remove(id);
+    // 本机副本已删除：把归档条目标记回普通归档（失败不影响删除结果）。
+    if (ctx.archive) {
+      await ctx.archive.clearPendingDelete(id).catch((error) => {
+        console.warn(`[archive] 清理待删除标记失败 ${id}:`, error);
+      });
+    }
   } finally {
     unlockSession(id);
   }
@@ -2143,7 +2160,7 @@ async function forkSession(
       // 尽力清理已经建好的 worktree/目录、图片副本和 fork transcript。
       if (workspaceCreated) {
         if (info.git) {
-          await removeWorktree(project.path, cwd, branch).catch(() => undefined);
+          await removeWorktree(project.path, cwd, branch, { sessionId: newId }).catch(() => undefined);
         } else {
           try {
             fs.rmSync(cwd, { recursive: true, force: true });

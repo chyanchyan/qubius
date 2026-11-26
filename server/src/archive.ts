@@ -69,6 +69,11 @@ export interface ArchiveMeta {
   /** 会话 JSON 在归档里的相对路径。 */
   session: string;
   files: ArchiveFile[];
+  /**
+   * 删除前冷备份已经完成，但本机副本还没清理掉（worktree/目录被占用等）。
+   * 归档列表据此把它显示成「待清理」并提供重试，而不是像定期快照那样隐藏。
+   */
+  pendingDelete?: boolean;
 }
 
 /**
@@ -94,6 +99,8 @@ export interface ArchivedSessionSummary {
   updatedAt: string;
   archivedAt: string;
   messageCount: number;
+  /** 冷备已完成但本机副本还在；归档面板显示为「待清理」。 */
+  pendingDelete?: boolean;
 }
 
 export interface ArchiveStatus {
@@ -222,7 +229,7 @@ export class ArchiveStore {
    * 把一次会话完整写入归档：会话 JSON、图片、Claude SDK transcript。
    * 所有文件写完后才写 meta；meta 存在且校验通过才算归档成功。
    */
-  async archive(session: SessionCore): Promise<ArchiveMeta> {
+  async archive(session: SessionCore, options: { pendingDelete?: boolean } = {}): Promise<ArchiveMeta> {
     assertId(session.id);
     await this.ensureRoot();
 
@@ -306,10 +313,16 @@ export class ArchiveStore {
       messageCount: session.messages.length,
       session: sessionRel,
       files: list,
+      // 重归档时保留「删除没做完」的标记：定期快照重建归档不该把待清理状态抹掉。
+      ...((options.pendingDelete ?? existing?.pendingDelete) ? { pendingDelete: true } : {}),
     };
-    const metaData = Buffer.from(JSON.stringify(meta, null, 2), "utf8");
-    await writeAtomic(this.metaPath(session.id), metaData);
+    await this.writeMeta(meta);
     return meta;
+  }
+
+  private async writeMeta(meta: ArchiveMeta): Promise<void> {
+    const metaData = Buffer.from(JSON.stringify(meta, null, 2), "utf8");
+    await writeAtomic(this.metaPath(meta.id), metaData);
   }
 
   /**
@@ -323,8 +336,21 @@ export class ArchiveStore {
     // 不能复用整理期间（或 5 秒窗口内）的旧 SDK 索引：随后 removeSdk 会用
     // 新索引删除 transcript，两边必须看到同一批文件。
     this.configSdkIndexCache = undefined;
+    // 清理失败后的重试：冷备已经是这份会话的最新快照（updatedAt 一致）时，
+    // 校验通过就直接复用，只补打「待清理」标记。否则每次重试都要重新复制、
+    // 校验整份归档（SDK transcript 可能很大），重试会越来越慢。
+    const existing = await this.readMeta(session.id);
+    if (existing && existing.updatedAt === session.updatedAt) {
+      try {
+        const verified = await this.verify(session.id);
+        if (!verified.pendingDelete) await this.writeMeta({ ...verified, pendingDelete: true });
+        return { ...verified, pendingDelete: true };
+      } catch {
+        // 归档文件缺失/损坏：继续走完整重建（损坏的 meta 会在下面被隔离）。
+      }
+    }
     try {
-      return await this.archive(session);
+      return await this.archive(session, { pendingDelete: true });
     } catch (error) {
       if (
         !(error instanceof ArchiveError)
@@ -338,12 +364,25 @@ export class ArchiveStore {
     const brokenPath = `${metaPath}.broken-${Date.now()}`;
     await fs.promises.rename(metaPath, brokenPath);
     try {
-      return await this.archive(session);
+      return await this.archive(session, { pendingDelete: true });
     } catch (error) {
       // 重建仍失败时把旧 meta 放回去（尽力而为），避免归档从列表里消失。
       await fs.promises.rename(brokenPath, metaPath).catch(() => undefined);
       throw error;
     }
+  }
+
+  /**
+   * 本机副本已经删除（或恢复）后清掉「待清理」标记。
+   * 失败不影响主流程：归档列表还会用本机是否还有同名会话兜底。
+   */
+  async clearPendingDelete(id: string): Promise<void> {
+    assertId(id);
+    const meta = await this.readMeta(id);
+    if (!meta?.pendingDelete) return;
+    const next = { ...meta };
+    delete next.pendingDelete;
+    await this.writeMeta(next);
   }
 
   /** 校验归档里的每个文件；失败时抛 ArchiveError。返回 meta。 */
@@ -485,6 +524,9 @@ export class ArchiveStore {
       }
       throw error;
     }
+    // 恢复成功：本机又有同名会话了，清掉「删除未完成」的标记，避免归档面板
+    // 把一条正常的归档显示成待清理。
+    if (meta.pendingDelete) await this.clearPendingDelete(id).catch(() => undefined);
     return restored;
   }
 
@@ -658,6 +700,7 @@ function toArchivedSummary(meta: ArchiveMeta): ArchivedSessionSummary {
     updatedAt: meta.updatedAt,
     archivedAt: meta.archivedAt,
     messageCount: meta.messageCount,
+    ...(meta.pendingDelete ? { pendingDelete: true } : {}),
   };
 }
 

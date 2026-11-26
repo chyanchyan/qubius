@@ -191,7 +191,8 @@ export async function createWorktree(options: {
       },
     );
   } catch (error) {
-    await removeWorktree(options.projectPath, cwd, branch).catch(() => undefined);
+    await removeWorktree(options.projectPath, cwd, branch, { sessionId: options.sessionId })
+      .catch(() => undefined);
     throw gitError(error, "git worktree add 失败");
   }
   return { cwd, branch };
@@ -273,9 +274,73 @@ export async function restoreWorktree(options: {
   return true;
 }
 
-export async function removeWorktree(projectPath: string, cwd: string, branch?: string): Promise<void> {
-  let failure: Error | null = null;
-  if (fs.existsSync(cwd)) {
+/** 会话 id 是 UUID；删除目录前用它确认 cwd 确实是 qubius 自己建的 worktree。 */
+const SESSION_ID_LAYOUT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * 目录删除遇到占用时的退避间隔。Windows 上 `git worktree remove` 会先删注册项、
+ * 再递归删目录；目录里的文件还被进程占着时第二步失败，目录会留在原地。
+ * 给占用进程一点退出时间，必要时再让调用方看到可重试的错误。
+ */
+const REMOVE_DIR_RETRY_DELAYS_MS = [100, 300, 800, 1_500];
+const RETRYABLE_REMOVE_CODES = new Set(["EACCES", "EBUSY", "EPERM", "ENOTEMPTY", "EMFILE", "ENFILE"]);
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 递归删除目录。Node 的 fs.rm 只对部分错误自动重试；Windows 上常见的
+ * EACCES / EBUSY / EPERM 需要自己退避，否则一次占用就会让会话永久删不掉。
+ */
+export async function removeDirWithRetry(dir: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const delay = REMOVE_DIR_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || !code || !RETRYABLE_REMOVE_CODES.has(code)) throw error;
+      console.warn(`删除目录失败（${code}），${delay}ms 后重试：${dir}`);
+      await sleepMs(delay);
+    }
+  }
+}
+
+/**
+ * 只对 qubius 的会话 worktree 布局做“直接删目录”的降级：目录名必须等于
+ * 会话 id（旧数据没有 sessionId 时至少必须是 UUID）。cwd 数据损坏时不会
+ * 因为这条兜底误删别的目录。
+ */
+function isSessionWorktreeDir(cwd: string, sessionId?: string): boolean {
+  const base = path.basename(cwd);
+  return sessionId ? base === sessionId : SESSION_ID_LAYOUT_RE.test(base);
+}
+
+/**
+ * 删除会话的 worktree 和分支。
+ *
+ * `git worktree remove` 在 Windows 上不是原子操作：它先删 `.git/worktrees/<id>`
+ * 注册项，再递归删工作目录。目录被 CWD/打开的文件/子进程占用时第一步已经
+ * 完成、第二步失败，重试只会得到 `fatal: '…' is not a working tree`（exit 128），
+ * 会话就永远卡在“删不掉”状态。所以 git 删除失败时，只要路径确认是会话
+ * worktree，就降级为直接递归删目录；下一次重试可以继续收尾。
+ *
+ * 删除失败会抛错，调用方应保留会话以便重试。
+ */
+export async function removeWorktree(
+  projectPath: string,
+  cwd: string,
+  branch?: string,
+  options: { sessionId?: string } = {},
+): Promise<void> {
+  const target = path.resolve(cwd);
+  // 防御：配置或数据损坏时 cwd 可能指向项目根，绝不能递归删除。
+  if (target === path.resolve(projectPath)) {
+    throw new Error(`拒绝删除项目目录本身：${target}`);
+  }
+
+  if (fs.existsSync(target)) {
     try {
       await exec("git", ["-C", projectPath, "worktree", "remove", "--force", cwd], {
         windowsHide: true,
@@ -283,10 +348,27 @@ export async function removeWorktree(projectPath: string, cwd: string, branch?: 
         maxBuffer: WORKTREE_MAX_BUFFER,
       });
     } catch (error) {
-      failure = gitError(error, "git worktree remove 失败");
+      const failure = gitError(error, "git worktree remove 失败");
+      if (!isSessionWorktreeDir(target, options.sessionId)) throw failure;
+      // 注册项可能已经被 git 删掉（见函数注释）。直接删目录，删掉了就算成功；
+      // 删不掉时把两边的原因都带给用户，保留会话以便下次重试。
+      try {
+        await removeDirWithRetry(target);
+        console.warn(`git worktree remove 失败，已直接删除目录 ${target}：${failure.message}`);
+      } catch (removeError) {
+        const reason = removeError instanceof Error ? removeError.message : String(removeError);
+        throw new Error(`无法删除 worktree 目录 ${target}：${reason}（git: ${failure.message}）`);
+      }
     }
   }
-  // 即使 worktree 删除失败，也尝试清理分支；失败时由调用方保留可重试状态。
+  // 目录已经不在时顺手清掉可能残留的注册项（旧版本删一半留下的 prunable 条目）。
+  // 尽力而为：仓库本身被移走/改名时这里失败不应阻塞会话删除。
+  await exec("git", ["-C", projectPath, "worktree", "prune"], {
+    windowsHide: true,
+    timeout: WORKTREE_TIMEOUT_MS,
+    maxBuffer: WORKTREE_MAX_BUFFER,
+  }).catch(() => undefined);
+  // 即使目录/分支清理有异常，也尝试清理分支；失败时由调用方保留可重试状态。
   if (branch) {
     await exec("git", ["-C", projectPath, "branch", "-D", branch], {
       windowsHide: true,
@@ -296,7 +378,6 @@ export async function removeWorktree(projectPath: string, cwd: string, branch?: 
       console.warn(`无法删除分支 ${branch}：${error instanceof Error ? error.message : String(error)}`);
     });
   }
-  if (failure) throw failure;
 }
 
 export async function diffSummary(cwd: string, git: boolean): Promise<{ stat: string; patch: string }> {

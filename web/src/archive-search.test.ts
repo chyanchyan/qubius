@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterArchivedSessions } from "./archive-search";
+import { filterArchivedSessions, isPendingCleanup } from "./archive-search";
 import type { ArchivedSession } from "./api";
 
 function archived(id: string, extra: Partial<ArchivedSession> = {}): ArchivedSession {
@@ -39,4 +39,15 @@ test("空关键词返回副本，不修改原数组", () => {
   const result = filterArchivedSessions(items, "");
   assert.deepEqual(result.map((item) => item.id), ["a"]);
   assert.notEqual(result, items);
+});
+
+test("待清理判定：冷备完成且本机副本还在", () => {
+  assert.equal(isPendingCleanup({ pendingDelete: true, local: true }), true);
+  // 旧服务端没有 local：pendingDelete 只会出现在本机副本还在的时候。
+  assert.equal(isPendingCleanup({ pendingDelete: true }), true);
+  // 本机副本已经删掉：就是一条普通归档。
+  assert.equal(isPendingCleanup({ pendingDelete: true, local: false }), false);
+  // 定期快照：本机还在但没有删除意图，不该显示成待清理。
+  assert.equal(isPendingCleanup({ local: true }), false);
+  assert.equal(isPendingCleanup({}), false);
 });

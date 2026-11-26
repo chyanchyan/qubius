@@ -387,6 +387,10 @@ export interface ArchivedSession {
   updatedAt: string;
   archivedAt: string;
   messageCount: number;
+  /** 冷备已完成、本机副本还没清理掉；面板显示为「待清理」并允许重试。 */
+  pendingDelete?: boolean;
+  /** 本机是否还有同名会话（归档列表接口返回）。 */
+  local?: boolean;
 }
 
 export interface ArchiveStatus {

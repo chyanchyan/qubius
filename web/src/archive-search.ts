@@ -15,3 +15,15 @@ export function filterArchivedSessions(
       .some((text) => typeof text === "string" && text.toLowerCase().includes(needle))
   ));
 }
+
+/**
+ * 冷备已完成、本机副本还在的归档条目。面板用「待清理」样式展示，并且只
+ * 提供「重试清理」（恢复会被服务端拒绝）。
+ * 旧服务端不返回 local 字段，这时按本机还有副本处理：pendingDelete 本来就
+ * 只会在那种状态下出现。
+ */
+export function isPendingCleanup(
+  item: Pick<ArchivedSession, "pendingDelete" | "local">,
+): boolean {
+  return item.pendingDelete === true && item.local !== false;
+}

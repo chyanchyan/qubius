@@ -183,6 +183,8 @@ export class ArchiveSweeper {
           await this.deps.archive.removeSdkIdsAsync(sessionSdkIds(session));
           await removeSessionWorkspace(session);
           this.deps.store.remove(session.id);
+          // 清理成功：手动删除失败留下的「待清理」标记不再需要（尽力而为）。
+          await this.deps.archive.clearPendingDelete(session.id).catch(() => undefined);
           result.removed += 1;
         } catch (error) {
           result.failed.push({

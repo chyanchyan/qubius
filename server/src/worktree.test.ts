@@ -372,3 +372,44 @@ test("createWorktree 只接受会话分支作为 startPoint，无效时回退 HE
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+
+test("worktree 注册项丢失但目录还在时仍能删除并清理分支", async () => {
+  const { base, work } = setupRepo();
+  const dataDir = path.join(base, "data");
+  try {
+    const id = randomUUID();
+    const created = await createWorktree({
+      projectPath: work,
+      projectId: "p1",
+      sessionId: id,
+      dataDir,
+    });
+    // 复现 Windows 上「git 先删注册项、再删目录失败」留下的状态：
+    // 注册项没了、目录还在，再调 git 只会得到 is not a working tree（exit 128）。
+    fs.rmSync(path.join(work, ".git", "worktrees", path.basename(created.cwd)), {
+      recursive: true,
+      force: true,
+    });
+    fs.writeFileSync(path.join(created.cwd, "leftover.txt"), "still here\n");
+    assert.throws(() => git(work, "worktree", "remove", "--force", created.cwd));
+
+    await removeWorktree(work, created.cwd, created.branch, { sessionId: id });
+    assert.equal(fs.existsSync(created.cwd), false);
+    assert.equal(git(work, "branch", "--list", created.branch), "");
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("非会话 worktree 路径删除失败时不会递归误删目录", async () => {
+  const { base, work } = setupRepo();
+  try {
+    const victim = path.join(base, "victim");
+    fs.mkdirSync(victim);
+    fs.writeFileSync(path.join(victim, "keep.txt"), "keep");
+    await assert.rejects(removeWorktree(work, victim));
+    assert.ok(fs.existsSync(path.join(victim, "keep.txt")));
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
