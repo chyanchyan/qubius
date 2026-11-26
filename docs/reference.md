@@ -16,7 +16,7 @@
 - 「普通对话」是内置项目 `chat`，始终排在项目列表第一位，目录为 `<dataDir>/chat`，每个对话在 `<dataDir>/chat/<对话 id>` 下运行，归档时只删该子目录。自己定义 `id: chat` 会覆盖内置入口。
 - `maxConcurrent`：同时进行的对话数，默认 4，超出排队。这里只作为设置文件的初始默认值；之后在页面「设置」里改「并发上限」，保存后立即生效，不需要重启或重新部署。
 - `limits`：`transcriptBytes`（单会话序列化总字节，默认 8388608）、`transcriptMessages`（消息条数，5000）、`messageText`（单条正文，200000）、`requestBodyBytes`（JSON 请求体，28000000）、`historyPage`（详情首帧/历史翻页条数，200）。可用 `QUBIUS_LIMIT_TRANSCRIPT_BYTES`、`QUBIUS_LIMIT_TRANSCRIPT_MESSAGES`、`QUBIUS_LIMIT_MESSAGE_TEXT`、`QUBIUS_LIMIT_REQUEST_BODY`、`QUBIUS_HISTORY_PAGE` 覆盖；超出范围或非正整数时启动报错。
-- `approvalTimeoutMinutes`：等待确认（提问/授权）的超时，默认 10 分钟，范围 1–1440，超时自动拒绝。户外使用可调大。
+- `approvalTimeoutMinutes`：等待确认（提问/授权）的超时，默认 10 分钟，范围 0–1440，超时自动拒绝。户外使用可调大；设为 0 表示一直等待，不自动拒绝，界面上也不显示倒计时。
 - `role`：`primary`（默认）或 `secondary`。副实例需要 `secondary.primaryRepo`；`secondary.primaryRef` 默认 `main`。
 - `archive`：`dir` 是归档根目录，`retentionDays` 是会话列表的保留天数（作用于本机 SSD 副本），默认 30，到期后会话归档到这里（冷存储）并永久保留；`archive.instance` 默认主实例 `main`、副实例 `bak`。不配置则不归档、不自动删除旧会话。
 
@@ -197,7 +197,7 @@ git 项目的每个对话是独立分支（新会话 `qubius/<对话 id>`，旧�
 
 价格只是按所填单价的算术，不含订阅额度、折扣或汇率。
 
-页面是 PWA，对话每轮结束（完成或失败）以及停下来「等待确认」时可给手机发系统推送；用户主动停止不推送。推送只跟「本轮结束」走，后台子 agent 稍后完成不会再单独推送。等待确认的标题是「项目名 · 等待确认」，正文是问题首行或需要授权的工具名和路径；默认 10 分钟不回会自动拒绝（可用 `approvalTimeoutMinutes` 调大）。
+页面是 PWA，对话每轮结束（完成或失败）以及停下来「等待确认」时可给手机发系统推送；用户主动停止不推送。推送只跟「本轮结束」走，后台子 agent 稍后完成不会再单独推送。等待确认的标题是「项目名 · 等待确认」，正文是问题首行或需要授权的工具名和路径；默认 10 分钟不回会自动拒绝（可用 `approvalTimeoutMinutes` 调大，设为 0 则不自动拒绝、不显示倒计时）。
 
 - 「设置 → 推送通知」里开启并允许权限；订阅存在 `dataDir/push/subscriptions.json`，最多 20 台设备。
 - VAPID 密钥在首次打开设置页或首次推送时生成到 `dataDir/push/vapid.json`，备份 `dataDir` 时要一起备份；删掉后每台设备需重新开启。

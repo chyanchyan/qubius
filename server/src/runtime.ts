@@ -430,7 +430,7 @@ export class Runtime {
       credential: (providerId: string) => { apiKey: string; baseUrl: string };
       permission: (projectId: string) => PermissionLevel;
       secrets: () => string[];
-      /** 等待确认的超时时间，默认 10 分钟。 */
+      /** 等待确认的超时时间，默认 10 分钟；0 表示一直等，不显示倒计时也不自动拒绝。 */
       approvalTimeoutMinutes?: number;
       /**
        * 技能开关：按项目返回应启用的 SDK 技能名；undefined 表示沿用 SDK 默认。
@@ -1424,10 +1424,11 @@ export class Runtime {
     this.store.setPending(id, pending);
     return new Promise((resolve, reject) => {
       let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const settle = (finish: () => void) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
         finish();
       };
@@ -1437,13 +1438,16 @@ export class Runtime {
         settle(() => reject(new Error("已停止")));
       };
       // 用户长时间不回应时自动拒绝，清掉 pending，避免整轮永远挂着。
-      const timer = setTimeout(() => {
-        if (this.waiters.get(id)?.requestId !== pending.requestId) return;
-        this.waiters.delete(id);
-        this.store.clearPending(id);
-        settle(() => reject(new ApprovalTimeoutError("确认超时")));
-      }, this.approvalTimeoutMs);
-      timer.unref();
+      // 超时配置为 0 时一直等待，不启动定时器。
+      if (this.approvalTimeoutMs > 0) {
+        timer = setTimeout(() => {
+          if (this.waiters.get(id)?.requestId !== pending.requestId) return;
+          this.waiters.delete(id);
+          this.store.clearPending(id);
+          settle(() => reject(new ApprovalTimeoutError("确认超时")));
+        }, this.approvalTimeoutMs);
+        timer.unref();
+      }
       if (signal.aborted) {
         onAbort();
         return;
@@ -1816,8 +1820,9 @@ export function redact(text: string, secret: string | readonly string[]): string
   return redacted;
 }
 
-/** 本次确认会在什么时候被服务端自动拒绝；前端据此显示倒计时。 */
-export function pendingExpiresAt(now: number, timeoutMs: number): string {
+/** 本次确认会在什么时候被服务端自动拒绝；前端据此显示倒计时。0 表示不超时。 */
+export function pendingExpiresAt(now: number, timeoutMs: number): string | undefined {
+  if (timeoutMs <= 0) return undefined;
   return new Date(now + timeoutMs).toISOString();
 }
 

@@ -177,7 +177,7 @@ export interface Pending {
   inputPreview: string;
   blockedPath?: string;
   questions?: PendingQuestion[];
-  /** 服务端自动拒绝这次确认的时间；旧服务端/旧会话没有这个字段。 */
+  /** 服务端自动拒绝这次确认的时间；不自动拒绝或旧服务端/旧会话没有这个字段。 */
   expiresAt?: string;
 }
 

@@ -40,12 +40,14 @@ test("相对 dataDir 和项目路径相对配置文件解析", () => {
   assert.equal(config.approvalTimeoutMinutes, 10);
 });
 
-test("approvalTimeoutMinutes 可配置，非法值会被拒绝", () => {
+test("approvalTimeoutMinutes 可配置，0 表示不自动拒绝，非法值会被拒绝", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-coder-config-"));
   const file = path.join(dir, "config.yaml");
   fs.writeFileSync(file, ["listen: 127.0.0.1:8787", "dataDir: ./data", "approvalTimeoutMinutes: 60", ""].join("\n"));
   assert.equal(loadConfig(file).approvalTimeoutMinutes, 60);
-  for (const invalid of ["0", "1441", "1.5", '"10"']) {
+  fs.writeFileSync(file, ["listen: 127.0.0.1:8787", "dataDir: ./data", "approvalTimeoutMinutes: 0", ""].join("\n"));
+  assert.equal(loadConfig(file).approvalTimeoutMinutes, 0);
+  for (const invalid of ["1441", "1.5", '"10"']) {
     fs.writeFileSync(file, ["listen: 127.0.0.1:8787", "dataDir: ./data", `approvalTimeoutMinutes: ${invalid}`, ""].join("\n"));
     assert.throws(() => loadConfig(file), /approvalTimeoutMinutes/);
   }

@@ -791,10 +791,11 @@ test("setMaxConcurrent 调高后立即启动排队中的对话", async () => {
   }
 });
 
-test("确认超时时间按当前时间加上服务端等待时长", () => {
+test("确认超时时间按当前时间加上服务端等待时长，0 表示不倒计时", () => {
   const now = Date.UTC(2026, 0, 2, 3, 4, 5);
   assert.equal(pendingExpiresAt(now, 10 * 60_000), "2026-01-02T03:14:05.000Z");
   assert.equal(pendingExpiresAt(now, 60_000), "2026-01-02T03:05:05.000Z");
+  assert.equal(pendingExpiresAt(now, 0), undefined);
 });
 
 test("项目目录不存在时，开跑前给出可读错误而不是 SDK 的原始 stderr", async () => {

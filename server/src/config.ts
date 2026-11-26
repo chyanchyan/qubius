@@ -90,7 +90,7 @@ export interface AppConfig {
   port: number;
   dataDir: string;
   maxConcurrent: number;
-  /** 等待确认多久没人回应就自动拒绝，默认 10 分钟。测试夹具可以省略。 */
+  /** 等待确认多久没人回应就自动拒绝，默认 10 分钟；0 表示不自动拒绝。测试夹具可以省略。 */
   approvalTimeoutMinutes?: number;
   projects: ProjectConfig[];
   /** config.yaml 自带的项目（含内置普通对话），不含额外项目文件；热加载时作为底稿。 */
@@ -347,8 +347,8 @@ function normalizeMax(value: unknown): number {
 
 function normalizeApprovalTimeout(value: unknown): number {
   if (value === undefined) return 10;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1440) {
-    throw new Error("approvalTimeoutMinutes 必须是 1 到 1440 的整数");
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1440) {
+    throw new Error("approvalTimeoutMinutes 必须是 0 到 1440 的整数（0 表示不自动拒绝）");
   }
   return value;
 }
