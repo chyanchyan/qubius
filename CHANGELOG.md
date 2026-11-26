@@ -2,6 +2,15 @@
 
 每个版本包含一句摘要和改动列表，规则见 `CLAUDE.md`。
 
+## [0.7.0] - 2026-11-27
+
+新增 `make deploy`、`make deploy-lan`、`make deploy-wan` 三个部署入口，按本机、局域网、公网逐级部署。
+
+- 仓库根可以用 `make deploy` 构建并重启本机实例，`make deploy-lan` 同时启动局域网入口，`make deploy-wan` 再应用 edgectl 公网入口。
+- 自动识别 systemd 接管的实例并重启对应 unit；没有 systemd 时沿用 `deploy/start-all.sh`。
+- 公网入口复用部署页同一套计划、确认和应用流程，应用前打印差异，非交互环境需要显式确认。
+- 新增 `QUBIUS_START_LAN` 配置，可让 `start-all.sh` 只启动实例、不管理局域网入口。
+
 ## [0.6.0] - 2026-11-26
 
 等待确认的超时可以设为 0，关闭自动拒绝和倒计时。
