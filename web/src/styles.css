@@ -732,8 +732,9 @@ summary:focus-visible {
 
 .msg-image img {
   display: block;
-  max-width: min(200px, 100%);
-  max-height: 140px;
+  /* 缩略图只做识别用的图标，点开走 Lightbox 看大图。 */
+  max-width: calc(40px * var(--control-scale));
+  max-height: calc(40px * var(--control-scale));
   border-radius: 4px;
   border: 1px solid var(--line);
   object-fit: contain;
