@@ -251,10 +251,12 @@ fi
 if [[ $QUBIUS_SECONDARY == 1 ]]; then
   PEER_PROJECT_ID=qubius
   PEER_PROJECT_NAME=qubius
+  PEER_ENABLED=$QUBIUS_START_PRIMARY
   ARCHIVE_INSTANCE=bak
 else
   PEER_PROJECT_ID=co-qubius
   PEER_PROJECT_NAME=co-qubius
+  PEER_ENABLED=$QUBIUS_START_SECONDARY
   ARCHIVE_INSTANCE=main
 fi
 
@@ -281,15 +283,24 @@ else
 fi
 export QUBIUS_CFG_ARCHIVE_BLOCK
 
+# 对端实例未启用（QUBIUS_START_* 为 0）时不把它的项目写进配置，
+# 否则项目列表里会出现一个根本不会运行的实例。
 QUBIUS_CFG_PROJECTS_BLOCK=$(
-  printf '  - id: %s\n' "$PEER_PROJECT_ID"
-  printf '    name: %s\n' "$PEER_PROJECT_NAME"
-  printf '    path: %s\n' "$(yaml_quote "$QUBIUS_PEER_DIR")"
+  if [[ $PEER_ENABLED == 1 ]]; then
+    printf '  - id: %s\n' "$PEER_PROJECT_ID"
+    printf '    name: %s\n' "$PEER_PROJECT_NAME"
+    printf '    path: %s\n' "$(yaml_quote "$QUBIUS_PEER_DIR")"
+  fi
   if [[ -n ${QUBIUS_PROJECTS_FILE:-} ]]; then
     cat "$QUBIUS_PROJECTS_FILE"
   fi
 )
-export QUBIUS_CFG_PROJECTS_BLOCK
+if [[ -n $QUBIUS_CFG_PROJECTS_BLOCK ]]; then
+  QUBIUS_CFG_PROJECTS_SECTION=$(printf 'projects:\n%s' "$QUBIUS_CFG_PROJECTS_BLOCK")
+else
+  QUBIUS_CFG_PROJECTS_SECTION=''
+fi
+export QUBIUS_CFG_PROJECTS_SECTION
 
 TMP_CONFIG=$(mktemp "$QUBIUS_CONFIG_DIR/.config.XXXXXX") \
   || qubius_die "无法创建临时文件：$QUBIUS_CONFIG_DIR"

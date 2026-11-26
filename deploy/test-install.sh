@@ -154,6 +154,24 @@ BAK_COUNT_AFTER=$(compgen -G "$P/config/config.yaml.bak.*" | wc -l)
 [[ $BAK_COUNT_AFTER == "$BAK_COUNT_BEFORE" ]] \
   || fail "无差异 + --force-config 不应新增备份（$BAK_COUNT_BEFORE -> $BAK_COUNT_AFTER）"
 
+# ── 对端实例未启用：不把对端项目写进配置 ──────────────────────────────────
+D=$TMP/disabled
+install_role 0 "$D" QUBIUS_START_SECONDARY=0
+CFG=$D/config/config.yaml
+assert_not_grep '^  - id: co-qubius$' "$CFG"
+assert_not_grep '^projects:' "$CFG"
+# 用户自己的额外项目仍然保留。
+printf '  - id: demo\n    name: 示例\n    path: %s\n' "$TMP/demo" >"$TMP/projects-disabled.yaml"
+install_role 0 "$D" QUBIUS_START_SECONDARY=0 QUBIUS_PROJECTS_FILE="$TMP/projects-disabled.yaml" --force-config
+assert_not_grep '^  - id: co-qubius$' "$CFG"
+assert_grep '^projects:$' "$CFG"
+assert_grep '^  - id: demo$' "$CFG"
+# 副实例同理：主实例未启用时不写 qubius 项目。
+install_role 1 "$D" QUBIUS_START_PRIMARY=0
+CFG=$D/config/config-secondary.yaml
+assert_not_grep '^  - id: qubius$' "$CFG"
+assert_not_grep '^projects:' "$CFG"
+
 # ── 副实例 ────────────────────────────────────────────────────────────────
 S=$TMP/secondary
 install_role 1 "$S"

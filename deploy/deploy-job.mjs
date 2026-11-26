@@ -384,8 +384,11 @@ function makeEntry(role) {
   if (!dataDir) fail("prepare", `缺少${label}数据目录（QUBIUS_DATA_${secondary ? "SECONDARY" : "PRIMARY"}）`);
   if (port < 1 || port > 65535) fail("prepare", `${label}端口必须在 1 到 65535 之间：${port}`);
   if (!publicHost) fail("prepare", `启用${label}时公网域名不能为空`);
-  const peerPath = secondary ? primaryRepo : secondaryRepo;
-  if (!peerPath) say(`${label}未配置对端 checkout，配置里不会包含对端项目`);
+  // 对端实例未启用时不把它写进项目列表：否则会显示一个根本不会运行的实例。
+  const peerEnabled = secondary ? startPrimary : startSecondary;
+  const peerPath = peerEnabled ? (secondary ? primaryRepo : secondaryRepo) : "";
+  if (!peerEnabled) say("对端实例未启用，配置里不会包含对端项目");
+  else if (!peerPath) say(`${label}未配置对端 checkout，配置里不会包含对端项目`);
   return {
     role,
     label,

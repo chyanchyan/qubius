@@ -17,5 +17,4 @@ maxConcurrent: {{QUBIUS_MAX_CONCURRENT}}
 #   requestBodyBytes: 28000000
 #   historyPage: 200
 {{QUBIUS_CFG_ARCHIVE_BLOCK}}
-projects:
-{{QUBIUS_CFG_PROJECTS_BLOCK}}
+{{QUBIUS_CFG_PROJECTS_SECTION}}
