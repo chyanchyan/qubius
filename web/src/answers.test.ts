@@ -64,3 +64,30 @@ test("拒绝时不带答案和 remember", () => {
     { requestId: "r3", behavior: "deny" },
   );
 });
+
+test("approvedFull 只在需要展开且允许时携带", () => {
+  assert.deepEqual(
+    answerBody({ requestId: "r4", kind: "permission", requiresExpand: true }, "allow", undefined, undefined, true),
+    { requestId: "r4", behavior: "allow", approvedFull: true },
+  );
+  // 不需要展开时不带（即使调用方传了 true）。
+  assert.deepEqual(
+    answerBody({ requestId: "r5", kind: "permission", requiresExpand: false }, "allow", undefined, undefined, true),
+    { requestId: "r5", behavior: "allow" },
+  );
+  // 没展开（false/缺省）时允许也不带。
+  assert.deepEqual(
+    answerBody({ requestId: "r6", kind: "permission", requiresExpand: true }, "allow"),
+    { requestId: "r6", behavior: "allow" },
+  );
+  // 拒绝永远不带。
+  assert.deepEqual(
+    answerBody({ requestId: "r7", kind: "permission", requiresExpand: true }, "deny", undefined, undefined, true),
+    { requestId: "r7", behavior: "deny" },
+  );
+  // 问题类型不带。
+  assert.deepEqual(
+    answerBody({ requestId: "r8", kind: "question", requiresExpand: true }, "allow", { q: "A" }, undefined, true),
+    { requestId: "r8", behavior: "allow", answers: { q: "A" } },
+  );
+});

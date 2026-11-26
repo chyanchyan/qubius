@@ -443,6 +443,9 @@ test("等待确认优先于进行中", () => {
     kind: "permission",
     toolName: "Bash",
     inputPreview: "rm -rf /",
+    inputText: "rm -rf /",
+    inputTruncated: false,
+    requiresExpand: false,
   };
   state.turnActive = true;
   assert.equal(derivePhase(state), "needs_input");

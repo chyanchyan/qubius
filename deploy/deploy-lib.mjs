@@ -203,6 +203,25 @@ function git(repo, args) {
   });
 }
 
+// 构建 staging 的中间目录不算源码改动；不依赖 .gitignore（staging 单元可能还没落地）。
+const BUILD_EXCLUDES = [
+  ":(exclude)server/dist.next",
+  ":(exclude)server/dist.prev",
+  ":(exclude)web/dist.next",
+  ":(exclude)web/dist.prev",
+  ":(exclude)dist.next",
+  ":(exclude)dist.prev",
+];
+
+/** 构建输入里是否有未提交改动（未跟踪的新文件也算）。 */
+export function buildDirtyStatus(repo) {
+  return git(repo, [
+    "status", "--porcelain", "--untracked-files=normal", "--",
+    "server", "web", "package.json", "package-lock.json",
+    ...BUILD_EXCLUDES,
+  ]);
+}
+
 /** 构建产物缺失、HEAD 变化或工作区有改动时需要重新构建。 */
 export function needsBuild(repo) {
   for (const file of ["server/dist/index.js", "web/dist/index.html"]) {
@@ -213,11 +232,7 @@ export function needsBuild(repo) {
   if (!head) return true;
   if (needsInstall(repo)) return true;
   // 只看源码/构建输入；未跟踪的新文件也要算，文档/部署脚本改动不算。
-  const status = git(repo, [
-    "status", "--porcelain", "--untracked-files=normal", "--",
-    "server", "web", "package.json", "package-lock.json",
-  ]);
-  if ((status.stdout ?? "").trim()) return true;
+  if (buildDirtyStatus(repo).stdout?.trim()) return true;
   let stamp;
   try {
     stamp = JSON.parse(fs.readFileSync(path.join(repo, "server", "dist", "build.json"), "utf8"));
@@ -226,6 +241,204 @@ export function needsBuild(repo) {
   }
   if (stamp.dirty === true) return true;
   return stamp.head !== head;
+}
+
+// ── staging / 原子切换 / 回滚（与 deploy/build.sh 的 --stage/--swap/--rollback 对齐）──
+// 目录必须和 live 在同一个文件系统里，全部用 rename 完成，不做跨盘复制。
+function pathExists(target) {
+  try {
+    fs.lstatSync(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removePath(target) {
+  fs.rmSync(target, { recursive: true, force: true });
+}
+
+/** 一个 checkout 的 live/staging/回滚目录。 */
+export function distPaths(repo) {
+  const server = path.join(repo, "server");
+  const web = path.join(repo, "web");
+  return {
+    server: {
+      live: path.join(server, "dist"),
+      prev: path.join(server, "dist.prev"),
+      next: path.join(server, "dist.next"),
+    },
+    web: {
+      live: path.join(web, "dist"),
+      prev: path.join(web, "dist.prev"),
+      next: path.join(web, "dist.next"),
+    },
+  };
+}
+
+/** staging 不完整的原因列表；空数组表示可以切换。 */
+export function stagingProblems(repo) {
+  const paths = distPaths(repo);
+  const problems = [];
+  for (const [label, required] of [
+    ["server/dist.next/index.js", path.join(paths.server.next, "index.js")],
+    ["server/dist.next/build.json", path.join(paths.server.next, "build.json")],
+    ["web/dist.next/index.html", path.join(paths.web.next, "index.html")],
+  ]) {
+    if (!fs.existsSync(required)) problems.push(label);
+  }
+  return problems;
+}
+
+/**
+ * 把 server/web 的 .next 原子切换为 live：旧 live 先移到 .prev，两侧要么都切换
+ * 成功，要么恢复原状并抛错。切换前会校验 staging 的入口文件，拒绝半成品。
+ */
+export function swapDist(repo) {
+  const problems = stagingProblems(repo);
+  if (problems.length > 0) {
+    throw new Error(`staging 不完整，缺少 ${problems.join("、")}`);
+  }
+  const paths = distPaths(repo);
+  const sides = [paths.server, paths.web];
+  // 旧备份先删；此时 live/.next 还没动，删失败只损失上一次的 .prev。
+  for (const side of sides) removePath(side.prev);
+
+  let serverPrev = false;
+  let webPrev = false;
+  let serverLive = false;
+  let webLive = false;
+  try {
+    if (pathExists(paths.server.live)) {
+      fs.renameSync(paths.server.live, paths.server.prev);
+      serverPrev = true;
+    }
+    if (pathExists(paths.web.live)) {
+      fs.renameSync(paths.web.live, paths.web.prev);
+      webPrev = true;
+    }
+    fs.renameSync(paths.server.next, paths.server.live);
+    serverLive = true;
+    fs.renameSync(paths.web.next, paths.web.live);
+    webLive = true;
+  } catch (error) {
+    if (webLive) {
+      try { fs.renameSync(paths.web.live, paths.web.next); } catch {}
+    }
+    if (serverLive) {
+      try { fs.renameSync(paths.server.live, paths.server.next); } catch {}
+    }
+    if (webPrev) {
+      try { fs.renameSync(paths.web.prev, paths.web.live); } catch {}
+    }
+    if (serverPrev) {
+      try { fs.renameSync(paths.server.prev, paths.server.live); } catch {}
+    }
+    throw new Error(`切换失败（已尽量恢复原状）：${error instanceof Error ? error.message : error}`);
+  }
+}
+
+/**
+ * 用 .prev 恢复 live：先把失败的 live 改名到临时目录，.prev 恢复成功后再删临时；
+ * 任一步失败就还原，避免两侧 live 都缺失。要求两侧都有 .prev。成功后清掉 .next。
+ */
+export function rollbackDist(repo) {
+  const paths = distPaths(repo);
+  if (!pathExists(paths.server.prev)) {
+    throw new Error("没有 server/dist.prev，无法回滚（未找到上一次的构建）");
+  }
+  if (!pathExists(paths.web.prev)) {
+    throw new Error("没有 web/dist.prev，无法回滚（未找到上一次的构建）");
+  }
+  const serverTmp = `${paths.server.live}.rollback.${process.pid}`;
+  const webTmp = `${paths.web.live}.rollback.${process.pid}`;
+  removePath(serverTmp);
+  removePath(webTmp);
+
+  let serverMoved = false;
+  let webMoved = false;
+  let serverRestored = false;
+  let webRestored = false;
+  try {
+    if (pathExists(paths.server.live)) {
+      fs.renameSync(paths.server.live, serverTmp);
+      serverMoved = true;
+    }
+    if (pathExists(paths.web.live)) {
+      fs.renameSync(paths.web.live, webTmp);
+      webMoved = true;
+    }
+    fs.renameSync(paths.server.prev, paths.server.live);
+    serverRestored = true;
+    fs.renameSync(paths.web.prev, paths.web.live);
+    webRestored = true;
+  } catch (error) {
+    if (webRestored) {
+      try { fs.renameSync(paths.web.live, paths.web.prev); } catch {}
+    }
+    if (serverRestored) {
+      try { fs.renameSync(paths.server.live, paths.server.prev); } catch {}
+    }
+    if (webMoved) {
+      try { fs.renameSync(webTmp, paths.web.live); } catch {}
+    }
+    if (serverMoved) {
+      try { fs.renameSync(serverTmp, paths.server.live); } catch {}
+    }
+    throw new Error(`回滚失败（已尽量恢复原状）：${error instanceof Error ? error.message : error}`);
+  }
+
+  removePath(serverTmp);
+  removePath(webTmp);
+  // 清掉残留 staging，避免下次 swap 把旧 .next 提升为 live。
+  removePath(paths.server.next);
+  removePath(paths.web.next);
+}
+
+/**
+ * 安装依赖前备份 node_modules：先删旧 .prev，再把 node_modules 改名为 .prev。
+ * 原来没有 node_modules 时返回 false（没有备份可恢复）。
+ */
+export function backupNodeModules(repo) {
+  const nodeModules = path.join(repo, "node_modules");
+  const prev = path.join(repo, "node_modules.prev");
+  // node_modules 缺失时保留旧 .prev（可能是上次失败留下的可用依赖）。
+  if (!pathExists(nodeModules)) return false;
+  removePath(prev);
+  fs.renameSync(nodeModules, prev);
+  return true;
+}
+
+/** 把 node_modules.prev 恢复为 node_modules；没有备份时返回 false。 */
+export function restoreNodeModules(repo) {
+  const nodeModules = path.join(repo, "node_modules");
+  const prev = path.join(repo, "node_modules.prev");
+  if (!pathExists(prev)) return false;
+  removePath(nodeModules);
+  fs.renameSync(prev, nodeModules);
+  return true;
+}
+
+/**
+ * 只在本次部署确实做过备份时才恢复 node_modules。
+ * 上一次部署留下的 .prev 可能是旧 lock 的依赖，未备份的部署失败时绝不能拿它
+ * 覆盖当前正确的 node_modules。
+ */
+export function restoreNodeModulesWhenBackedUp(repo, backedUp) {
+  if (!backedUp) return false;
+  return restoreNodeModules(repo);
+}
+
+/** 清理旧 node_modules.prev（一次成功部署/安装后再执行）。 */
+export function cleanupNodeModulesPrev(repo) {
+  removePath(path.join(repo, "node_modules.prev"));
+}
+
+/** staging 目录清理（构建失败或中止时丢弃未切换产物）。 */
+export function discardStaging(repo) {
+  const paths = distPaths(repo);
+  removePath(paths.server.next);
+  removePath(paths.web.next);
 }
 
 /** 当前 git HEAD；不是 git 仓库时返回空串。 */
@@ -254,9 +467,140 @@ export function samePath(a, b, platform = process.platform) {
 
 /** 工作区是否有未提交改动（只看构建输入）。 */
 export function gitDirty(repo) {
-  const status = git(repo, [
-    "status", "--porcelain", "--untracked-files=normal", "--",
-    "server", "web", "package.json", "package-lock.json",
-  ]);
-  return Boolean((status.stdout ?? "").trim());
+  return Boolean((buildDirtyStatus(repo).stdout ?? "").trim());
+}
+
+/** /api/health 里进行中的会话数（排队/运行/等待确认）；字段缺失或非法时返回 0。 */
+export function activeSessionsFromHealth(health) {
+  const value = health && typeof health === "object" ? health.activeSessions : undefined;
+  return Number.isInteger(value) && value > 0 ? value : 0;
+}
+
+/**
+ * 忙碌保护决策（与 deploy/lib.sh 的 qubius_guard_busy 一致）：
+ * 返回 { action: "proceed" | "wait" | "fail", waitSeconds, reason }。
+ * waitSeconds 为 undefined 表示没有设置 QUBIUS_DEPLOY_WAIT；NaN 表示取值非法。
+ */
+export function busyDecision({ activeSessions = 0, force = false, waitSeconds } = {}) {
+  const active = Number.isInteger(activeSessions) && activeSessions > 0 ? activeSessions : 0;
+  if (active <= 0) return { action: "proceed", waitSeconds: null, reason: "" };
+  if (force) {
+    return {
+      action: "proceed",
+      waitSeconds: null,
+      reason: `有 ${active} 个进行中的会话，QUBIUS_DEPLOY_FORCE 已强制继续（这些会话会被中断）`,
+    };
+  }
+  if (waitSeconds !== undefined) {
+    if (!Number.isInteger(waitSeconds) || waitSeconds < 0) {
+      return {
+        action: "fail",
+        waitSeconds: null,
+        reason: "QUBIUS_DEPLOY_WAIT 必须是整数秒",
+      };
+    }
+    return {
+      action: "wait",
+      waitSeconds,
+      reason: `有 ${active} 个进行中的会话，最多等待 ${waitSeconds} 秒空闲`,
+    };
+  }
+  return {
+    action: "fail",
+    waitSeconds: null,
+    reason: `有 ${active} 个会话进行中，非交互部署已中止（可设 QUBIUS_DEPLOY_FORCE=1 强制重启，或设 QUBIUS_DEPLOY_WAIT=<秒> 等待空闲）`,
+  };
+}
+
+/**
+ * 读取 <dataDir>/.deploy-stamp。结构缺失或损坏时返回 null，调用方据此重启。
+ * 字段：head（构建/部署时的 git HEAD）、configHash、envHash。
+ */
+export function readDeployStamp(file) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!parsed || typeof parsed !== "object") return null;
+    for (const key of ["head", "configHash", "envHash"]) {
+      if (typeof parsed[key] !== "string") return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 原子写入部署 stamp（tmp + rename）。
+ * port 记录本次实际使用的端口，供以后改端口时也检查旧端口上的会话。
+ */
+export function writeDeployStamp(file, { head = "", configHash = "none", envHash = "none", port = "" } = {}) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, `${JSON.stringify({ head, configHash, envHash, port: String(port ?? "") })}\n`);
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * 该角色重启前要检查的端口：新端口 + stamp 里上次实际使用的端口 +
+ * 父进程已知的旧端口（仅父角色）。按范围校验并去重。
+ */
+export function deployPorts({ port, stampPort, parentPort, isParent = false } = {}) {
+  const result = [];
+  const add = (value) => {
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 1 || number > 65535) return;
+    if (!result.includes(number)) result.push(number);
+  };
+  add(port);
+  add(stampPort);
+  if (isParent) add(parentPort);
+  return result;
+}
+
+/** 局域网代理在无变化部署时的动作：restart / keep / start。 */
+export function proxyPlan({ restart = false, pidAlive = false, listening = false } = {}) {
+  if (restart) return "restart";
+  if (pidAlive || listening) return "keep";
+  return "start";
+}
+
+/**
+ * 判断某个角色是否需要重启（与 deploy/lib.sh 的 qubius_deploy_should_restart 一致）。
+ * 返回 { restart, build, reason }；forceRestart 对应 QUBIUS_DEPLOY_RESTART=1。
+ */
+export function deployDecision({
+  buildNeeded = false,
+  configHash,
+  envHash,
+  stamp,
+  head,
+  healthy = false,
+  forceRestart = false,
+} = {}) {
+  const build = Boolean(buildNeeded);
+  if (forceRestart) {
+    return { restart: true, build, reason: "QUBIUS_DEPLOY_RESTART=1，强制重启" };
+  }
+  if (!healthy) {
+    return { restart: true, build, reason: "服务未运行或不健康" };
+  }
+  if (build) {
+    return { restart: true, build: true, reason: "构建产物不是最新" };
+  }
+  if (!stamp) {
+    return { restart: true, build: false, reason: "没有部署 stamp（首次部署？）" };
+  }
+  if (!head) {
+    return { restart: true, build: false, reason: "无法读取 git HEAD" };
+  }
+  if (stamp.head !== head) {
+    return { restart: true, build: false, reason: "git HEAD 变化" };
+  }
+  if (stamp.configHash !== configHash) {
+    return { restart: true, build: false, reason: "config 文件变化" };
+  }
+  if (stamp.envHash !== envHash) {
+    return { restart: true, build: false, reason: "env 文件变化" };
+  }
+  return { restart: false, build: false, reason: "无变化" };
 }

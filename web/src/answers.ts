@@ -25,6 +25,8 @@ export interface AnswerBody {
   behavior: "allow" | "deny";
   answers?: Record<string, string>;
   remember?: boolean;
+  /** 用户已展开完整输入后再允许；只有需要展开的确认才携带。 */
+  approvedFull?: boolean;
 }
 
 /**
@@ -32,15 +34,18 @@ export interface AnswerBody {
  * 拒绝时不携带答案，避免把界面上残留的选项发给服务端。
  */
 export function answerBody(
-  pending: Pick<Pending, "requestId" | "kind">,
+  pending: Pick<Pending, "requestId" | "kind"> & { requiresExpand?: boolean },
   behavior: "allow" | "deny",
   answers?: Record<string, string>,
   remember?: boolean,
+  approvedFull?: boolean,
 ): AnswerBody {
   return {
     requestId: pending.requestId,
     behavior,
     ...(behavior === "allow" && pending.kind === "question" && answers ? { answers } : {}),
     ...(behavior === "allow" && pending.kind === "permission" && remember ? { remember: true } : {}),
+    ...(behavior === "allow" && pending.kind === "permission"
+      && pending.requiresExpand === true && approvedFull === true ? { approvedFull: true } : {}),
   };
 }

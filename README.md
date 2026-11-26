@@ -138,8 +138,8 @@ make              # 列出全部目标
 make quickstart   # 首次启动：npm 源、配置/数据目录、端口
 make run          # 开发模式：服务端 + Vite
 make build        # 构建 server + web
-make start        # 启动启用的实例（缺构建先构建）
-make restart      # 重启
+make start        # 启动启用的实例（缺构建先构建；无变化只做健康校验）
+make restart      # 强制重启（即使无变化也用新进程替换）
 make stop         # 停止实例和局域网入口
 make status       # 显示配置路径、健康状态、局域网凭据文件
 
@@ -150,9 +150,13 @@ make deploy-wan   # 公网：再应用 edgectl 公网入口（交互确认）
 
 默认部署当前 checkout，配置和数据都在它的 `.qubius/` 里；需要双实例、非默认端口或自定义路径时，在 `/deploy` 页面或 `deploy/env` 里配置。检测到 systemd user unit 已接管时用 `systemctl --user restart`，否则交给 `deploy/start-all.sh --restart`。`make deploy` 不会停止已经运行的局域网/公网入口；非交互环境应用公网入口时加 `QUBIUS_EDGE_YES=1`。
 
+部署不会静默打断正在工作的会话：停止/重启前会检查 `/api/health` 的 `activeSessions`，有会话时 Linux 交互终端会询问等待/强制/取消，页面部署和其它非交互环境直接失败（退出码 3）。设 `QUBIUS_DEPLOY_FORCE=1` 强制重启，或设 `QUBIUS_DEPLOY_WAIT=<秒>` 等待空闲。构建产物、git HEAD、config 和 env 都没有变化时会跳过构建和重启；需要无变化也重启时设 `QUBIUS_DEPLOY_RESTART=1`。这三个开关也可以写进 env 文件，细节见[部署文档](docs/deployment.md#忙碌保护不静默打断正在工作的会话)。
+
+构建使用 staging + 原子切换：先写到 `server/dist.next`、`web/dist.next`，成功后才切换为 live（旧产物留在 `dist.prev`）。因此构建期间旧服务继续可用，构建或启动失败会回滚到旧产物；安装过依赖时还会保留 `node_modules.prev`。成功部署后磁盘上会同时保留一份旧产物用于回滚，下次成功部署/安装时再清理，细节见[构建 staging、原子切换与回滚](docs/deployment.md#构建-staging原子切换与回滚)。
+
 ### Windows 图形化部署
 
-Windows 上没有 bash/systemd 时，`/deploy` 页面由 `deploy/deploy-job.mjs` 完成部署：生成 `config.yaml`、按需 `npm ci` / `npm run build`、停掉旧进程、按新配置启动，并用 `/api/health` 校验。需要 Node.js 22+ 和 git 在 PATH 里，也可以在页面「Node 路径」里填 `node.exe` 的绝对路径。
+Windows 上没有 bash/systemd 时，`/deploy` 页面由 `deploy/deploy-job.mjs` 完成部署：生成 `config.yaml`、按需 `npm ci` 并 staging 构建、停掉旧进程、原子切换产物、按新配置启动，并用 `/api/health` 校验；启动失败会回滚到旧产物。需要 Node.js 22+ 和 git 在 PATH 里，也可以在页面「Node 路径」里填 `node.exe` 的绝对路径。
 
 1. 在仓库目录运行 `npm run quickstart`（可选择 npm 源、配置目录和数据目录，默认都在当前 checkout 的 `.qubius/`），或手动运行 `npm ci && npm run build && npm start`。没有 `config.yaml` 时服务也会启动，并进入首次部署模式。
 2. 打开 `http://127.0.0.1:8787/deploy`。首次运行会进入部署向导，按步骤确认使用方式、Checkout 路径、数据目录和端口；只在本机使用时访问域名保持 `localhost` 即可。需要完整参数时可以切到「完整部署表单」。

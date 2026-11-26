@@ -253,8 +253,8 @@ needs_build() {
   # 依赖标记缺失/过期也要通过 build.sh 重新安装。
   if needs_install "$repo"; then return 0; fi
   # 只看源码/构建输入；未跟踪的新文件也要算，文档/部署脚本改动不算。
-  if [[ -n $(git -C "$repo" status --porcelain --untracked-files=normal -- \
-    server web package.json package-lock.json 2>/dev/null) ]]; then
+  # dist.next/dist.prev 是构建 staging 的中间目录，显式排除，不依赖 .gitignore。
+  if [[ -n $(qubius_build_status "$repo") ]]; then
     return 0
   fi
   # 构建时工作区是脏的，说明产物可能落后于当前源码。
@@ -318,10 +318,13 @@ stop_instance() {
   return 0
 }
 
+# 只停止指定角色的局域网代理；不传角色时退回全部启用角色。
 stop_proxies() {
   local role port pid pattern busy
-  (( ${#MANAGED[@]} )) || return 0
-  for role in "${MANAGED[@]}"; do
+  local -a roles=("$@")
+  if (( ${#roles[@]} == 0 )); then roles=("${MANAGED[@]}"); fi
+  (( ${#roles[@]} )) || return 0
+  for role in "${roles[@]}"; do
     port=${ROLE_PORT[$role]}
     pattern="$(escape_regex "${ROLE_REPO[$role]}")/deploy/lan-proxy"
     pid=$(lan_listener_pid "$port")
@@ -329,7 +332,7 @@ stop_proxies() {
     pkill -f "$pattern" 2>/dev/null || true
   done
   sleep 1
-  for role in "${MANAGED[@]}"; do
+  for role in "${roles[@]}"; do
     port=${ROLE_PORT[$role]}
     pattern="$(escape_regex "${ROLE_REPO[$role]}")/deploy/lan-proxy"
     pid=$(lan_listener_pid "$port")
@@ -340,7 +343,7 @@ stop_proxies() {
   local _
   for _ in $(seq 1 20); do
     busy=0
-    for role in "${MANAGED[@]}"; do
+    for role in "${roles[@]}"; do
       lan_listening "${ROLE_PORT[$role]}" && busy=1
     done
     if (( busy == 0 )); then break; fi
@@ -395,7 +398,8 @@ verify_head() {
 }
 
 start_instance() {
-  local name=$1 role=$2 port=$3 repo=$4 script=$5 log=$6 pidfile=$7 i
+  local name=$1 role=$2 port=$3 repo=$4 script=$5 log=$6 pidfile=$7
+  local strict_pid=${8:-1} skip_head=${9:-0} i
   if healthy "$port"; then
     echo "$name 已在运行"
   else
@@ -425,7 +429,14 @@ start_instance() {
     echo "$name：启动后 /api/health 未就绪（HTTP $(health_code "$port")），查看 $log" >&2
     return 1
   fi
-  verify_pid "$name" "$port" "$pidfile" || return 1
+  # 无变化的 --restart 只做在线校验：pidfile 缺失/陈旧不应让部署失败。
+  if (( strict_pid )); then
+    verify_pid "$name" "$port" "$pidfile" || return 1
+  fi
+  # 回滚后启动的是旧产物，health 里的 head 是旧 HEAD，不能再和当前 git HEAD 比较。
+  if (( skip_head )); then
+    return 0
+  fi
   verify_head "$name" "$port" "$repo" || return 1
 }
 
@@ -458,43 +469,233 @@ ensure_proxy() {
   fi
 }
 
-# 单实例：按需“停 → 构建 → 启动”。构建失败只影响该实例，不阻塞另一个。
+# 把安装依赖前的 node_modules 备份恢复回来；没有备份时是 no-op。
+restore_node_modules_backup() {
+  local repo=$1
+  [[ -d $repo/node_modules.prev ]] || return 0
+  rm -rf "$repo/node_modules"
+  mv "$repo/node_modules.prev" "$repo/node_modules" 2>/dev/null || true
+}
+
+# 丢弃未切换的 staging，避免下次 swap 把旧 .next 提升为 live。
+discard_staging_dirs() {
+  rm -rf "$1/server/dist.next" "$1/web/dist.next"
+}
+
+# 显式调用 build.sh 的模式；不再使用会 stage+swap 的默认模式。
+build_mode() {
+  local mode=$1 role=$2 repo=${ROLE_REPO[$2]} flag=${ROLE_FLAG[$2]}
+  QUBIUS_SECONDARY=$flag QUBIUS_REPO_DIR=$repo "$repo/deploy/build.sh" "$mode" "$repo" 6>&- 9>&-
+}
+
+# 回滚/中止时按旧 live 拉起旧版本；没有旧产物或启动失败时返回非零。
+start_old_instance() {
+  local name=$1 role=$2 port=$3 repo=$4 script=$5 log=$6 pidfile=$7
+  [[ -f $repo/server/dist/index.js ]] || return 1
+  start_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile" 1 1
+}
+
+# 单实例：按需“装依赖 → staging 构建 → 停 → 切换 → 启动”。
+# 构建失败只影响该实例，不阻塞另一个；失败时尽量回到旧版本。
 manage_instance() {
   local role=$1 name=${ROLE_LABEL[$1]} repo=${ROLE_REPO[$1]}
   local port=${ROLE_PORT[$1]} data=${ROLE_DATA[$1]}
-  local script=$repo/deploy/run.sh build=$repo/deploy/build.sh
+  local script=$repo/deploy/run.sh
   local log=$data/qubius.log pidfile=$data/qubius.pid
-  local need=0 stopped=0 built_ok=1
+  local config old_port need=0 install=0 stopped=0 backed_up=0 staged=0 swapped=0
+  local changed=0 healthy_now=0 skip_restart=0 rollback_ok=1
+  config=$(qubius_config_file_for_role "$role")
+  old_port=$(qubius_deploy_stamp_port "$data/.deploy-stamp")
+  if healthy "$port"; then healthy_now=1; fi
   if needs_build "$repo"; then need=1; fi
-  # npm ci 会删除 node_modules，必须等旧进程退出后再安装。
-  if (( need )) && needs_install "$repo"; then
-    stop_instance "$name" "$port" "$pidfile" "$repo" || true
-    stopped=1
-  fi
-  if (( need )); then
-    echo "构建 $name（build stamp 缺失或与当前 HEAD 不一致）"
-    if ! QUBIUS_SECONDARY=${ROLE_FLAG[$role]} QUBIUS_REPO_DIR=$repo "$build" "$repo" 9>&-; then
-      echo "$name：构建失败" >&2
-      FAILED=1
-      built_ok=0
+
+  # --restart 时先判断是否真的需要重启：构建产物/HEAD/config/env 都没变化
+  # 且服务健康时直接跳过，避免无谓打断正在工作的会话。
+  if (( RESTART )); then
+    if ! qubius_deploy_should_restart "$repo" "$data" "$config" "$healthy_now" "$need"; then
+      skip_restart=1
+      echo "$name：无变化，跳过重启（$QUBIUS_DEPLOY_REASON）"
     fi
   fi
-  if (( built_ok == 0 )); then
-    if (( stopped )); then
-      echo "$name：已停止，修复构建后重新运行 start-all" >&2
+  if (( skip_restart )); then
+    # 仍走一遍健康/HEAD 校验（已在运行时会跳过启动），但不停进程、不构建。
+    # strict_pid=0：pidfile 缺失或陈旧时容忍，只要 /api/health 和 HEAD 正常即可。
+    start_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile" 0 || FAILED=1
+    return 0
+  fi
+
+  # 普通 start（没有 --restart）且不需要构建：只做在线健康/HEAD 校验，
+  # 不停进程、不重启、也不做忙碌检查（保持原 no-op 语义；make start 走这里）。
+  if (( ! RESTART && ! need )); then
+    if start_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile"; then
+      if (( ! healthy_now )); then
+        qubius_write_role_stamp "$repo" "$data" "$config" "$port"
+        RESTARTED_ANY=1
+        RESTARTED_ROLES+=("$role")
+      fi
+    else
+      FAILED=1
     fi
     return 0
   fi
-  if (( stopped == 0 )) && (( RESTART || need )); then
+
+  if (( need )) && needs_install "$repo"; then install=1; fi
+
+  # 1) 需要 npm ci：先停旧进程，把 node_modules 备份为 .prev，再安装依赖。
+  #    安装期间旧版本不可用；任何失败都恢复依赖并拉起旧版本。
+  if (( install )); then
+    # 停止前无条件检查新端口和旧端口：改端口时新端口不可达，但旧端口可能仍有会话。
+    qubius_guard_busy_ports "$name" "$port" "$old_port"
     stop_instance "$name" "$port" "$pidfile" "$repo" || true
     stopped=1
+    changed=1
+    if [[ -d $repo/node_modules ]]; then
+      # 只有确实要备份时才清理旧 .prev；node_modules 缺失时保留旧备份以便恢复。
+      rm -rf "$repo/node_modules.prev"
+      if ! mv "$repo/node_modules" "$repo/node_modules.prev"; then
+        echo "$name：备份 node_modules 失败，未安装依赖" >&2
+        start_old_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile" \
+          || echo "$name：旧版本未能拉起" >&2
+        FAILED=1
+        return 0
+      fi
+      backed_up=1
+    fi
+    echo "安装 $name 依赖（package-lock.json 有变化）"
+    if ! build_mode --deps "$role" "$repo"; then
+      echo "$name：安装依赖失败，拉起旧版本" >&2
+      # 只恢复本次真正备份过的 node_modules；陈旧 .prev 不能覆盖当前依赖。
+      if (( backed_up )); then
+        restore_node_modules_backup "$repo"
+        backed_up=0
+      fi
+      start_old_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile" \
+        || echo "$name：依赖安装失败后旧版本仍未能拉起" >&2
+      FAILED=1
+      return 0
+    fi
+  fi
+
+  # 2) staging 构建：不需要 npm ci 时旧服务继续跑，live 完全不动。
+  if (( need )); then
+    echo "构建 $name（staging，live 不动）"
+    if ! build_mode --stage "$role" "$repo"; then
+      echo "$name：构建失败" >&2
+      if (( backed_up )); then
+        echo "$name：恢复 node_modules 并拉起旧版本" >&2
+        restore_node_modules_backup "$repo"
+        backed_up=0
+        discard_staging_dirs "$repo"
+        start_old_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile" \
+          || echo "$name：恢复依赖后旧版本仍未能拉起" >&2
+      elif (( stopped )); then
+        start_old_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile" \
+          || echo "$name：旧版本未能拉起" >&2
+      fi
+      FAILED=1
+      return 0
+    fi
+    staged=1
+    changed=1
+  fi
+
+  # 3) 停止前再次无条件复检忙碌（新端口 + stamp 里的旧端口）。构建可能耗时，
+  #    期间可能新来会话。若已因安装依赖停了实例，先恢复依赖并拉起旧版本再中止。
+  local guard_rc=0
+  (
+    qubius_guard_busy_ports "$name" "$port" "$old_port"
+  ) || guard_rc=$?
+  if (( guard_rc != 0 )); then
+    discard_staging_dirs "$repo"
+    if (( stopped )); then
+      echo "$name：已停止，先按旧版本重新拉起" >&2
+      if (( backed_up )); then
+        restore_node_modules_backup "$repo"
+        backed_up=0
+      fi
+      start_old_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile" \
+        || echo "$name：旧版本重新拉起失败，请查看 $log" >&2
+    fi
+    exit "$guard_rc"
+  fi
+
+  # 4) 停止旧进程（安装依赖时已经停过）。
+  if (( stopped == 0 )); then
+    stop_instance "$name" "$port" "$pidfile" "$repo" || true
+    stopped=1
+    changed=1
   fi
   if (( stopped )) && loopback_listening "$port"; then
     echo "$name：停止后端口 $port 仍被占用，拒绝启动新版本" >&2
+    if (( backed_up )); then
+      restore_node_modules_backup "$repo"
+      backed_up=0
+    fi
+    discard_staging_dirs "$repo"
     FAILED=1
     return 0
   fi
-  start_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile" || FAILED=1
+
+  # 5) 原子切换 staging 为 live（旧产物留在 .prev）。
+  if (( staged )); then
+    if ! build_mode --swap "$role" "$repo"; then
+      echo "$name：切换新产物失败，live 保持旧版本" >&2
+      if (( backed_up )); then
+        restore_node_modules_backup "$repo"
+        backed_up=0
+      fi
+      discard_staging_dirs "$repo"
+      start_old_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile" \
+        || echo "$name：旧版本未能拉起" >&2
+      FAILED=1
+      return 0
+    fi
+    swapped=1
+  fi
+
+  # 6) 启动新版本并校验 /api/health + HEAD。失败则停止、回滚、恢复依赖并拉起旧版本。
+  if start_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile"; then
+    # 成功部署/重启后记录当前状态，供下次 --restart 判断是否可以跳过。
+    if (( changed || ! healthy_now )); then
+      qubius_write_role_stamp "$repo" "$data" "$config" "$port"
+      RESTARTED_ANY=1
+      RESTARTED_ROLES+=("$role")
+    fi
+    # 本次没有安装依赖时，旧的 node_modules.prev 已经过期，成功部署后清掉。
+    # 本次安装过则保留一份供回滚，下次安装/成功部署再清理。
+    if (( install == 0 )); then
+      rm -rf "$repo/node_modules.prev"
+    fi
+  else
+    echo "$name：新版本启动失败，正在回滚" >&2
+    stop_instance "$name" "$port" "$pidfile" "$repo" || true
+    rollback_ok=1
+    if (( swapped )); then
+      if ! build_mode --rollback "$role" "$repo"; then
+        rollback_ok=0
+        echo "$name：回滚失败（首次部署没有 .prev？）" >&2
+      fi
+    fi
+    # 只恢复本次真正备份过的依赖，避免陈旧 .prev 覆盖当前 node_modules。
+    if (( backed_up )); then
+      restore_node_modules_backup "$repo"
+      backed_up=0
+    fi
+    if (( rollback_ok == 0 )); then
+      # 首次部署没有旧产物：live 仍是启动失败的新版本，不能再拉起它冒充“已回滚”。
+      echo "$name：新版本启动失败，且无旧版本可回滚，服务保持停止" >&2
+    elif start_old_instance "$name" "$role" "$port" "$repo" "$script" "$log" "$pidfile"; then
+      if (( swapped )); then
+        echo "$name：已回滚到旧版本" >&2
+      else
+        echo "$name：已按当前产物重新拉起" >&2
+      fi
+    else
+      echo "$name：旧版本也未能启动，请检查 $log 和 $data" >&2
+    fi
+    FAILED=1
+  fi
+  return 0
 }
 
 mkdir -p "$QUBIUS_DATA_PRIMARY" "$QUBIUS_DATA_SECONDARY"
@@ -502,6 +703,8 @@ mkdir -p "$(dirname "$QUBIUS_DEPLOY_LOCK")"
 
 # 任一组件失败都继续处理其余组件，最后统一返回非零。
 FAILED=0
+RESTARTED_ANY=0
+RESTARTED_ROLES=()
 MANAGED=()
 
 # 先确定要处理的角色；两个角色都关闭的 no-op 不应 claim ops lock / 因锁忙失败。
@@ -566,9 +769,10 @@ for role in "${MANAGED[@]}"; do
   manage_instance "$role"
 done
 
-if (( RESTART && QUBIUS_START_LAN )); then
-  stop_proxies
-  for role in "${MANAGED[@]}"; do
+# 无变化的 --restart 不应该中断局域网入口：只重启真正重启过的角色的代理。
+if (( RESTART && QUBIUS_START_LAN && RESTARTED_ANY )); then
+  stop_proxies "${RESTARTED_ROLES[@]}"
+  for role in "${RESTARTED_ROLES[@]}"; do
     if lan_listening "${ROLE_PORT[$role]}"; then
       echo "停止后 LAN 端口 ${ROLE_PORT[$role]} 仍被占用，拒绝启动新入口" >&2
       exit 1

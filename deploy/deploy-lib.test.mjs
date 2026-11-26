@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,14 +7,30 @@ import path from "node:path";
 import test from "node:test";
 import { parse as parseYaml } from "yaml";
 import {
+  activeSessionsFromHealth,
+  backupNodeModules,
+  buildDirtyStatus,
+  busyDecision,
+  cleanupNodeModulesPrev,
+  deployDecision,
+  deployPorts,
+  discardStaging,
   needsInstall,
+  proxyPlan,
   parseEnvFile,
+  readDeployStamp,
   redactUrl,
   renderConfigYaml,
   repoRootFromServerScript,
+  restoreNodeModules,
+  restoreNodeModulesWhenBackedUp,
+  rollbackDist,
   samePath,
+  stagingProblems,
   stripAnsi,
+  swapDist,
   validateProjectsIndent,
+  writeDeployStamp,
 } from "./deploy-lib.mjs";
 
 function tmp() {
@@ -201,4 +218,284 @@ test("redactUrl 隐藏 URL 里的凭据", () => {
     redactUrl("clone http://user:pass@git.example.com/x.git"),
     "clone http://***@git.example.com/x.git",
   );
+});
+
+test("activeSessionsFromHealth 安全取数", () => {
+  assert.equal(activeSessionsFromHealth({ activeSessions: 3 }), 3);
+  assert.equal(activeSessionsFromHealth({ activeSessions: 0 }), 0);
+  assert.equal(activeSessionsFromHealth({}), 0);
+  assert.equal(activeSessionsFromHealth(null), 0);
+  assert.equal(activeSessionsFromHealth({ activeSessions: "2" }), 0);
+  assert.equal(activeSessionsFromHealth({ activeSessions: -1 }), 0);
+});
+
+test("busyDecision：空闲放行、FORCE 放行、WAIT/非交互语义", () => {
+  assert.equal(busyDecision({ activeSessions: 0 }).action, "proceed");
+  assert.equal(busyDecision({ activeSessions: 2, force: true }).action, "proceed");
+  const wait = busyDecision({ activeSessions: 2, waitSeconds: 30 });
+  assert.equal(wait.action, "wait");
+  assert.equal(wait.waitSeconds, 30);
+  assert.equal(busyDecision({ activeSessions: 2 }).action, "fail");
+  // WAIT=0 与非法值都不应静默放行。
+  assert.equal(busyDecision({ activeSessions: 2, waitSeconds: 0 }).action, "wait");
+  assert.equal(busyDecision({ activeSessions: 2, waitSeconds: Number.NaN }).action, "fail");
+  assert.equal(busyDecision({ activeSessions: 2, waitSeconds: -1 }).action, "fail");
+});
+
+test("deployDecision：无变化且健康时跳过", () => {
+  const stamp = { head: "abc", configHash: "c1", envHash: "e1" };
+  const decision = deployDecision({
+    buildNeeded: false,
+    configHash: "c1",
+    envHash: "e1",
+    stamp,
+    head: "abc",
+    healthy: true,
+  });
+  assert.deepEqual(decision, { restart: false, build: false, reason: "无变化" });
+});
+
+test("deployDecision：需要构建时构建并重启", () => {
+  const decision = deployDecision({
+    buildNeeded: true,
+    configHash: "c1",
+    envHash: "e1",
+    stamp: { head: "abc", configHash: "c1", envHash: "e1" },
+    head: "abc",
+    healthy: true,
+  });
+  assert.equal(decision.restart, true);
+  assert.equal(decision.build, true);
+});
+
+test("deployDecision：config / env / HEAD 变化都重启（但不重建）", () => {
+  const base = {
+    buildNeeded: false,
+    configHash: "c1",
+    envHash: "e1",
+    stamp: { head: "abc", configHash: "c1", envHash: "e1" },
+    head: "abc",
+    healthy: true,
+  };
+  const configChanged = deployDecision({ ...base, configHash: "c2" });
+  assert.equal(configChanged.restart, true);
+  assert.equal(configChanged.build, false);
+  const envChanged = deployDecision({ ...base, envHash: "e2" });
+  assert.equal(envChanged.restart, true);
+  const headChanged = deployDecision({ ...base, head: "def" });
+  assert.equal(headChanged.restart, true);
+});
+
+test("deployDecision：不健康、无 stamp、强制重启都重启", () => {
+  const healthy = {
+    buildNeeded: false,
+    configHash: "c1",
+    envHash: "e1",
+    stamp: { head: "abc", configHash: "c1", envHash: "e1" },
+    head: "abc",
+    healthy: true,
+  };
+  assert.equal(deployDecision({ ...healthy, healthy: false }).restart, true);
+  assert.equal(deployDecision({ ...healthy, stamp: null }).restart, true);
+  assert.equal(deployDecision({ ...healthy, head: "" }).restart, true);
+  assert.equal(deployDecision({ ...healthy, forceRestart: true }).restart, true);
+});
+
+test("deploy stamp 原子写入后可读回（含端口）", () => {
+  const dir = tmp();
+  const file = path.join(dir, ".deploy-stamp");
+  assert.equal(readDeployStamp(file), null);
+  writeDeployStamp(file, { head: "abc", configHash: "c1", envHash: "e1", port: 19789 });
+  assert.deepEqual(readDeployStamp(file), {
+    head: "abc",
+    configHash: "c1",
+    envHash: "e1",
+    port: "19789",
+  });
+  fs.writeFileSync(file, "{broken");
+  assert.equal(readDeployStamp(file), null);
+});
+
+test("deployPorts 同时包含新端口、stamp 旧端口和父进程端口并去重", () => {
+  assert.deepEqual(deployPorts({ port: 8787 }), [8787]);
+  assert.deepEqual(deployPorts({ port: 8787, stampPort: "8788" }), [8787, 8788]);
+  assert.deepEqual(
+    deployPorts({ port: 8787, stampPort: 8787, parentPort: 8788, isParent: true }),
+    [8787, 8788],
+  );
+  // 非父角色不采用 parentPort；非法端口忽略。
+  assert.deepEqual(deployPorts({ port: 8787, parentPort: 8788, isParent: false }), [8787]);
+  assert.deepEqual(deployPorts({ port: 8787, stampPort: "bad", parentPort: 70000, isParent: true }), [8787]);
+});
+
+test("proxyPlan：重启 / 存活 / 启动", () => {
+  assert.equal(proxyPlan({ restart: true, pidAlive: true }), "restart");
+  assert.equal(proxyPlan({ pidAlive: true }), "keep");
+  assert.equal(proxyPlan({ listening: true }), "keep");
+  assert.equal(proxyPlan({}), "start");
+});
+
+// ── staging / 切换 / 回滚 ────────────────────────────────────────────────────
+function writeStaging(repo, marker, { server = true, web = true } = {}) {
+  if (server) {
+    const dir = path.join(repo, "server", "dist.next");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "index.js"), `${marker}\n`);
+    fs.writeFileSync(path.join(dir, "build.json"), `{"head":"${marker}"}\n`);
+  }
+  if (web) {
+    const dir = path.join(repo, "web", "dist.next");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "index.html"), `${marker}\n`);
+  }
+}
+
+function liveMarker(repo) {
+  try {
+    return fs.readFileSync(path.join(repo, "server", "dist", "index.js"), "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+test("swapDist 拒绝不完整的 staging，且不动 live", () => {
+  const repo = tmp();
+  fs.mkdirSync(path.join(repo, "server", "dist"), { recursive: true });
+  fs.mkdirSync(path.join(repo, "web", "dist"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "server", "dist", "index.js"), "old\n");
+  fs.writeFileSync(path.join(repo, "web", "dist", "index.html"), "old\n");
+  writeStaging(repo, "new", { web: false });
+  assert.deepEqual(stagingProblems(repo), ["web/dist.next/index.html"]);
+  assert.throws(() => swapDist(repo), /staging 不完整/);
+  assert.equal(liveMarker(repo), "old");
+  assert.equal(fs.existsSync(path.join(repo, "server", "dist.next", "index.js")), true);
+});
+
+test("swapDist 首次部署（无旧 live）不产生 .prev", () => {
+  const repo = tmp();
+  writeStaging(repo, "v1");
+  swapDist(repo);
+  assert.equal(liveMarker(repo), "v1");
+  assert.equal(fs.existsSync(path.join(repo, "server", "dist.next")), false);
+  assert.equal(fs.existsSync(path.join(repo, "server", "dist.prev")), false);
+  assert.equal(fs.existsSync(path.join(repo, "web", "dist.prev")), false);
+});
+
+test("swapDist 保留旧 live 到 .prev，再 rollbackDist 恢复", () => {
+  const repo = tmp();
+  writeStaging(repo, "v1");
+  swapDist(repo);
+  writeStaging(repo, "v2");
+  swapDist(repo);
+  assert.equal(liveMarker(repo), "v2");
+  assert.equal(fs.readFileSync(path.join(repo, "server", "dist.prev", "index.js"), "utf8").trim(), "v1");
+
+  rollbackDist(repo);
+  assert.equal(liveMarker(repo), "v1");
+  assert.equal(fs.existsSync(path.join(repo, "server", "dist.prev")), false);
+  assert.equal(fs.existsSync(path.join(repo, "web", "dist.prev")), false);
+});
+
+test("rollbackDist 没有 .prev 时抛错且不动 live", () => {
+  const repo = tmp();
+  writeStaging(repo, "v1");
+  swapDist(repo);
+  writeStaging(repo, "v2");
+  assert.throws(() => rollbackDist(repo), /无法回滚/);
+  assert.equal(liveMarker(repo), "v1");
+});
+
+test("rollbackDist 清掉残留 .next", () => {
+  const repo = tmp();
+  writeStaging(repo, "v1");
+  swapDist(repo);
+  writeStaging(repo, "v2");
+  swapDist(repo);
+  writeStaging(repo, "stale");
+  rollbackDist(repo);
+  assert.equal(liveMarker(repo), "v1");
+  assert.equal(fs.existsSync(path.join(repo, "server", "dist.next")), false);
+  assert.equal(fs.existsSync(path.join(repo, "web", "dist.next")), false);
+});
+
+test("新版本启动失败后 rollbackDist 恢复旧版本", () => {
+  // 对应用户可见流程：stage v1 -> swap -> stage v2 -> swap -> 启动失败 -> rollback。
+  const repo = tmp();
+  writeStaging(repo, "v1");
+  swapDist(repo);
+  writeStaging(repo, "v2");
+  swapDist(repo);
+  assert.equal(liveMarker(repo), "v2");
+  rollbackDist(repo);
+  assert.equal(liveMarker(repo), "v1");
+  assert.equal(fs.readFileSync(path.join(repo, "web", "dist", "index.html"), "utf8").trim().length > 0, true);
+});
+
+test("未备份的部署失败时不恢复陈旧的 node_modules.prev", () => {
+  const repo = tmp();
+  fs.mkdirSync(path.join(repo, "node_modules"));
+  fs.writeFileSync(path.join(repo, "node_modules", "current.txt"), "current\n");
+  fs.mkdirSync(path.join(repo, "node_modules.prev"));
+  fs.writeFileSync(path.join(repo, "node_modules.prev", "stale.txt"), "stale\n");
+  // 本次没有执行 npm ci / 备份：绝不拿旧 .prev 覆盖当前依赖。
+  assert.equal(restoreNodeModulesWhenBackedUp(repo, false), false);
+  assert.equal(fs.readFileSync(path.join(repo, "node_modules", "current.txt"), "utf8"), "current\n");
+  assert.equal(fs.readFileSync(path.join(repo, "node_modules.prev", "stale.txt"), "utf8"), "stale\n");
+  // 明确标记本次备份过时才恢复。
+  assert.equal(restoreNodeModulesWhenBackedUp(repo, true), true);
+  assert.equal(fs.readFileSync(path.join(repo, "node_modules", "stale.txt"), "utf8"), "stale\n");
+});
+
+test("discardStaging 只清 .next，不动 live/.prev", () => {
+  const repo = tmp();
+  writeStaging(repo, "v1");
+  swapDist(repo);
+  writeStaging(repo, "v2");
+  discardStaging(repo);
+  assert.equal(liveMarker(repo), "v1");
+  assert.equal(fs.existsSync(path.join(repo, "server", "dist.next")), false);
+});
+
+test("backupNodeModules / restoreNodeModules / cleanup", () => {
+  const repo = tmp();
+  fs.mkdirSync(path.join(repo, "node_modules"));
+  fs.writeFileSync(path.join(repo, "node_modules", "old.txt"), "old\n");
+  assert.equal(backupNodeModules(repo), true);
+  assert.equal(fs.existsSync(path.join(repo, "node_modules")), false);
+  fs.mkdirSync(path.join(repo, "node_modules"));
+  fs.writeFileSync(path.join(repo, "node_modules", "new.txt"), "new\n");
+  assert.equal(restoreNodeModules(repo), true);
+  assert.equal(fs.readFileSync(path.join(repo, "node_modules", "old.txt"), "utf8"), "old\n");
+  assert.equal(fs.existsSync(path.join(repo, "node_modules.prev")), false);
+  // 没有备份时返回 false。
+  assert.equal(restoreNodeModules(repo), false);
+  // 备份时先删旧 .prev。
+  backupNodeModules(repo);
+  fs.mkdirSync(path.join(repo, "node_modules.prev.tmp"));
+  cleanupNodeModulesPrev(repo);
+  assert.equal(fs.existsSync(path.join(repo, "node_modules.prev")), false);
+
+  // node_modules 缺失时不应删掉可能还可用的旧 .prev。
+  const repo2 = tmp();
+  fs.mkdirSync(path.join(repo2, "node_modules.prev"));
+  fs.writeFileSync(path.join(repo2, "node_modules.prev", "keep.txt"), "keep\n");
+  assert.equal(backupNodeModules(repo2), false);
+  assert.equal(fs.readFileSync(path.join(repo2, "node_modules.prev", "keep.txt"), "utf8"), "keep\n");
+});
+
+test("buildDirtyStatus 排除构建 staging 的 dist.next/dist.prev", () => {
+  const repo = tmp();
+  const gitRun = (args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  gitRun(["init", "-q"]);
+  fs.writeFileSync(path.join(repo, "package.json"), "{}\n");
+  gitRun(["add", "package.json"]);
+  gitRun(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
+  fs.mkdirSync(path.join(repo, "server", "dist.next"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "server", "dist.next", "index.js"), "x");
+  fs.mkdirSync(path.join(repo, "web", "dist.prev"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "web", "dist.prev", "index.html"), "x");
+  assert.equal((buildDirtyStatus(repo).stdout ?? "").trim(), "");
+  // 真正的源码改动仍然算脏。
+  fs.writeFileSync(path.join(repo, "server", "new.js"), "x");
+  assert.match(buildDirtyStatus(repo).stdout ?? "", /server\//);
 });

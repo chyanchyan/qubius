@@ -1,4 +1,6 @@
 node_modules/
+# 安装依赖前的备份（deploy/build.sh / deploy-job.mjs 的回滚路径）。
+node_modules.prev
 dist/
 data/
 /config.yaml
@@ -12,6 +14,15 @@ data/
 .DS_Store
 web/dist/
 server/dist/
+# staging / 回滚目录：build.sh 先构建到 .next 再原子切换，旧产物留作 .prev。
+# 必须忽略，否则所有 dirty 检查（git status -- server web）会把它们当源码改动。
+web/dist.next
+web/dist.prev
+server/dist.next
+server/dist.prev
+# 回滚时临时改名目录（被强杀可能残留）。
+server/dist.rollback.*
+web/dist.rollback.*
 *.tsbuildinfo
 scripts/push-github-squashed.sh
 projects.yaml

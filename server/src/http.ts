@@ -439,6 +439,8 @@ export function createAppServer(options: {
         dataDirWritable: isWritable(config.dataDir),
         webDist: hasWebDist(),
         memory: memoryMb(),
+        // 排队/运行/等待确认的会话数；部署脚本据此避免静默打断正在工作的 agent。
+        activeSessions: store.activeCount(),
         // 登录框还没拿到令牌时用它提示「令牌文件在哪」；只暴露路径，不暴露令牌。
         authRequired: Boolean(tokenState.current),
         ...(tokenState.file ? { authTokenFile: tokenState.file } : {}),
@@ -2522,7 +2524,13 @@ function readApproval(body: unknown): Approval {
     }
   }
   const remember = record.remember === true;
-  return { behavior: record.behavior, answers, ...(remember ? { remember: true } : {}) };
+  const approvedFull = record.approvedFull === true;
+  return {
+    behavior: record.behavior,
+    answers,
+    ...(remember ? { remember: true } : {}),
+    ...(approvedFull ? { approvedFull: true } : {}),
+  };
 }
 
 function asRecord(body: unknown): Record<string, unknown> {

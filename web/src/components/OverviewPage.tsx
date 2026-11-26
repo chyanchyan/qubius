@@ -9,6 +9,7 @@ import {
   type Session,
 } from "../api";
 import { answerBody } from "../answers";
+import { addPending, hasPending, removePending } from "../pending-actions";
 import { listAllSessions, patchSession } from "../api-sessions";
 import { Approval } from "./Approval";
 import { BranchBadge } from "./BranchBadge";
@@ -124,9 +125,9 @@ export function OverviewPage({ go, children }: Props) {
   const [projectsError, setProjectsError] = useState("");
   const [actionError, setActionError] = useState("");
   const [busyId, setBusyId] = useState("");
-  /* 内联回答：一次只提交一个会话的确认。 */
-  const [answeringId, setAnsweringId] = useState("");
-  const answeringRef = useRef(false);
+  /* 内联回答：按会话记录在途状态，会话之间互不影响；同一会话防连点。 */
+  const [answeringIds, setAnsweringIds] = useState<ReadonlySet<string>>(() => new Set());
+  const answeringIdsRef = useRef(new Set<string>());
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const dialogs = useDialogs();
   /* 列表里的相对时间每分钟刷新一次。 */
@@ -333,22 +334,25 @@ export function OverviewPage({ go, children }: Props) {
     behavior: "allow" | "deny",
     answers?: Record<string, string>,
     remember?: boolean,
+    approvedFull?: boolean,
   ) {
-    if (!session.pending || answeringRef.current) return;
-    answeringRef.current = true;
-    setAnsweringId(session.id);
+    if (!session.pending || hasPending(answeringIdsRef.current, session.id)) return;
+    const next = addPending(answeringIdsRef.current, session.id);
+    if (!next) return;
+    answeringIdsRef.current = next;
+    setAnsweringIds(next);
     setActionError("");
     try {
       const data = await answerSession(
         session.id,
-        answerBody(session.pending, behavior, answers, remember),
+        answerBody(session.pending, behavior, answers, remember, approvedFull),
       );
       replaceSession(data.session);
     } catch (reason) {
       setActionError(errorText(reason, "提交回答失败"));
     } finally {
-      answeringRef.current = false;
-      setAnsweringId("");
+      answeringIdsRef.current = removePending(answeringIdsRef.current, session.id);
+      setAnsweringIds(answeringIdsRef.current);
     }
   }
 
@@ -624,9 +628,9 @@ export function OverviewPage({ go, children }: Props) {
                       <Approval
                         pending={session.pending}
                         variant="inline"
-                        busy={answeringId !== ""}
-                        onAnswer={(behavior, answers, remember) => {
-                          void answerPending(session, behavior, answers, remember);
+                        busy={answeringIds.has(session.id)}
+                        onAnswer={(behavior, answers, remember, approvedFull) => {
+                          void answerPending(session, behavior, answers, remember, approvedFull);
                         }}
                       />
                     )}

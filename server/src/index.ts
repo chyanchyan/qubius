@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ArchiveStore } from "./archive.js";
+import { writeFileAtomic } from "./atomic-file.js";
 import { AUTH_TOKEN_FILE, resolveAuthToken } from "./auth.js";
 import { bootstrapConfig, DEFAULT_ALLOWED_HOSTS, loadConfig, type AppConfig } from "./config.js";
 import { envCompat, envFlag } from "./env.js";
@@ -304,12 +305,7 @@ const shutdownToken = randomBytes(32).toString("hex");
 const shutdownTokenFile = path.join(config.dataDir, "shutdown-token");
 try {
   fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.writeFileSync(shutdownTokenFile, `${shutdownToken}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(shutdownTokenFile, 0o600);
-  } catch {
-    // 某些文件系统不支持 chmod；文件仍只在 dataDir 里。
-  }
+  writeFileAtomic(shutdownTokenFile, `${shutdownToken}\n`, { mode: 0o600 });
 } catch (error) {
   console.warn(`无法写入 ${shutdownTokenFile}，Windows 部署将退回强制结束进程`, error);
 }

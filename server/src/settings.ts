@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "./atomic-file.js";
 import { isEffort, type Effort, type PublicProvider, type PublicSettings } from "./types.js";
 
 /** 每百万 token 的美元价格；缺失表示不计算这一项成本。 */
@@ -66,21 +67,91 @@ export function loadSettings(
   const file = settingsPath(dataDir);
   const defaultMax = defaults?.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
   const fallback: StoredSettings = { ...DEFAULTS, maxConcurrent: defaultMax, providers: [] };
-  if (!fs.existsSync(file)) return fallback;
+  const mainExists = fs.existsSync(file);
+  const loaded = mainExists ? decodeSettingsFile(file, defaultMax) : undefined;
+  if (loaded) {
+    if (loaded.migrated) saveSettings(dataDir, loaded.settings);
+    return loaded.settings;
+  }
+
+  // 主文件读不出来（或已被删除）时先试同目录备份，避免把仍有密钥的旧配置直接丢掉。
+  const backupFile = `${file}.bak`;
+  const backup = decodeSettingsFile(backupFile, defaultMax);
+  if (backup) {
+    // 必须先把损坏的主文件隔离掉：否则之后任意 saveSettings 的 backup=true
+    // 会把损坏内容复制进 .bak，覆盖掉唯一的好备份。
+    const corruptFile = mainExists ? quarantineCorrupt(file) : undefined;
+    const quarantined = corruptFile !== undefined;
+    // 改名失败（例如 Windows 上文件被占用）时，改用备份内容原子覆盖主文件，
+    // 保证主文件不再是坏数据，后续保存也不会污染 .bak。
+    const restored = mainExists && !quarantined
+      ? restoreFromBackup(file, backupFile)
+      : false;
+    console.warn(
+      `设置文件 ${file} ${mainExists ? "无法读取" : "不存在"}，已改用备份 ${backupFile}`
+        + (corruptFile ? `，损坏文件已保留为 ${corruptFile}` : "")
+        + (mainExists && !quarantined && restored ? "，损坏文件无法改名，已用备份覆盖" : "")
+        + (mainExists && !quarantined && !restored ? "，损坏文件无法隔离也无法覆盖，请手动检查" : ""),
+    );
+    if (backup.migrated) saveSettings(dataDir, backup.settings);
+    return backup.settings;
+  }
+
+  // 主文件不存在且没有备份：首次启动的正常情况，直接返回默认值。
+  if (!mainExists) return fallback;
+
+  // 主文件和备份都不可用：尽力把原文件改名保留作为证据，再退回默认值，不阻止启动。
+  const corruptFile = quarantineCorrupt(file);
+  console.warn(
+    `设置文件 ${file} 和备份都无法读取`
+      + (corruptFile ? `，原文件已保留为 ${corruptFile}` : "，原文件未能改名保留")
+      + "，使用默认设置",
+  );
+  return fallback;
+}
+
+/** 尽力把损坏的设置文件改名保留作为证据；失败时返回 undefined，不影响启动。 */
+function quarantineCorrupt(file: string): string | undefined {
+  const corruptFile = `${file}.corrupt.${Date.now()}`;
+  try {
+    fs.renameSync(file, corruptFile);
+    return corruptFile;
+  } catch {
+    // 改名失败（例如权限不足）时原文件原地保留。
+    return undefined;
+  }
+}
+
+/** 用备份原文原子覆盖损坏的主文件（不动 .bak）；失败时返回 false，由调用方告警。 */
+function restoreFromBackup(file: string, backupFile: string): boolean {
+  try {
+    writeFileAtomic(file, fs.readFileSync(backupFile, "utf8"), { mode: 0o600, backup: false });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 读取单个设置文件；JSON 解析或字段校验失败都返回 undefined，交给调用方降级。 */
+function decodeSettingsFile(
+  file: string,
+  defaultMaxConcurrent: number,
+): { settings: StoredSettings; migrated: boolean } | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
-    throw new Error(`无法读取 ${file}`);
+    return undefined;
   }
-  if (!parsed || typeof parsed !== "object") return fallback;
-  const loaded = parseStored(parsed as Record<string, unknown>, defaultMax);
-  if (loaded.migrated) saveSettings(dataDir, loaded.settings);
-  return loaded.settings;
+  if (!parsed || typeof parsed !== "object") return undefined;
+  try {
+    return parseStored(parsed as Record<string, unknown>, defaultMaxConcurrent);
+  } catch {
+    return undefined;
+  }
 }
 
 export function saveSettings(dataDir: string, settings: StoredSettings): void {
-  fs.mkdirSync(dataDir, { recursive: true });
   const file = settingsPath(dataDir);
   const body = JSON.stringify(
     {
@@ -101,12 +172,11 @@ export function saveSettings(dataDir: string, settings: StoredSettings): void {
     null,
     2,
   );
-  fs.writeFileSync(file, body, { encoding: "utf8", mode: 0o600 });
-  try {
-    fs.chmodSync(file, 0o600);
-  } catch {
-    // Windows 上 chmod 可能无效，文件仍然只放在 dataDir。
-  }
+  // 只有现有主文件仍能解析时才生成备份：损坏内容一旦复制进 .bak，
+  // 会覆盖掉唯一的好备份。主文件不可解析时直接原子覆盖它，保留旧 .bak。
+  const backup = fs.existsSync(file)
+    && decodeSettingsFile(file, settings.maxConcurrent) !== undefined;
+  writeFileAtomic(file, body, { mode: 0o600, backup });
 }
 
 export function publicSettings(settings: StoredSettings): PublicSettingsView {

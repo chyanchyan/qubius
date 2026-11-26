@@ -4,15 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  approvalInput,
+  approvalRequiresExpand,
+  canRemember,
   clearRemembered,
   isRemembered,
   normalizeTaskOutput,
   pendingExpiresAt,
   PromptQueue,
+  rememberKey,
   runConfigChanged,
   Runtime,
   sdkStartMode,
   sessionDirProblem,
+  type Approval,
   type RunConfig,
 } from "./runtime.js";
 import { PROVISIONAL_TITLE, type TitleSummarizer, type TitleSummaryInput } from "./session-title.js";
@@ -445,18 +450,163 @@ test("空闲重启与连续提交并发时不会重复消费，也不会卡住�
   }
 });
 
-test("isRemembered：只放行记住的工具，提问永不拦截", () => {
-  assert.equal(isRemembered(undefined, "Bash"), false);
-  assert.equal(isRemembered(new Set(["Bash"]), "Bash"), true);
-  assert.equal(isRemembered(new Set(["Bash"]), "Write"), false);
-  assert.equal(isRemembered(new Set(["AskUserQuestion"]), "AskUserQuestion"), false);
+test("approvalInput：Bash 取原文，其他工具格式化 JSON，超长截断", () => {
+  assert.deepEqual(approvalInput({ command: "echo a\necho b" }, "Bash"), {
+    inputText: "echo a\necho b",
+    inputTruncated: false,
+  });
+  assert.deepEqual(approvalInput({ file_path: "a.ts", content: "x" }, "Write"), {
+    inputText: JSON.stringify({ file_path: "a.ts", content: "x" }, null, 2),
+    inputTruncated: false,
+  });
+  const full = "x".repeat(64 * 1024 + 25);
+  const long = approvalInput({ command: full }, "Bash");
+  assert.equal(long.inputTruncated, true);
+  assert.equal(long.inputText.length, 64 * 1024);
+  assert.equal(long.inputText, full.slice(0, 64 * 1024));
+});
+
+test("approvalInput：按 UTF-8 字节截断，不切开多字节字符", () => {
+  const full = "你".repeat(30_000); // 90000 字节
+  const result = approvalInput({ command: full }, "Bash");
+  assert.equal(result.inputTruncated, true);
+  assert.ok(Buffer.byteLength(result.inputText, "utf8") <= 64 * 1024);
+  assert.ok(!result.inputText.includes("�"));
+  assert.ok(full.startsWith(result.inputText));
+});
+
+test("approvalRequiresExpand：Bash 看换行/长度，非 Bash 只看长度和截断", () => {
+  assert.equal(approvalRequiresExpand("Bash", "echo hi", false), false);
+  assert.equal(approvalRequiresExpand("Bash", "echo a\necho b", false), true);
+  assert.equal(approvalRequiresExpand("Bash", "x".repeat(2000), false), false);
+  assert.equal(approvalRequiresExpand("Bash", "x".repeat(2001), false), true);
+
+  // 缩进 JSON 必然含换行，但小对象不应要求展开。
+  const smallWrite = JSON.stringify({ file_path: "a.ts", content: "x" }, null, 2);
+  assert.ok(smallWrite.includes("\n"));
+  assert.equal(approvalRequiresExpand("Write", smallWrite, false), false);
+  assert.equal(approvalRequiresExpand("Write", "x".repeat(8001), false), true);
+  assert.equal(approvalRequiresExpand("Write", "x", true), true);
+  assert.equal(approvalRequiresExpand("Bash", "x", true), true);
+});
+
+test("canRemember/rememberKey：只记住文件工具，按目录区分并规范化路径", () => {
+  for (const tool of ["Bash", "Agent", "Task", "AskUserQuestion", "BashOutput", "KillBash", "Read"]) {
+    assert.equal(canRemember(tool), false, tool);
+  }
+  for (const tool of ["Write", "Edit", "MultiEdit", "NotebookEdit"]) {
+    assert.equal(canRemember(tool), true, tool);
+  }
+  assert.equal(
+    rememberKey("Write", { file_path: "/a/b/c.ts" }),
+    `Write:${path.dirname(path.resolve("/a/b/c.ts"))}`,
+  );
+  assert.equal(
+    rememberKey("Edit", { path: "src/x.ts" }),
+    `Edit:${path.dirname(path.resolve("src/x.ts"))}`,
+  );
+  assert.equal(
+    rememberKey("MultiEdit", { notebook_path: "nbs/a.ipynb" }),
+    `MultiEdit:${path.dirname(path.resolve("nbs/a.ipynb"))}`,
+  );
+  assert.equal(
+    rememberKey("NotebookEdit", { target_file: "x.ipynb" }),
+    `NotebookEdit:${path.dirname(path.resolve("x.ipynb"))}`,
+  );
+  // 相对/绝对、`./` 写法指向同一目录时生成同一个键。
+  assert.equal(
+    rememberKey("Write", { file_path: "src/./x.ts" }),
+    rememberKey("Write", { file_path: path.join(process.cwd(), "src", "y.ts") }),
+  );
+  // 路径取不到时退化成工具名。
+  assert.equal(rememberKey("Write", {}), "Write");
+  assert.equal(rememberKey("Bash", { command: "ls" }), "Bash");
+});
+
+test("isRemembered：只有文件工具按目录命中，命令和提问永不拦截", () => {
+  const srcKey = rememberKey("Write", { file_path: "src/a.ts" });
+  assert.equal(isRemembered(undefined, "Write", { file_path: "src/a.ts" }), false);
+  assert.equal(isRemembered(new Set([srcKey]), "Write", { file_path: "src/b.ts" }), true);
+  assert.equal(isRemembered(new Set([srcKey]), "Write", { file_path: "lib/c.ts" }), false);
+  assert.equal(isRemembered(new Set(["Bash"]), "Bash", { command: "ls" }), false);
+  assert.equal(isRemembered(new Set(["AskUserQuestion"]), "AskUserQuestion", {}), false);
+});
+
+test("需要展开的确认缺 approvedFull 时拒绝允许，补上后放行", async () => {
+  const dataDir = tempDir();
+  try {
+    const { store, runtime } = makeRuntime(dataDir);
+    store.create(createInput("s1"));
+    let resolved: Approval | undefined;
+    const waiters = (runtime as unknown as {
+      waiters: Map<string, { requestId: string; resolve: (approval: Approval) => void; reject: (error: Error) => void }>;
+    }).waiters;
+    waiters.set("s1", {
+      requestId: "r1",
+      resolve: (approval) => {
+        resolved = approval;
+      },
+      reject: () => undefined,
+    });
+    store.setPending("s1", {
+      requestId: "r1",
+      kind: "permission",
+      toolName: "Bash",
+      inputPreview: "a b",
+      inputText: "a\nb",
+      inputTruncated: false,
+      requiresExpand: true,
+    });
+
+    assert.throws(() => runtime.answer("s1", "r1", { behavior: "allow" }), /需要展开完整输入后才能允许/);
+    // 用 typeof 避免 TS 依据 assert.equal 把 resolved 窄化成 undefined。
+    assert.equal(typeof resolved, "undefined");
+    // 校验失败后确认仍在等待，补上 approvedFull 可以重试。
+    runtime.answer("s1", "r1", { behavior: "allow", approvedFull: true });
+    assert.equal(resolved?.behavior, "allow");
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("需要展开的确认直接拒绝不需要 approvedFull", async () => {
+  const dataDir = tempDir();
+  try {
+    const { store, runtime } = makeRuntime(dataDir);
+    store.create(createInput("s1"));
+    let resolved: Approval | undefined;
+    (runtime as unknown as {
+      waiters: Map<string, { requestId: string; resolve: (approval: Approval) => void; reject: (error: Error) => void }>;
+    }).waiters.set("s1", {
+      requestId: "r1",
+      resolve: (approval) => {
+        resolved = approval;
+      },
+      reject: () => undefined,
+    });
+    store.setPending("s1", {
+      requestId: "r1",
+      kind: "permission",
+      toolName: "Bash",
+      inputPreview: "a b",
+      inputText: "a\nb",
+      inputTruncated: false,
+      requiresExpand: true,
+    });
+    runtime.answer("s1", "r1", { behavior: "deny" });
+    assert.equal(resolved?.behavior, "deny");
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("clearRemembered 清空指定会话的放行记录", () => {
-  const remembered = new Map<string, Set<string>>([["s1", new Set(["Bash"])]]);
+  const remembered = new Map<string, Set<string>>([["s1", new Set(["Write:src"])]]);
   assert.equal(clearRemembered(remembered, "s1"), true);
   assert.equal(remembered.has("s1"), false);
-  assert.equal(isRemembered(remembered.get("s1"), "Bash"), false);
+  assert.equal(isRemembered(remembered.get("s1"), "Write", { file_path: "src/a.ts" }), false);
   assert.equal(clearRemembered(remembered, "missing"), false);
 });
 

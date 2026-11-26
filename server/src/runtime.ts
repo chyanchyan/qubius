@@ -11,6 +11,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID, type UUID } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import {
   answerPrompt,
   decomposePrompt,
@@ -98,6 +99,8 @@ export interface Approval {
   answers?: Record<string, string>;
   /** 用户勾选「本对话记住」时，这个工具的后续确认直接放行。 */
   remember?: boolean;
+  /** 用户已展开完整输入后再允许；需要展开的确认缺这个标记时服务端拒绝。 */
+  approvedFull?: boolean;
 }
 
 /** 用户长时间不回应确认请求时自动拒绝，避免这一轮永远挂着。 */
@@ -986,6 +989,15 @@ export class Runtime {
     if (!session.pending || session.pending.requestId !== requestId) {
       throw new Error("没有等待中的确认");
     }
+    // 需要展开的确认必须在用户看过完整输入后再允许；拒绝随时可用。
+    // 校验放在清 waiter 之前：抛错后确认仍在等待，用户展开后可以重试。
+    if (
+      session.pending.requiresExpand === true
+      && approval.behavior === "allow"
+      && approval.approvedFull !== true
+    ) {
+      throw new Error("需要展开完整输入后才能允许");
+    }
     const waiter = this.waiters.get(id);
     if (!waiter || waiter.requestId !== requestId) throw new Error("没有等待中的确认");
     this.waiters.delete(id);
@@ -1386,15 +1398,22 @@ export class Runtime {
     });
     if (decision === "allow") return { behavior: "allow" };
     if (decision === "deny") return { behavior: "deny", message: denyMessage(permission) };
-    // 用户之前勾选过「本对话记住」：同一工具的确认直接放行。
+    // 用户之前勾选过「本对话记住」：同一个工具（文件工具按目录）的确认直接放行。
     // AskUserQuestion 永不拦截，提问必须由用户回答。
-    if (isRemembered(this.remembered.get(id), toolName)) return { behavior: "allow" };
+    if (isRemembered(this.remembered.get(id), toolName, input)) return { behavior: "allow" };
     const requestId = randomUUID();
+    const kind = toolName === "AskUserQuestion" ? "question" : "permission";
+    const { inputText, inputTruncated } = approvalInput(input, toolName);
     const pending: PendingRequest = {
       requestId,
-      kind: toolName === "AskUserQuestion" ? "question" : "permission",
+      kind,
       toolName,
       inputPreview: clip(safeJson(input), 2000),
+      inputText,
+      inputTruncated,
+      // 问题只是选择题，不适用「先展开完整输入」的门槛。
+      requiresExpand: kind === "permission"
+        && approvalRequiresExpand(toolName, inputText, inputTruncated),
       blockedPath: toolOptions.blockedPath,
       questions: toolName === "AskUserQuestion" ? parseQuestions(input) : undefined,
       expiresAt: pendingExpiresAt(Date.now(), this.approvalTimeoutMs),
@@ -1402,9 +1421,9 @@ export class Runtime {
     try {
       const approval = await this.waitApproval(id, pending, toolOptions.signal);
       if (approval.behavior === "deny") return { behavior: "deny", message: "用户拒绝了这次操作" };
-      if (approval.remember === true && toolName !== "AskUserQuestion") {
+      if (approval.remember === true && canRemember(toolName)) {
         const tools = this.remembered.get(id) ?? new Set<string>();
-        tools.add(toolName);
+        tools.add(rememberKey(toolName, input));
         this.remembered.set(id, tools);
       }
       if (toolName === "AskUserQuestion") {
@@ -1791,18 +1810,118 @@ function safeJson(value: unknown): string {
   }
 }
 
+function safeJsonPretty(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** 完整输入的最大展示字节数（UTF-8）；超出部分按字节截断。 */
+const APPROVAL_INPUT_BYTES = 64 * 1024;
+/** Bash 单行摘要之外的阈值：换行或超过这个字符数就要展开。 */
+const APPROVAL_INLINE_CHARS = 2000;
+/** 其它工具的缩进 JSON 天然多行，只按长度判断，避免每次首个确认都强制展开。 */
+const APPROVAL_JSON_CHARS = 8000;
+
+/**
+ * 生成确认界面展示的完整输入。
+ *
+ * Bash 取 command 原文：命令本身就是最该审阅的内容，保留换行便于看清管道和
+ * 多行脚本。其他工具用两空格缩进的 JSON，避免一整行难以阅读。
+ */
+export function approvalInput(
+  input: Record<string, unknown>,
+  toolName: string,
+): { inputText: string; inputTruncated: boolean } {
+  const full = toolName === "Bash" && typeof input.command === "string"
+    ? input.command
+    : safeJsonPretty(input);
+  return truncateUtf8(full, APPROVAL_INPUT_BYTES);
+}
+
+/**
+ * 这次确认是否必须先展开完整输入才能允许。
+ *
+ * Bash：命令含换行或超过 2000 字符（管道、多行脚本最需要完整阅读）。
+ * 其它工具：JSON 缩进后必然含换行，不能按换行判断，只按长度/截断判断，
+ * 否则每次首个 Write/Edit 都要多点一次展开。
+ * 问题类型不适用这个门槛，调用方只在 permission 时使用。
+ */
+export function approvalRequiresExpand(
+  toolName: string,
+  inputText: string,
+  inputTruncated: boolean,
+): boolean {
+  if (inputTruncated) return true;
+  if (toolName === "Bash") {
+    return inputText.includes("\n") || inputText.length > APPROVAL_INLINE_CHARS;
+  }
+  return inputText.length > APPROVAL_JSON_CHARS;
+}
+
+/** 按 UTF-8 字节截断，且不切开多字节字符；返回实际使用的文本。 */
+function truncateUtf8(text: string, maxBytes: number): { inputText: string; inputTruncated: boolean } {
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length <= maxBytes) return { inputText: text, inputTruncated: false };
+  let end = maxBytes;
+  // UTF-8 续字节形如 10xxxxxx；回退到字符起始字节。
+  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end -= 1;
+  return { inputText: buffer.subarray(0, end).toString("utf8"), inputTruncated: true };
+}
+
 function errorText(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
 }
 
+/** 可以「本对话记住」的工具：只收窄到文件写入类，命令和子 agent 每次都要确认。 */
+const REMEMBERABLE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+const REMEMBER_PATH_FIELDS = ["file_path", "path", "notebook_path", "target_file"];
+
+export function canRemember(toolName: string): boolean {
+  return REMEMBERABLE_TOOLS.has(toolName);
+}
+
+/**
+ * 「本对话记住」的键：文件工具按目录（同一目录下同一种写工具只问一次），
+ * 其他工具按工具名。路径取不到时退化成工具名。
+ */
+export function rememberKey(toolName: string, input: Record<string, unknown>): string {
+  if (!canRemember(toolName)) return toolName;
+  for (const field of REMEMBER_PATH_FIELDS) {
+    const value = input[field];
+    if (typeof value === "string" && value.trim()) {
+      // 先规范成绝对真实路径，避免 `src/x.ts`、`./src/x.ts` 和软链接写法
+      // 指向同一目录却生成不同的记住键。
+      return `${toolName}:${path.dirname(normalizeRememberPath(value))}`;
+    }
+  }
+  return toolName;
+}
+
+function normalizeRememberPath(value: string): string {
+  const absolute = path.resolve(value);
+  try {
+    return fs.realpathSync.native(absolute);
+  } catch {
+    // 目录尚不存在（写入新文件）时保留规范化后的绝对路径。
+    return absolute;
+  }
+}
+
 /**
  * 这个工具是否已经被「本对话记住」放行。
- * AskUserQuestion 永远不算记住：提问必须由用户回答。
+ * 只有 canRemember 的工具才会命中；AskUserQuestion 永远不会被记住。
  */
-export function isRemembered(remembered: Set<string> | undefined, toolName: string): boolean {
-  if (toolName === "AskUserQuestion") return false;
-  return remembered?.has(toolName) ?? false;
+export function isRemembered(
+  remembered: Set<string> | undefined,
+  toolName: string,
+  input: Record<string, unknown>,
+): boolean {
+  if (!canRemember(toolName)) return false;
+  return remembered?.has(rememberKey(toolName, input)) ?? false;
 }
 
 /** 删除某个会话记住的放行；返回是否确实清掉了记录。 */

@@ -694,6 +694,9 @@ test("stop 把运行中的会话记为已停止并清空活动状态", async () 
       kind: "permission",
       toolName: "Bash",
       inputPreview: "rm -rf /",
+      inputText: "rm -rf /",
+      inputTruncated: false,
+      requiresExpand: false,
     });
 
     store.stop("s1", "已停止");
@@ -730,6 +733,9 @@ test("停止后再次排队并停止仍会清空排队/确认状态", async () =
       kind: "permission",
       toolName: "Bash",
       inputPreview: "rm -rf /",
+      inputText: "rm -rf /",
+      inputTruncated: false,
+      requiresExpand: false,
     });
     assert.equal(store.require("s1").queued, true);
 
@@ -1852,7 +1858,15 @@ test("applyRewind 收敛运行状态、按 cutAt 过滤子 agent/后台任务并
         startedAt: "2026-01-01T00:00:21.000Z",
       },
     ];
-    session.pending = { requestId: "r1", kind: "permission", toolName: "Bash", inputPreview: "rm" };
+    session.pending = {
+      requestId: "r1",
+      kind: "permission",
+      toolName: "Bash",
+      inputPreview: "rm",
+      inputText: "rm",
+      inputTruncated: false,
+      requiresExpand: false,
+    };
     session.queued = true;
     session.turnActive = true;
     session.agentState = "running";

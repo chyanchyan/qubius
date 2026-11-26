@@ -238,9 +238,10 @@ test("非法价格会被拒绝", () => {
   }), /价格必须是非负数/);
 });
 
-test("加载已损坏的价格会报错", () => {
+test("设置文件损坏时退回默认值并保留原文件作为证据", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-pricing-"));
-  fs.writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({
+  const file = path.join(dir, "secrets.json");
+  fs.writeFileSync(file, JSON.stringify({
     providers: [{
       id: "p1",
       name: "官方",
@@ -250,7 +251,161 @@ test("加载已损坏的价格会报错", () => {
       pricing: { input: -5 },
     }],
   }));
-  assert.throws(() => loadSettings(dir), /价格必须是非负数/);
+
+  const loaded = loadSettings(dir);
+  assert.deepEqual(loaded.providers, []);
+  assert.equal(loaded.maxConcurrent, 4);
+  // 原文件不被静默删除：改名成 secrets.json.corrupt.<时间戳>。
+  assert.equal(fs.existsSync(file), false);
+  const corrupt = fs.readdirSync(dir).filter((name) => name.startsWith("secrets.json.corrupt."));
+  assert.equal(corrupt.length, 1);
+  const saved = fs.readFileSync(path.join(dir, corrupt[0]!), "utf8");
+  assert.equal(JSON.parse(saved).providers[0].pricing.input, -5);
+});
+
+test("主文件损坏但备份可用时加载备份并隔离损坏文件", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-settings-backup-"));
+  const file = path.join(dir, "secrets.json");
+  saveSettings(dir, { ...sample(), maxConcurrent: 5 });
+  // 第二次保存会把上一版复制到 secrets.json.bak。
+  saveSettings(dir, { ...sample(), maxConcurrent: 6 });
+  fs.writeFileSync(file, "{ not json");
+
+  const loaded = loadSettings(dir);
+  assert.equal(loaded.maxConcurrent, 5);
+  assert.equal(loaded.providers.length, 1);
+  assert.equal(loaded.providers[0]?.apiKey, secret);
+  // 损坏的主文件必须被移走，否则后续保存会用坏数据覆盖 .bak。
+  assert.equal(fs.existsSync(file), false);
+  const corrupt = fs.readdirSync(dir).filter((name) => name.startsWith("secrets.json.corrupt."));
+  assert.equal(corrupt.length, 1);
+});
+
+test("主坏→读备份→再保存后 .bak 仍是完好的旧备份", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-settings-backup-"));
+  const file = path.join(dir, "secrets.json");
+  saveSettings(dir, { ...sample(), maxConcurrent: 5 });
+  saveSettings(dir, { ...sample(), maxConcurrent: 6 });
+  fs.writeFileSync(file, "{ not json");
+
+  const loaded = loadSettings(dir);
+  assert.equal(loaded.maxConcurrent, 5);
+  // 主文件已被隔离，再次保存不会把损坏内容复制进 .bak。
+  saveSettings(dir, { ...loaded, maxConcurrent: 7 });
+
+  const backupText = fs.readFileSync(`${file}.bak`, "utf8");
+  assert.equal(backupText.includes("not json"), false);
+  const backup = JSON.parse(backupText) as {
+    maxConcurrent: number;
+    providers: Array<{ apiKey: string }>;
+  };
+  assert.equal(backup.maxConcurrent, 5);
+  assert.equal(backup.providers[0]?.apiKey, secret);
+  const current = JSON.parse(fs.readFileSync(file, "utf8")) as { maxConcurrent: number };
+  assert.equal(current.maxConcurrent, 7);
+});
+
+test("主文件无法隔离时用备份覆盖，保存后 .bak 仍完好", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-settings-backup-"));
+  const file = path.join(dir, "secrets.json");
+  saveSettings(dir, { ...sample(), maxConcurrent: 5 });
+  saveSettings(dir, { ...sample(), maxConcurrent: 6 });
+  fs.writeFileSync(file, "{ not json");
+
+  // 模拟 Windows 上文件被占用：只让「把主文件改名为 .corrupt」失败，
+  // 原子写入临时文件的 rename 仍然可用。
+  const originalRename = fs.renameSync;
+  const patchedRename: typeof fs.renameSync = (oldPath, newPath) => {
+    if (oldPath === file && String(newPath).includes(".corrupt.")) {
+      throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+    }
+    originalRename(oldPath, newPath);
+  };
+  (fs as unknown as { renameSync: typeof fs.renameSync }).renameSync = patchedRename;
+  t.after(() => {
+    (fs as unknown as { renameSync: typeof fs.renameSync }).renameSync = originalRename;
+  });
+
+  const loaded = loadSettings(dir);
+  assert.equal(loaded.maxConcurrent, 5);
+  assert.equal(loaded.providers[0]?.apiKey, secret);
+
+  // 隔离失败后用备份内容原子覆盖主文件，不再是坏 JSON。
+  const repaired = JSON.parse(fs.readFileSync(file, "utf8")) as { maxConcurrent: number };
+  assert.equal(repaired.maxConcurrent, 5);
+
+  // 再次保存时主文件可解析，坏内容不会进入 .bak。
+  saveSettings(dir, { ...loaded, maxConcurrent: 7 });
+  const backupText = fs.readFileSync(`${file}.bak`, "utf8");
+  assert.equal(backupText.includes("not json"), false);
+  const backup = JSON.parse(backupText) as {
+    maxConcurrent: number;
+    providers: Array<{ apiKey: string }>;
+  };
+  assert.equal(backup.maxConcurrent, 5);
+  assert.equal(backup.providers[0]?.apiKey, secret);
+});
+
+test("saveSettings 遇到损坏主文件时直接覆盖，不污染现有 .bak", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-settings-backup-"));
+  const file = path.join(dir, "secrets.json");
+  saveSettings(dir, { ...sample(), maxConcurrent: 5 });
+  saveSettings(dir, { ...sample(), maxConcurrent: 6 });
+  fs.writeFileSync(file, "{ not json");
+
+  // 不经过 loadSettings，直接保存：主文件不可解析，必须保留旧 .bak。
+  saveSettings(dir, { ...sample(), maxConcurrent: 8 });
+  const backupText = fs.readFileSync(`${file}.bak`, "utf8");
+  assert.equal(backupText.includes("not json"), false);
+  const backup = JSON.parse(backupText) as { maxConcurrent: number };
+  assert.equal(backup.maxConcurrent, 5);
+  const current = JSON.parse(fs.readFileSync(file, "utf8")) as { maxConcurrent: number };
+  assert.equal(current.maxConcurrent, 8);
+});
+
+test("主文件不存在但备份可用时加载备份，不静默丢配置", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-settings-backup-"));
+  const file = path.join(dir, "secrets.json");
+  saveSettings(dir, { ...sample(), maxConcurrent: 5 });
+  saveSettings(dir, { ...sample(), maxConcurrent: 6 });
+  fs.rmSync(file);
+
+  const loaded = loadSettings(dir);
+  assert.equal(loaded.maxConcurrent, 5);
+  assert.equal(loaded.providers[0]?.apiKey, secret);
+});
+
+test("主文件和备份都损坏时退回调用方默认值", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-settings-corrupt-"));
+  const file = path.join(dir, "secrets.json");
+  fs.writeFileSync(file, "{ not json");
+  fs.writeFileSync(`${file}.bak`, "also not json");
+
+  const loaded = loadSettings(dir, { maxConcurrent: 9 });
+  assert.deepEqual(loaded.providers, []);
+  assert.equal(loaded.maxConcurrent, 9);
+  assert.equal(fs.existsSync(file), false);
+  // 备份也保留下来，便于人工恢复。
+  assert.equal(fs.existsSync(`${file}.bak`), true);
+});
+
+test("保存设置会生成备份，且备份里是上一版内容", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-settings-backup-"));
+  const file = path.join(dir, "secrets.json");
+  saveSettings(dir, sample());
+  saveSettings(dir, {
+    ...sample(),
+    providers: [{ ...sample().providers[0]!, apiKey: "sk-new-secret" }],
+  });
+
+  const backup = JSON.parse(fs.readFileSync(`${file}.bak`, "utf8")) as {
+    providers: Array<{ apiKey: string }>;
+  };
+  assert.equal(backup.providers[0]?.apiKey, secret);
+  const current = JSON.parse(fs.readFileSync(file, "utf8")) as {
+    providers: Array<{ apiKey: string }>;
+  };
+  assert.equal(current.providers[0]?.apiKey, "sk-new-secret");
 });
 
 test("补丁里只改价格时保留密钥和模型", () => {

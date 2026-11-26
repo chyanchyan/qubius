@@ -21,9 +21,9 @@ const isWindows = process.platform === "win32";
 const isLinux = process.platform === "linux";
 const ACTION = process.argv[2] || "";
 
-function fail(message) {
+function fail(message, code = 1) {
   console.error(`qubius: ${message}`);
-  process.exit(1);
+  process.exit(code);
 }
 
 function say(message) {
@@ -473,9 +473,18 @@ function run(command, args, options = {}) {
     const child = spawn(command, args, { stdio: "inherit", ...options });
     child.on("error", reject);
     child.on("exit", (code, signal) => {
-      if (signal) reject(new Error(`被信号 ${signal} 终止`));
-      else if (code === 0) resolve();
-      else reject(new Error(`退出码 ${code ?? "未知"}`));
+      if (signal) {
+        const error = new Error(`被信号 ${signal} 终止`);
+        error.exitCode = 1;
+        reject(error);
+      } else if (code === 0) {
+        resolve();
+      } else {
+        const error = new Error(`退出码 ${code ?? "未知"}`);
+        // 保留子进程退出码（尤其是忙碌保护的 3），让 make 入口也能透传。
+        error.exitCode = typeof code === "number" ? code : 1;
+        reject(error);
+      }
     });
   });
 }
@@ -527,7 +536,10 @@ async function deployWithNode(mode) {
   try {
     await run(process.execPath, [path.join(scriptDir, "deploy-job.mjs")], { cwd: repoRoot, env: jobEnv });
   } catch (error) {
-    fail(`部署任务失败：${error.message}；查看 ${jobEnv.QUBIUS_DEPLOY_LOG}`);
+    fail(
+      `部署任务失败：${error.message}；查看 ${jobEnv.QUBIUS_DEPLOY_LOG}`,
+      typeof error.exitCode === "number" ? error.exitCode : 1,
+    );
   }
   const entries = [];
   if (jobEnv.QUBIUS_START_PRIMARY === "1") {
@@ -571,7 +583,13 @@ async function main() {
       stopAll();
       return;
     case "restart":
-      if (isLinux) return run("bash", [path.join(scriptDir, "start-all.sh"), "--restart"]);
+      // 显式 restart 必须真正停/起，即使构建产物、HEAD、config/env 都没变化；
+      // 否则无法用它恢复卡住进程或仅 shell env 变化后的状态。
+      if (isLinux) {
+        return run("bash", [path.join(scriptDir, "start-all.sh"), "--restart"], {
+          env: { ...process.env, QUBIUS_DEPLOY_RESTART: "1" },
+        });
+      }
       stopAll();
       await startAll();
       return;
@@ -602,4 +620,9 @@ async function main() {
   }
 }
 
-main().catch((error) => fail(error instanceof Error ? error.message : String(error)));
+main().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  // 透传子进程退出码：忙碌保护返回 3 时，make deploy* 也应以 3 结束。
+  const code = error && typeof error.exitCode === "number" ? error.exitCode : 1;
+  fail(message, code);
+});

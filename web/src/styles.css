@@ -1852,6 +1852,26 @@ summary:focus-visible {
 
 .permit .tool-body { max-height: 12rem; }
 
+/* 完整命令/输入：保留换行；需要展开时先折叠到几行，展开后在面板内滚动。 */
+.permit .permit-input {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.permit .permit-input.collapsed {
+  max-height: 5.5rem;
+  overflow: hidden;
+}
+
+.permit-expand { align-self: flex-start; }
+
+.permit-truncated {
+  color: var(--warn);
+  font-size: var(--fs-12);
+}
+
 .permit input:not([type="checkbox"]):not([type="radio"]) {
   width: 100%;
   border: 1px solid var(--line);

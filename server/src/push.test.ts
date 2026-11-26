@@ -12,7 +12,7 @@ import {
   type PushSubscriptionInput,
   vapidSubject,
 } from "./push.js";
-import type { Phase } from "./types.js";
+import type { PendingRequest, Phase } from "./types.js";
 
 function tempDataDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rc-push-"));
@@ -44,8 +44,29 @@ function recorder(): { sent: RecordedSend[]; send: PushSender } {
   return { sent, send };
 }
 
-function sessionEvent(phase: Phase, overrides: Partial<PushSessionEvent> = {}): PushSessionEvent {
-  return { id: "s1", projectId: "p1", title: "修复登录", phase, ...overrides };
+/** 测试里只需要关心展示字段；完整的输入/展开标记由 pendingRequest 补默认值。 */
+type PendingFixture = Omit<PendingRequest, "inputText" | "inputTruncated" | "requiresExpand">
+  & Partial<Pick<PendingRequest, "inputText" | "inputTruncated" | "requiresExpand">>;
+
+type SessionEventOverrides = Omit<Partial<PushSessionEvent>, "pending"> & {
+  pending?: PendingFixture | null;
+};
+
+function pendingRequest(fixture: PendingFixture): PendingRequest {
+  const { inputText, inputTruncated, requiresExpand, ...rest } = fixture;
+  return {
+    ...rest,
+    inputText: inputText ?? rest.inputPreview,
+    inputTruncated: inputTruncated ?? false,
+    requiresExpand: requiresExpand ?? false,
+  };
+}
+
+function sessionEvent(phase: Phase, overrides: SessionEventOverrides = {}): PushSessionEvent {
+  const { pending, ...rest } = overrides;
+  const event: PushSessionEvent = { id: "s1", projectId: "p1", title: "修复登录", phase, ...rest };
+  if (pending !== undefined) event.pending = pending === null ? null : pendingRequest(pending);
+  return event;
 }
 
 function delay(ms = 30): Promise<void> {

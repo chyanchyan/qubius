@@ -1,17 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { Pending } from "../api";
+import { canRememberTool } from "../api";
 import { mergeAnswers } from "../answers";
 import { formatCountdown } from "../format";
 import { useNow } from "../useNow";
-
-/** 确认内容如果是 JSON，格式化后更好读；解析失败就保持服务端给的原文。 */
-function formatInputPreview(preview: string): string {
-  try {
-    return JSON.stringify(JSON.parse(preview), null, 2);
-  } catch {
-    return preview;
-  }
-}
 
 export interface ApprovalProps {
   pending: Pending;
@@ -23,6 +15,7 @@ export interface ApprovalProps {
     behavior: "allow" | "deny",
     answers?: Record<string, string>,
     remember?: boolean,
+    approvedFull?: boolean,
   ) => void;
 }
 
@@ -34,7 +27,12 @@ export function Approval({ pending, busy, variant = "detail", onAnswer }: Approv
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
   const [remember, setRemember] = useState(false);
+  /* 需要展开的确认默认折叠，用户看过完整输入后才能允许。 */
+  const [expanded, setExpanded] = useState(false);
+  /* 完整输入被截断时，用户还要单独确认已看过截断内容。 */
+  const [confirmedTruncated, setConfirmedTruncated] = useState(false);
   const titleId = useId();
+  const inputId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const inline = variant === "inline";
 
@@ -44,26 +42,38 @@ export function Approval({ pending, busy, variant = "detail", onAnswer }: Approv
     if (!inline) headingRef.current?.focus();
   }, [inline, pending.requestId]);
 
-  /* 新的确认请求不应继承上一次的答案或“本对话记住”。 */
+  /* 新的确认请求不应继承上一次的答案、"本对话记住"或展开状态。 */
   useEffect(() => {
     setAnswers({});
     setCustomAnswers({});
     setRemember(false);
+    setExpanded(false);
+    setConfirmedTruncated(false);
   }, [pending.requestId]);
 
   const now = useNow(1_000);
-  const preview = useMemo(() => formatInputPreview(pending.inputPreview), [pending.inputPreview]);
+  const permission = pending.kind === "permission";
+  const inputText = pending.inputText ?? pending.inputPreview;
+  const requiresExpand = permission && pending.requiresExpand === true;
+  const truncated = permission && pending.inputTruncated === true;
+  const rememberable = permission && canRememberTool(pending.toolName);
+  /* 默认折叠；没有需要展开的内容时始终完整显示。 */
+  const collapsed = requiresExpand && !expanded;
+  /* 不按客户端时钟禁用按钮：倒计时只做提示，是否超时由服务端决定。 */
+  const allowDisabled = busy || collapsed || (truncated && !confirmedTruncated);
   const expiresAt = pending.expiresAt ? Date.parse(pending.expiresAt) : Number.NaN;
   const remaining = Number.isFinite(expiresAt) ? expiresAt - now : null;
 
   const submit = (behavior: "allow" | "deny") => {
     if (busy) return;
+    if (behavior === "allow" && allowDisabled) return;
     onAnswer(
       behavior,
       behavior === "allow" && pending.kind === "question"
         ? mergeAnswers(pending.questions, answers, customAnswers)
         : undefined,
       behavior === "allow" ? remember : undefined,
+      behavior === "allow" && requiresExpand ? expanded : undefined,
     );
   };
 
@@ -133,15 +143,48 @@ export function Approval({ pending, busy, variant = "detail", onAnswer }: Approv
           </label>
         </fieldset>
       ))}
-      {pending.kind === "permission" && <pre className="tool-body">{preview}</pre>}
-      {pending.kind === "permission" && (
-        <label className="choice">
-          <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
-          <span>本对话内允许这个工具（{pending.toolName}），不再逐次确认</span>
-        </label>
+      {permission && (
+        <>
+          {/* 完整输入原样展示（保留换行）；需要展开时先折叠，避免长命令把按钮顶出屏幕。 */}
+          <pre
+            id={inputId}
+            className={`tool-body permit-input${collapsed ? " collapsed" : ""}`}
+          >{inputText}</pre>
+          {requiresExpand && (
+            <button
+              type="button"
+              className="btn permit-expand"
+              aria-expanded={expanded}
+              aria-controls={inputId}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? "收起完整输入" : "展开完整命令"}
+            </button>
+          )}
+          {truncated && (
+            <p className="permit-truncated">输入过大已截断，仅显示前 64 KiB。</p>
+          )}
+          {truncated && (
+            <label className="choice">
+              <input
+                type="checkbox"
+                checked={confirmedTruncated}
+                onChange={(event) => setConfirmedTruncated(event.target.checked)}
+              />
+              <span>我已确认截断内容</span>
+            </label>
+          )}
+          {/* 只有文件写入类工具能「本对话记住」；命令和子 agent 每次都要确认。 */}
+          {rememberable && (
+            <label className="choice">
+              <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
+              <span>本对话内允许这个目录的写入，不再逐次确认</span>
+            </label>
+          )}
+        </>
       )}
       <div className="actions">
-        <button className="btn-primary" disabled={busy} onClick={() => submit("allow")}>
+        <button className="btn-primary" disabled={allowDisabled} onClick={() => submit("allow")}>
           {pending.kind === "question" ? "提交回答" : "允许"}
         </button>
         <button className="btn" disabled={busy} onClick={() => submit("deny")}>拒绝</button>

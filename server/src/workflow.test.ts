@@ -322,6 +322,9 @@ test("排队切换工作流不会清掉等待中的确认", async () => {
       kind: "permission",
       toolName: "Bash",
       inputPreview: "rm -rf /",
+      inputText: "rm -rf /",
+      inputTruncated: false,
+      requiresExpand: false,
     });
     // 等待确认期间 SDK 提前拉走下一条：workflow 只排队，pending 必须保留。
     store.setWorkflow("s1", "prl");

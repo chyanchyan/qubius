@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { writeFileAtomic } from "./atomic-file.js";
 import type { AppConfig } from "./config.js";
 import { isJobState, jobTimestamp, type JobState } from "./job-state.js";
 
@@ -455,7 +456,7 @@ function recordSpawnFailure(config: AppConfig, action: SecondaryAction, error: u
   const finishedAt = jobTimestamp();
   const stored = readStored(config.dataDir) ?? {};
   try {
-    fs.writeFileSync(
+    writeFileAtomic(
       statusFile(config.dataDir),
       JSON.stringify({
         // 保留 previousHead 等已有字段，避免失败时丢掉回滚目标。
@@ -468,6 +469,7 @@ function recordSpawnFailure(config: AppConfig, action: SecondaryAction, error: u
         finishedAt,
         pid: null,
       }, null, 2),
+      { mode: 0o600, backup: true },
     );
   } catch {
     // 状态文件写不进去时至少还能写日志。

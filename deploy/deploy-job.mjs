@@ -5,8 +5,9 @@
 // flock/ss/setsid/sha256sum），因此这里用纯 Node 完成同样的工作：
 //   1. 读取 server 写好的 env / projects，渲染 config.yaml；
 //   2. 必要时克隆副实例 checkout；
-//   3. 依赖变化或源码变化时 npm ci / npm run build；
-//   4. 停掉旧的服务进程，按新配置启动，校验 /api/health；
+//   3. 依赖变化时停实例、备份 node_modules 后 npm ci，再把产物 staging 到 dist.next；
+//   4. 停掉旧的服务进程，原子切换 dist.next -> live，按新配置启动，校验 /api/health，
+//      失败时回滚 .prev 并恢复 node_modules.prev；
 //   5. 写 deploy.json / deploy.log（字段与 shell 版本一致）。
 //
 // 只读取环境变量，不把用户输入拼进命令行；状态/日志路径由 server 指定。
@@ -17,6 +18,13 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  activeSessionsFromHealth,
+  backupNodeModules,
+  busyDecision,
+  cleanupNodeModulesPrev,
+  deployDecision,
+  deployPorts,
+  discardStaging,
   expandHome,
   gitDirty,
   gitHead,
@@ -24,13 +32,19 @@ import {
   needsBuild,
   needsInstall,
   parseEnvFile,
+  proxyPlan,
+  readDeployStamp,
   redactUrl,
   renderConfigYaml,
   repoRootFromServerScript,
+  restoreNodeModulesWhenBackedUp,
+  rollbackDist,
   samePath,
   sha256File,
   stripAnsi,
+  swapDist,
   validateProjectsIndent,
+  writeDeployStamp,
 } from "./deploy-lib.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -94,7 +108,7 @@ function finish(state, step, message) {
   }
 }
 
-function fail(step, message) {
+function fail(step, message, code = 1) {
   say(`失败：${message}`);
   if (!finished) {
     finished = true;
@@ -104,8 +118,8 @@ function fail(step, message) {
       // 状态目录不可写时只能放弃。
     }
   }
-  process.exitCode = 1;
-  process.exit(1);
+  process.exitCode = code;
+  process.exit(code);
 }
 
 process.on("uncaughtException", (error) => {
@@ -301,7 +315,8 @@ async function waitPortFree(port, label) {
     if (!(await isPortListening("127.0.0.1", port))) return;
     await sleep(200);
   }
-  fail("stop", `${label}端口 ${port} 停止后仍被占用，拒绝启动新版本`);
+  // 由调用方恢复已停角色后再失败，这里不能直接退出进程。
+  throw new Error(`${label}端口 ${port} 停止后仍被占用，拒绝启动新版本`);
 }
 
 async function fetchHealth(port) {
@@ -317,7 +332,8 @@ async function fetchHealth(port) {
 }
 
 // ── 运行命令 ────────────────────────────────────────────────────────────────
-function run(label, command, args, options = {}) {
+// runTry 只执行并记录，不中断进程；调用方可以据此恢复旧版本。run 是“失败即中止”的包装。
+function runTry(label, command, args, options = {}) {
   say(`$ ${command} ${args.join(" ")}`.trim());
   const result = spawnSync(command, args, {
     cwd: options.cwd,
@@ -336,10 +352,15 @@ function run(label, command, args, options = {}) {
       // 日志写不了不影响命令结果。
     }
   }
+  return { ok: !result.error && result.status === 0, result };
+}
+
+function run(label, command, args, options = {}) {
+  const { ok, result } = runTry(label, command, args, options);
   if (result.error) {
     fail(options.step ?? "run", `${label}失败：${result.error.message}`);
   }
-  if (result.status !== 0) {
+  if (!ok) {
     fail(options.step ?? "run", `${label}失败（退出码 ${result.status ?? "未知"}）`);
   }
   return result;
@@ -364,6 +385,13 @@ const projectsFileRaw = envValue("QUBIUS_PROJECTS_FILE");
 const projectsFile = projectsFileRaw ? abs(projectsFileRaw) : "";
 const lanHost = envValue("QUBIUS_LAN_HOST") || "";
 const nodeBin = envValue("QUBIUS_NODE_BIN") ? abs(envValue("QUBIUS_NODE_BIN")) : process.execPath;
+// 部署行为开关：忙碌保护（FORCE/WAIT）与“无变化也强制重启”（RESTART）。
+const deployForce = envBool("QUBIUS_DEPLOY_FORCE", false);
+const deployWaitRaw = envValue("QUBIUS_DEPLOY_WAIT");
+const deployWait = deployWaitRaw === undefined
+  ? undefined
+  : (/^\d+$/.test(deployWaitRaw.trim()) ? Number(deployWaitRaw.trim()) : Number.NaN);
+const deployRestart = envBool("QUBIUS_DEPLOY_RESTART", false);
 
 if (maxConcurrent < 1 || maxConcurrent > 256) {
   fail("prepare", `QUBIUS_MAX_CONCURRENT 必须在 1 到 256 之间：${maxConcurrent}`);
@@ -593,8 +621,8 @@ function writeConfig(entry) {
 }
 
 // ── 构建 ────────────────────────────────────────────────────────────────────
-async function stopRole(entry) {
-  if (entry.stopped) return;
+async function stopRole(entry, options = {}) {
+  if (entry.stopped && !options.force) return;
   entry.stopped = true;
   if (PARENT_PID && PARENT_ROLE === entry.role) {
     // 与 shell 版本一致：只停属于本次部署目录（或当前 checkout）的 server，
@@ -637,53 +665,257 @@ function packageVersion(repo) {
   }
 }
 
-async function buildRole(entry) {
-  if (!needsBuild(entry.repo)) {
-    say(`${entry.label}构建产物已是最新，跳过构建`);
+function stampPath(entry) {
+  return path.join(entry.dataDir, ".deploy-stamp");
+}
+
+function configHashOf(entry) {
+  return sha256File(entry.configFile) ?? "none";
+}
+
+function envHashOf() {
+  return ENV_FILE ? (sha256File(ENV_FILE) ?? "none") : "none";
+}
+
+function writeRoleStamp(entry) {
+  writeDeployStamp(stampPath(entry), {
+    head: gitHead(entry.repo),
+    configHash: configHashOf(entry),
+    envHash: envHashOf(),
+    port: entry.port,
+  });
+}
+
+/**
+ * 该角色重启前要检查的端口：新端口、stamp 里上次实际使用的端口（改端口时
+ * 旧会话仍挂在旧端口上），以及父进程已知的旧端口。
+ */
+function portsForEntry(entry) {
+  const stamp = readDeployStamp(stampPath(entry));
+  return deployPorts({
+    port: entry.port,
+    stampPort: stamp?.port,
+    parentPort: PARENT_PORT,
+    isParent: entry.role === PARENT_ROLE,
+  });
+}
+
+/** 汇总该角色所有可能端口上的进行中会话数（取最大值，同一服务不重复计数）。 */
+async function activeSessionsForEntry(entry) {
+  let active = 0;
+  for (const port of portsForEntry(entry)) {
+    active = Math.max(active, activeSessionsFromHealth(await fetchHealth(port)));
+  }
+  return active;
+}
+
+class BusyError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BusyError";
+  }
+}
+
+/**
+ * 停止/重启一个健康实例前检查进行中的会话（每次调用都重新读 /api/health，
+ * 构建后要再查一次，避免构建期间新出现的会话被静默打断）。
+ * QUBIUS_DEPLOY_FORCE=1 强制继续；QUBIUS_DEPLOY_WAIT=<秒> 等待空闲；
+ * 都没有时（页面部署是非交互的）抛 BusyError，由调用方决定中止/先恢复已停角色。
+ */
+async function guardBusy(entry) {
+  let active = await activeSessionsForEntry(entry);
+  const decision = busyDecision({
+    activeSessions: active,
+    force: deployForce,
+    waitSeconds: deployWait,
+  });
+  if (decision.action === "proceed") {
+    if (decision.reason) say(`${entry.label}：${decision.reason}`);
     return;
   }
-  const install = needsInstall(entry.repo);
-  if (install) {
-    // npm ci 会删除 node_modules：Windows 上运行中的进程可能锁住原生模块，必须先停止；
-    // macOS 允许删除/替换正在使用的文件，构建期间继续运行旧服务，避免页面长时间断线。
-    if (isWindows) {
-      say(`${entry.label}需要重新安装依赖，先停止旧进程`);
-      await stopRole(entry);
+  if (decision.action === "fail") {
+    throw new BusyError(`${entry.label}：${decision.reason}`);
+  }
+
+  const limit = decision.waitSeconds;
+  say(`${entry.label}：${decision.reason}`);
+  const deadline = Date.now() + limit * 1000;
+  while (active > 0 && Date.now() < deadline) {
+    await sleep(2000);
+    active = await activeSessionsForEntry(entry);
+  }
+  if (active <= 0) {
+    say(`${entry.label}已空闲，继续`);
+    return;
+  }
+  throw new BusyError(
+    `${entry.label}等待 ${limit} 秒后仍有 ${active} 个会话进行中，已中止部署（可设 QUBIUS_DEPLOY_FORCE=1 强制重启，或先停止这些会话再重试）`,
+  );
+}
+
+/** 中止前把本次为 npm ci 停掉的实例按旧版本重新拉起（health-only）。 */
+async function restoreStoppedPlans(plans) {
+  let restored = 0;
+  for (const { entry } of plans) {
+    if (!entry.stopped || entry.restored) continue;
+    restoreNodeModulesWhenBackedUp(entry.repo, entry.nodeModulesBackedUp);
+    entry.nodeModulesBackedUp = false;
+    discardStaging(entry.repo);
+    say(`${entry.label}已停止，恢复 node_modules 后按旧版本重新拉起`);
+    try {
+      await startRole(entry, { skipHead: true });
+      writeRoleStamp(entry);
+      restored += 1;
+    } catch (error) {
+      say(`${entry.label}旧版本重新拉起失败：${error instanceof Error ? error.message : error}`);
     }
-    run("安装依赖", "npm", ["ci", "--no-audit", "--no-fund"], {
-      cwd: entry.repo,
+  }
+  return restored;
+}
+
+/**
+ * 只把产物构建到 server/dist.next、web/dist.next，并写入 staging 的 build.json；
+ * live 完全不动。失败时清理 .next 并返回 false。
+ */
+function stageBuildRole(entry) {
+  const repo = entry.repo;
+  const serverDir = path.join(repo, "server");
+  const webDir = path.join(repo, "web");
+  const tsc = path.join(repo, "node_modules", "typescript", "bin", "tsc");
+  const vite = path.join(repo, "node_modules", "vite", "bin", "vite.js");
+  const env = { ...process.env, PATH: childPath };
+  discardStaging(repo);
+  say(`构建 ${entry.label}（staging，live 不动）：${repo}`);
+
+  const steps = [
+    ["构建 server", [tsc, "--outDir", "dist.next"], serverDir],
+    ["类型检查 web", [tsc, "--noEmit"], webDir],
+    ["构建 web", [vite, "build", "--outDir", "dist.next"], webDir],
+  ];
+  for (const [label, args, cwd] of steps) {
+    const { ok } = runTry(label, nodeBin, args, {
+      cwd,
+      step: `build-${entry.role}`,
+      env,
+    });
+    if (!ok) {
+      discardStaging(repo);
+      return false;
+    }
+  }
+
+  const head = gitHead(repo);
+  const body = {
+    head,
+    version: packageVersion(repo),
+    builtAt: new Date().toISOString(),
+    dirty: gitDirty(repo),
+  };
+  const serverNext = path.join(repo, "server", "dist.next");
+  fs.mkdirSync(serverNext, { recursive: true });
+  const tmp = path.join(serverNext, `.build.json.${process.pid}`);
+  fs.writeFileSync(tmp, `${JSON.stringify(body)}\n`);
+  fs.renameSync(tmp, path.join(serverNext, "build.json"));
+  say(`已暂存 server/dist.next/build.json：head=${head}`);
+  return true;
+}
+
+function buildFailure(step, message) {
+  const error = new Error(message);
+  error.step = step;
+  return error;
+}
+
+/** 构建失败时把自己的角色恢复到旧版本（恢复依赖、丢弃 staging、必要时拉起）。 */
+async function restorePreparedEntry(entry) {
+  restoreNodeModulesWhenBackedUp(entry.repo, entry.nodeModulesBackedUp);
+  entry.nodeModulesBackedUp = false;
+  discardStaging(entry.repo);
+  if (entry.stopped) {
+    try {
+      await startRole(entry, { skipHead: true });
+      writeRoleStamp(entry);
+      say(`${entry.label}已恢复旧版本`);
+    } catch (error) {
+      say(`${entry.label}旧版本未能拉起：${error.message}`);
+    }
+    entry.restored = true;
+  }
+}
+
+/**
+ * 安装依赖（先停旧进程并备份 node_modules）并把产物 stage 到 .next。
+ * 失败时恢复本角色的 node_modules/旧版本后抛错，由主流程恢复其它已停角色。
+ * 返回 { install, stopped } 供后续 swap/回滚使用。
+ */
+async function prepareBuild(entry) {
+  const repo = entry.repo;
+  const install = needsInstall(repo);
+  let stopped = false;
+
+  if (install) {
+    say(`${entry.label}需要重新安装依赖，先停止旧进程并备份 node_modules`);
+    await stopRole(entry);
+    stopped = true;
+    try {
+      entry.nodeModulesBackedUp = backupNodeModules(repo);
+    } catch (error) {
+      entry.nodeModulesBackedUp = false;
+      await restorePreparedEntry(entry);
+      throw buildFailure(`install-${entry.role}`, `${entry.label}备份 node_modules 失败：${error.message}`);
+    }
+    const { ok } = runTry("安装依赖", "npm", ["ci", "--no-audit", "--no-fund"], {
+      cwd: repo,
       step: `install-${entry.role}`,
       shell: isWindows,
       env: { ...process.env, PATH: childPath },
     });
-    const hash = sha256File(path.join(entry.repo, "package-lock.json"));
+    if (!ok) {
+      await restorePreparedEntry(entry);
+      throw buildFailure(`install-${entry.role}`, `${entry.label}安装依赖失败`);
+    }
+    const hash = sha256File(path.join(repo, "package-lock.json"));
     if (hash) {
       try {
-        fs.writeFileSync(path.join(entry.repo, "node_modules", ".qubius-lock-hash"), `${hash}\n`);
+        fs.writeFileSync(path.join(repo, "node_modules", ".qubius-lock-hash"), `${hash}\n`);
       } catch {
         // 写不了标记只会导致下次重复安装。
       }
     }
   }
-  say(`构建 ${entry.label}：${entry.repo}`);
-  run("构建", "npm", ["run", "build"], {
-    cwd: entry.repo,
-    step: `build-${entry.role}`,
-    shell: isWindows,
-    env: { ...process.env, PATH: childPath },
-  });
-  const head = gitHead(entry.repo);
-  const body = {
-    head,
-    version: packageVersion(entry.repo),
-    builtAt: new Date().toISOString(),
-    dirty: gitDirty(entry.repo),
-  };
-  fs.mkdirSync(path.join(entry.repo, "server", "dist"), { recursive: true });
-  const tmp = path.join(entry.repo, "server", "dist", `.build.json.${process.pid}`);
-  fs.writeFileSync(tmp, `${JSON.stringify(body)}\n`);
-  fs.renameSync(tmp, path.join(entry.repo, "server", "dist", "build.json"));
-  say(`已写入 server/dist/build.json：head=${head}`);
+
+  if (!stageBuildRole(entry)) {
+    await restorePreparedEntry(entry);
+    throw buildFailure(`build-${entry.role}`, `${entry.label}构建失败`);
+  }
+  return { install, stopped };
+}
+
+/** 部署中止时把其它已停角色回滚并拉起旧版本；已经成功启动的角色不动。 */
+async function recoverOtherPlans(plans, swapped, { exclude = null, started = null } = {}) {
+  for (const { entry } of plans) {
+    if (exclude && entry === exclude) continue;
+    if (started && started.has(entry)) continue;
+    if (swapped.has(entry)) {
+      try {
+        rollbackDist(entry.repo);
+      } catch (error) {
+        say(`${entry.label}回滚失败：${error.message}`);
+      }
+      swapped.delete(entry);
+    }
+    restoreNodeModulesWhenBackedUp(entry.repo, entry.nodeModulesBackedUp);
+    entry.nodeModulesBackedUp = false;
+    discardStaging(entry.repo);
+    if (!entry.stopped) continue;
+    try {
+      await startRole(entry, { skipHead: true });
+      writeRoleStamp(entry);
+      say(`${entry.label}已恢复旧版本`);
+    } catch (error) {
+      say(`${entry.label}恢复旧版本失败：${error.message}`);
+    }
+  }
 }
 
 // ── 启动与校验 ──────────────────────────────────────────────────────────────
@@ -698,9 +930,9 @@ function serverEnv(entry) {
   return env;
 }
 
-async function startRole(entry) {
+async function startRole(entry, options = {}) {
   const index = path.join(entry.repo, "server", "dist", "index.js");
-  if (!fs.existsSync(index)) fail(`start-${entry.role}`, `缺少构建产物：${index}`);
+  if (!fs.existsSync(index)) throw new Error(`缺少构建产物：${index}`);
   fs.mkdirSync(entry.dataDir, { recursive: true });
   const logFile = path.join(entry.dataDir, "qubius.log");
   const pidfile = path.join(entry.dataDir, "qubius.pid");
@@ -738,17 +970,19 @@ async function startRole(entry) {
     await sleep(500);
   }
   if (!health) {
-    fail(`start-${entry.role}`, `${entry.label}启动后 /api/health 未就绪，查看 ${logFile}`);
+    throw new Error(`${entry.label}启动后 /api/health 未就绪，查看 ${logFile}`);
   }
   if (health.pid && child.pid && health.pid !== child.pid) {
-    fail(`start-${entry.role}`, `${entry.label}端口 ${entry.port} 被其他进程占用（pid=${health.pid}）`);
+    throw new Error(`${entry.label}端口 ${entry.port} 被其他进程占用（pid=${health.pid}）`);
   }
-  const head = gitHead(entry.repo);
-  if (typeof health.head === "string" && health.head && head && health.head !== head) {
-    fail(
-      `start-${entry.role}`,
-      `${entry.label} health 的 head=${health.head} 与当前 git HEAD=${head} 不一致（构建后未重启？）`,
-    );
+  // 回滚后启动的是旧产物，health 的 head 是旧 HEAD，不能再和当前 git HEAD 比较。
+  if (!options.skipHead) {
+    const head = gitHead(entry.repo);
+    if (typeof health.head === "string" && health.head && head && health.head !== head) {
+      throw new Error(
+        `${entry.label} health 的 head=${health.head} 与当前 git HEAD=${head} 不一致（构建后未重启？）`,
+      );
+    }
   }
   say(`${entry.label}已就绪：http://127.0.0.1:${entry.port}（pid=${child.pid}）`);
 }
@@ -762,6 +996,21 @@ async function stopProxy(entry) {
   } catch {
     // 文件本来就不存在。
   }
+}
+
+/** 无变化部署时只确保局域网入口存活，不主动重启它。 */
+async function ensureProxyAlive(entry) {
+  const pidfile = path.join(entry.dataDir, "lan-proxy.pid");
+  const pid = readPid(pidfile);
+  const pidAlive = Boolean(pid && isAlive(pid) && isNodeProcess(pid));
+  const host = lanAddress();
+  const listening = Boolean(host && (await isPortListening(host, entry.port)));
+  const plan = proxyPlan({ restart: false, pidAlive, listening });
+  if (plan === "keep") {
+    say(`${entry.label} LAN 入口已在运行，跳过重启`);
+    return;
+  }
+  await startProxy(entry);
 }
 
 /** 与 deploy/lan-proxy.mjs 的 lanAddress() 保持一致，用来校验它真的监听上了。 */
@@ -876,26 +1125,172 @@ async function main() {
   say("生成实例配置");
   for (const entry of entries) writeConfig(entry);
 
+  // 先逐角色判断是否真的需要重启。构建产物、HEAD、config/env 指纹都没变化、
+  // 且服务健康时跳过构建和重启，避免无谓打断正在工作的会话。
+  const plans = [];
   for (const entry of entries) {
-    if (needsBuild(entry.repo)) {
-      writeStatus("running", `install-${entry.role}`, `正在安装/构建${entry.label}`);
-    }
-    await buildRole(entry);
+    const healthy = (await fetchHealth(entry.port)) !== null;
+    const buildNeeded = needsBuild(entry.repo);
+    const decision = deployDecision({
+      buildNeeded,
+      configHash: configHashOf(entry),
+      envHash: envHashOf(),
+      stamp: readDeployStamp(stampPath(entry)),
+      head: gitHead(entry.repo),
+      healthy,
+      forceRestart: deployRestart,
+    });
+    plans.push({ entry, decision });
   }
 
-  writeStatus("running", "stop", "正在停止当前服务");
-  for (const entry of entries) await stopRole(entry);
-  for (const entry of entries) await waitPortFree(entry.port, entry.label);
+  const restartPlans = plans.filter((plan) => plan.decision.restart);
 
-  for (const entry of entries) {
-    writeStatus("running", `start-${entry.role}`, `正在启动${entry.label}`);
-    await startRole(entry);
+  // 构建/停止之前先统一检查一遍：任一角色忙时，在改动任何进程之前退出。
+  // 检查范围同时包含新端口、stamp 里上次的端口和父进程实际在用的旧端口。
+  for (const { entry } of restartPlans) {
+    try {
+      await guardBusy(entry);
+    } catch (error) {
+      if (error instanceof BusyError) fail("busy", error.message, 3);
+      throw error;
+    }
+  }
+
+  const prep = new Map();
+  try {
+    for (const { entry, decision } of plans) {
+      if (!decision.restart) {
+        say(`${entry.label}：无变化，跳过构建和重启（${decision.reason}）`);
+        continue;
+      }
+      say(`${entry.label}：需要重启（${decision.reason}）`);
+      if (decision.build) {
+        writeStatus("running", `install-${entry.role}`, `正在安装/构建${entry.label}`);
+        prep.set(entry, await prepareBuild(entry));
+      } else {
+        say(`${entry.label}无需重新构建，直接重启`);
+        prep.set(entry, { install: false, stopped: false });
+      }
+    }
+  } catch (error) {
+    // 构建失败时先把之前为 npm ci 停掉的角色恢复，再报告失败。
+    await restoreStoppedPlans(restartPlans);
+    fail(error.step ?? "build", error instanceof Error ? error.message : String(error));
+  }
+
+  // 构建可能耗时，停止前再读一次 activeSessions；FORCE 已显式要求跳过。
+  // 若构建期间为 npm ci 停过实例，中止前恢复依赖并按旧版本重新拉起。
+  if (!deployForce) {
+    try {
+      for (const { entry } of restartPlans) await guardBusy(entry);
+    } catch (error) {
+      if (error instanceof BusyError) {
+        await restoreStoppedPlans(restartPlans);
+        fail("busy", error.message, 3);
+      }
+      throw error;
+    }
+  }
+
+  if (restartPlans.length > 0) {
+    writeStatus("running", "stop", "正在停止当前服务");
+    try {
+      for (const { entry } of restartPlans) await stopRole(entry);
+      for (const { entry } of restartPlans) await waitPortFree(entry.port, entry.label);
+    } catch (error) {
+      // 还没 swap，恢复所有已停角色（含依赖备份）后再失败。
+      await recoverOtherPlans(restartPlans, new Set());
+      fail("stop", error instanceof Error ? error.message : String(error));
+    }
+
+    // 停稳后再原子切换 staging -> live；失败则恢复依赖并拉起旧版本。
+    const swapped = new Set();
+    for (const { entry, decision } of plans) {
+      if (!decision.restart || !decision.build) continue;
+      try {
+        swapDist(entry.repo);
+        swapped.add(entry);
+        say(`${entry.label}已切换 server/dist、web/dist（旧产物在 *.prev）`);
+      } catch (error) {
+        say(`${entry.label}切换新产物失败：${error.message}`);
+        restoreNodeModulesWhenBackedUp(entry.repo, entry.nodeModulesBackedUp);
+        entry.nodeModulesBackedUp = false;
+        discardStaging(entry.repo);
+        try {
+          await startRole(entry, { skipHead: true });
+          writeRoleStamp(entry);
+          say(`${entry.label}已按旧版本重新拉起`);
+        } catch (restoreError) {
+          say(`${entry.label}旧版本未能拉起：${restoreError.message}`);
+        }
+        // 其它已停角色还没启动，恢复旧版本后再报告失败。
+        await recoverOtherPlans(restartPlans, swapped, { exclude: entry });
+        fail(`swap-${entry.role}`, `${entry.label}切换新产物失败：${error.message}`);
+      }
+    }
+
+    const started = new Set();
+    for (const { entry } of restartPlans) {
+      writeStatus("running", `start-${entry.role}`, `正在启动${entry.label}`);
+      try {
+        await startRole(entry);
+      } catch (error) {
+        say(`${entry.label}新版本启动失败：${error.message}`);
+        await stopRole(entry, { force: true });
+        let rollbackOk = true;
+        if (swapped.has(entry)) {
+          try {
+            rollbackDist(entry.repo);
+            swapped.delete(entry);
+            say(`${entry.label}已回滚 server/dist、web/dist`);
+          } catch (rollbackError) {
+            rollbackOk = false;
+            say(`${entry.label}回滚失败（首次部署没有 .prev？）：${rollbackError.message}`);
+          }
+        }
+        restoreNodeModulesWhenBackedUp(entry.repo, entry.nodeModulesBackedUp);
+        entry.nodeModulesBackedUp = false;
+        if (!rollbackOk) {
+          // 首次部署没有旧产物：live 仍是启动失败的新版本，不能再拉起它冒充“已回滚”。
+          await recoverOtherPlans(restartPlans, swapped, { exclude: entry, started });
+          fail(`start-${entry.role}`, `${entry.label}新版本启动失败，且无旧版本可回滚`);
+        }
+        try {
+          await startRole(entry, { skipHead: true });
+          say(`${entry.label}已回滚到旧版本`);
+        } catch (oldError) {
+          say(`${entry.label}旧版本也未能启动：${oldError.message}`);
+          await recoverOtherPlans(restartPlans, swapped, { exclude: entry, started });
+          fail(
+            `start-${entry.role}`,
+            `${entry.label}新版本启动失败，回滚后旧版本也未能启动`,
+          );
+        }
+        // 后面还没启动的角色也要恢复旧版本，避免一直被停着。
+        await recoverOtherPlans(restartPlans, swapped, { exclude: entry, started });
+        fail(`start-${entry.role}`, `${entry.label}新版本启动失败，已回滚到旧版本：${error.message}`);
+      }
+      started.add(entry);
+      // 成功重启后记录当前状态，供下次判断是否可以跳过。
+      writeRoleStamp(entry);
+      // 本次没有安装依赖时，旧的 node_modules.prev 已过期，成功部署后清掉。
+      if (!prep.get(entry)?.install) cleanupNodeModulesPrev(entry.repo);
+    }
+  } else {
+    say("没有需要重启的实例，跳过停止和启动");
   }
 
   if (startLan) {
+    const restarted = new Set(restartPlans.map((plan) => plan.entry));
     for (const entry of entries) {
-      await stopProxy(entry);
-      await startProxy(entry);
+      if (restarted.has(entry)) {
+        // 实例已重启，代理跟着重启以指向新进程。
+        await stopProxy(entry);
+        await startProxy(entry);
+      } else {
+        // 无变化时只确保代理存活，不主动中断正在服务的局域网入口。
+        await ensureProxyAlive(entry);
+      }
     }
   } else {
     say("跳过局域网入口（QUBIUS_START_LAN=0）");

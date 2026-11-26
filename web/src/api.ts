@@ -174,11 +174,33 @@ export interface Pending {
   requestId: string;
   kind: "permission" | "question";
   toolName: string;
+  /** 单行摘要（空白折叠、最多 2000 字符），供列表和紧凑展示。 */
   inputPreview: string;
+  /** 完整输入文本；旧服务端没有这个字段时回退到 inputPreview。 */
+  inputText?: string;
+  /** inputText 是否被截断。 */
+  inputTruncated?: boolean;
+  /** 是否必须展开完整输入后才能允许。 */
+  requiresExpand?: boolean;
   blockedPath?: string;
   questions?: PendingQuestion[];
   /** 服务端自动拒绝这次确认的时间；不自动拒绝或旧服务端/旧会话没有这个字段。 */
   expiresAt?: string;
+}
+
+/**
+ * 可以「本对话记住」的工具（与服务端 runtime.canRemember 保持一致）：
+ * 只收窄到文件写入类，命令和子 agent 每次都要确认。
+ */
+export const REMEMBERABLE_TOOLS: ReadonlySet<string> = new Set([
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+]);
+
+export function canRememberTool(toolName: string): boolean {
+  return REMEMBERABLE_TOOLS.has(toolName);
 }
 
 export type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
@@ -894,6 +916,8 @@ export function answerSession(id: string, body: {
   answers?: Record<string, string>;
   /** 本对话内记住这类工具，后续同类确认不再询问。 */
   remember?: boolean;
+  /** 用户已展开完整输入后再允许；只有需要展开的确认才携带。 */
+  approvedFull?: boolean;
 }, signal?: AbortSignal): Promise<{ session: Session }> {
   return request(`/api/sessions/${id}/answer`, { method: "POST", body: JSON.stringify(body) }, signal);
 }

@@ -224,6 +224,9 @@ fieldset.deploy-section { padding: calc(8px * var(--control-scale)) calc(12px * 
   font-size: var(--fs-12);
 }
 
+/* bypassPermissions 的风险提示：沿用 warn 色，与普通灰色说明区分。 */
+.deploy-permission-warning { color: var(--warn); font-weight: 600; }
+
 .deploy-projects {
   display: flex;
   flex-direction: column;

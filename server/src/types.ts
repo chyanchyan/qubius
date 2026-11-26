@@ -242,7 +242,14 @@ export interface PendingRequest {
   requestId: string;
   kind: "permission" | "question";
   toolName: string;
+  /** 单行摘要（空白折叠、最多 2000 字符），供列表和紧凑展示。 */
   inputPreview: string;
+  /** 完整输入文本：Bash 为 command 原文，其它工具为格式化 JSON。 */
+  inputText: string;
+  /** inputText 是否因过大被截断。 */
+  inputTruncated: boolean;
+  /** 是否必须展开完整输入后才能允许（含换行、超长或被截断）。 */
+  requiresExpand: boolean;
   blockedPath?: string;
   questions?: PendingQuestion[];
   /** 服务端自动拒绝这次确认的时间；不自动拒绝或旧会话没有这个字段。 */

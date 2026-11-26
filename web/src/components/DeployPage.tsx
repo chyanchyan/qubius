@@ -31,7 +31,7 @@ import {
   type WizardMode,
 } from "../deploy-wizard";
 import { pathIsAbsolute } from "../deploy-path";
-import { Notice } from "../ui";
+import { Notice, useDialogs } from "../ui";
 import { DeployWizard } from "./DeployWizard";
 import { EdgePanel } from "./EdgePanel";
 import { Hint } from "./FieldHint";
@@ -505,6 +505,7 @@ function OneTimeCredentials({
 }
 
 export function DeployPage() {
+  const dialogs = useDialogs();
   const [deployState, setDeployState] = useState<DeployState | null>(null);
   /** GitHub 镜像版本与当前版本对照；拉取失败也保留对象，显示失败原因。 */
   const [githubVersion, setGithubVersion] = useState<GithubVersionState | null>(null);
@@ -906,6 +907,20 @@ export function DeployPage() {
       };
     });
     setFormError("");
+  }
+
+  /* bypassPermissions 会跳过所有确认，切换前先二次确认；其他级别立即生效。 */
+  async function selectPermission(index: number, permission: DeployPermission) {
+    if (permission === "bypassPermissions") {
+      const confirmed = await dialogs.confirm({
+        title: "启用全部允许？",
+        message: "全部允许会跳过所有确认，agent 可以在运行服务的用户权限下执行任意命令。确定切换到 bypassPermissions？",
+        confirmLabel: "启用",
+        danger: true,
+      });
+      if (!confirmed) return;
+    }
+    updateProject(index, { permission });
   }
 
   function addProject() {
@@ -1832,12 +1847,25 @@ export function DeployPage() {
                   </span>
                   <select
                     value={project.permission}
-                    onChange={(event) => updateProject(index, { permission: event.target.value as DeployPermission })}
+                    onChange={(event) => {
+                      const permission = event.target.value as DeployPermission;
+                      if (permission === project.permission) return;
+                      if (permission === "bypassPermissions") {
+                        /* 弹窗期间受控 select 不会重渲染，先手动回到原值；取消时保持不动。 */
+                        event.target.value = project.permission;
+                      }
+                      void selectPermission(index, permission);
+                    }}
                   >
                     {PERMISSIONS.map((permission) => (
                       <option key={permission} value={permission}>{PERMISSION_LABEL[permission]}</option>
                     ))}
                   </select>
+                  {project.permission === "bypassPermissions" && (
+                    <p className="deploy-inline-hint deploy-permission-warning">
+                      全部允许：agent 会跳过确认，在运行服务的用户权限下执行任意命令，请仅在受控环境使用。
+                    </p>
+                  )}
                 </div>
                 <label className="field field-check">
                   <input

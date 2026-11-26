@@ -11,6 +11,14 @@ LOG=${QUBIUS_DEPLOY_LOG:?缺少 QUBIUS_DEPLOY_LOG}
 JOB_ID=${QUBIUS_DEPLOY_JOB_ID:-}
 STARTED_AT=${QUBIUS_DEPLOY_STARTED_AT:-}
 PARENT_PID=${QUBIUS_DEPLOY_PARENT_PID:-}
+# 父进程实际在用的端口：页面表单改端口时，旧会话仍挂在旧端口上。
+PARENT_PORT=${QUBIUS_DEPLOY_PARENT_PORT:-}
+# 父进程角色（旧版本/手工启动时按主实例处理）；预检和停父进程都要用。
+PARENT_ROLE=primary
+if [[ -n $PARENT_PID ]] \
+  && tr '\0' '\n' <"/proc/$PARENT_PID/environ" 2>/dev/null | grep -qx 'QUBIUS_SECONDARY=1'; then
+  PARENT_ROLE=secondary
+fi
 PRIMARY_DIR=${QUBIUS_PRIMARY_DIR:-}
 SECONDARY_DIR=${QUBIUS_SECONDARY_DIR:-}
 SECONDARY_REPO_URL=${QUBIUS_SECONDARY_REPO_URL:-}
@@ -84,6 +92,85 @@ install_checkout() {
 
 start_all_at() {
   ( cd "$1" && ./deploy/start-all.sh --restart 7>&- )
+}
+
+# ── 无变化跳过 / 忙碌保护 ───────────────────────────────────────────────────
+# 复用 deploy/lib.sh 的决策 helper。页面部署不一定是终端（detached），
+# 遇忙默认失败；QUBIUS_DEPLOY_FORCE=1 / QUBIUS_DEPLOY_WAIT=<秒> 可从 env 透传。
+CONFIG_DIR=${QUBIUS_CONFIG_DIR:-$DEPLOY_REPO_ROOT/.qubius}
+PRIMARY_DATA=${QUBIUS_DATA_PRIMARY:-$PRIMARY_DIR/.qubius/data}
+SECONDARY_DATA=${QUBIUS_DATA_SECONDARY:-$SECONDARY_DIR/.qubius/data}
+PRIMARY_PORT_NUM=${QUBIUS_PRIMARY_PORT:-8787}
+SECONDARY_PORT_NUM=${QUBIUS_SECONDARY_PORT:-8788}
+
+role_repo() {
+  if [[ ${1:-} == secondary ]]; then printf '%s' "$SECONDARY_DIR"; else printf '%s' "$PRIMARY_DIR"; fi
+}
+role_data() {
+  if [[ ${1:-} == secondary ]]; then printf '%s' "$SECONDARY_DATA"; else printf '%s' "$PRIMARY_DATA"; fi
+}
+role_port() {
+  if [[ ${1:-} == secondary ]]; then printf '%s' "$SECONDARY_PORT_NUM"; else printf '%s' "$PRIMARY_PORT_NUM"; fi
+}
+role_config() {
+  if [[ ${1:-} == secondary ]]; then
+    printf '%s/config-secondary.yaml' "$CONFIG_DIR"
+  else
+    printf '%s/config.yaml' "$CONFIG_DIR"
+  fi
+}
+role_label() {
+  if [[ ${1:-} == secondary ]]; then printf '%s' "副实例"; else printf '%s' "主实例"; fi
+}
+
+# 读取该角色 stamp 里上次实际使用的端口（没有/非法时输出空串）。
+role_stamp_port() {
+  local file
+  file="$(role_data "$1")/.deploy-stamp"
+  [[ -f $file ]] || return 0
+  sed -n 's/.*"port":"\([0-9][0-9]*\)".*/\1/p' "$file" 2>/dev/null || true
+}
+
+# 输出 "<restart|skip>\t<原因>"；无法判断时保守地返回 restart。
+role_decision() {
+  local role=$1 out
+  out=$(
+    set +e
+    # shellcheck disable=SC1090
+    source "$DEPLOY_REPO_ROOT/deploy/lib.sh" 2>/dev/null \
+      || { printf 'restart\t无法加载部署库，保守重启'; exit 0; }
+    set +e
+    qubius_load >/dev/null 2>&1 \
+      || { printf 'restart\t无法读取部署配置，保守重启'; exit 0; }
+    qubius_deploy_role_action \
+      "$(role_repo "$role")" "$(role_data "$role")" \
+      "$(role_config "$role")" "$(role_port "$role")" 2>/dev/null \
+      || printf 'restart\t无法判断，保守重启'
+  ) 7>&-
+  printf '%s' "${out:-restart	无法判断，保守重启}"
+}
+
+# 检查进行中的会话；放行返回 0，中止返回 3（与 lib 的 qubius_guard_busy 一致）。
+# 参数：<label> <port>...；同时检查旧端口（父进程实际在用的 QUBIUS_DEPLOY_PARENT_PORT）
+# 和新端口。lib/env 加载失败时拒绝重启（fail-closed），不静默放行。
+role_guard_busy() {
+  local label=$1 seen=" " port
+  shift
+  (
+    set +e
+    # shellcheck disable=SC1090
+    source "$DEPLOY_REPO_ROOT/deploy/lib.sh" 2>/dev/null \
+      || { printf 'qubius: 无法加载部署库，拒绝重启\n' >&2; exit 3; }
+    set +e
+    qubius_load >/dev/null 2>&1 \
+      || { printf 'qubius: 无法读取部署配置，拒绝重启\n' >&2; exit 3; }
+    for port in "$@"; do
+      [[ -n $port ]] || continue
+      case "$seen" in *" $port "*) continue ;; esac
+      seen="$seen$port "
+      qubius_guard_busy "$label" "$port" || exit $?
+    done
+  ) 7>&-
 }
 
 # 构建前从 origin 快进拉取当前分支；pull-latest.sh 只快进，不覆盖本地改动。
@@ -248,6 +335,35 @@ if [[ $START_SECONDARY == 1 ]]; then
   fi
 fi
 
+# ── 忙碌预检：停父进程之前检查所有启用角色 ──────────────────────────────────
+# 双实例时，start-all 会先处理主实例；如果副实例有会话，等 start-all 检查到它
+# 才退出 3 就太晚了（父进程可能已被停）。这里先对所有会重启的角色检查一遍，
+# 任一角色忙就在停任何进程前中止。每个角色同时检查新端口、stamp 里的旧端口
+# 和父进程已知端口。
+ENABLED_ROLES=()
+[[ $START_PRIMARY == 1 ]] && ENABLED_ROLES+=(primary)
+[[ $START_SECONDARY == 1 ]] && ENABLED_ROLES+=(secondary)
+for pre_role in ${ENABLED_ROLES[@]+"${ENABLED_ROLES[@]}"}; do
+  pre_label=$(role_label "$pre_role")
+  PRE_ACTION=""
+  PRE_REASON=""
+  IFS=$'\t' read -r PRE_ACTION PRE_REASON <<<"$(role_decision "$pre_role")"
+  if [[ ${PRE_ACTION:-} == skip ]]; then
+    say "预检：$pre_label 无变化（${PRE_REASON:-无变化}），无需检查会话"
+    continue
+  fi
+  PRE_PORTS=("$(role_port "$pre_role")" "$(role_stamp_port "$pre_role")")
+  if [[ $pre_role == "$PARENT_ROLE" && -n $PARENT_PORT ]]; then
+    PRE_PORTS+=("$PARENT_PORT")
+  fi
+  GUARD_OUT=$(role_guard_busy "$pre_label" "${PRE_PORTS[@]}" 2>&1) || {
+    say "${GUARD_OUT:-有会话进行中，已中止部署}"
+    write_status failed busy "有会话进行中，已中止部署（可设 QUBIUS_DEPLOY_FORCE=1 强制重启，或 QUBIUS_DEPLOY_WAIT=<秒> 等待空闲）"
+    exit 3
+  }
+  [[ -n $GUARD_OUT ]] && say "$GUARD_OUT"
+done
+
 # ── 停止当前 server：start-all 会重新拉起新版本 ──────────────────────────────
 # 只停真正的 qubius server；如果它属于本次未启用的角色，也不停（否则会关掉
 # 一个不会再被拉起的实例）。无法确认身份时宁可不杀。
@@ -284,16 +400,33 @@ if [[ -n $PARENT_PID ]] && kill -0 "$PARENT_PID" 2>/dev/null; then
     || [[ $PARENT_ROLE == secondary && $START_SECONDARY != 1 ]]; then
     say "父进程属于本次未启用的实例（$PARENT_ROLE），不停止"
   else
-    say "停止当前服务进程 $PARENT_PID"
-    write_status running stop "正在停止当前服务"
-    kill -TERM "$PARENT_PID" 2>/dev/null 7>&- || true
-    for _ in {1..20}; do
-      kill -0 "$PARENT_PID" 2>/dev/null 7>&- || break
-      sleep 0.5 7>&- || true
-    done
-    if kill -0 "$PARENT_PID" 2>/dev/null 7>&-; then
-      say "进程 $PARENT_PID 未在 10 秒内退出，发送 SIGKILL"
-      kill -KILL "$PARENT_PID" 2>/dev/null 7>&- || true
+    # 只有确实会重启时才停父进程：无变化时让 start-all 自己判断并跳过，
+    # 避免“先停掉服务、再发现无需重启”导致页面长时间断线。
+    ACTION=""
+    REASON=""
+    IFS=$'\t' read -r ACTION REASON <<<"$(role_decision "$PARENT_ROLE")"
+    if [[ ${ACTION:-} == skip ]]; then
+      say "无变化，跳过停止当前服务 $PARENT_PID（${REASON:-无变化}）"
+    else
+      say "需要重启（${REASON:-未知原因}），检查进行中的会话"
+      GUARD_OUT=$(role_guard_busy "当前服务进程" "$PARENT_PORT" "$(role_port "$PARENT_ROLE")" \
+        "$(role_stamp_port "$PARENT_ROLE")" 2>&1) || {
+        say "${GUARD_OUT:-有会话进行中，已中止部署}"
+        write_status failed busy "有会话进行中，已中止部署（可设 QUBIUS_DEPLOY_FORCE=1 强制重启，或 QUBIUS_DEPLOY_WAIT=<秒> 等待空闲）"
+        exit 3
+      }
+      [[ -n $GUARD_OUT ]] && say "$GUARD_OUT"
+      say "停止当前服务进程 $PARENT_PID"
+      write_status running stop "正在停止当前服务"
+      kill -TERM "$PARENT_PID" 2>/dev/null 7>&- || true
+      for _ in {1..20}; do
+        kill -0 "$PARENT_PID" 2>/dev/null 7>&- || break
+        sleep 0.5 7>&- || true
+      done
+      if kill -0 "$PARENT_PID" 2>/dev/null 7>&-; then
+        say "进程 $PARENT_PID 未在 10 秒内退出，发送 SIGKILL"
+        kill -KILL "$PARENT_PID" 2>/dev/null 7>&- || true
+      fi
     fi
   fi
 fi
@@ -306,7 +439,15 @@ else
 fi
 say "重启服务：$START_DIR/deploy/start-all.sh --restart"
 write_status running start "正在重启服务"
-if ! run_redacted start_all_at "$START_DIR"; then
+run_redacted start_all_at "$START_DIR"
+START_RC=$?
+if (( START_RC != 0 )); then
+  if (( START_RC == 3 )); then
+    # start-all 的忙碌保护：识别退出码 3，保持 failed/busy 语义而不是吞成 1。
+    say "有进行中的会话，重启已中止（start-all 退出码 3）"
+    write_status failed busy "有进行中的会话，已中止重启（可设 QUBIUS_DEPLOY_FORCE=1 强制重启，或 QUBIUS_DEPLOY_WAIT=<秒> 等待空闲）"
+    exit 3
+  fi
   fail start "重启服务失败"
 fi
 

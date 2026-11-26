@@ -16,6 +16,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { answerBody } from "./answers";
+import { addPending, hasPending, removePending } from "./pending-actions";
 import { ARCHIVE_RESTORE_NOTE, deleteDetail } from "./archive-copy";
 import { filterArchivedSessions, isPendingCleanup } from "./archive-search";
 import { instanceBrand } from "./brand";
@@ -1184,9 +1185,9 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   /* 从列表直接「继续」时的在途请求；按会话 id 记录，互不影响。 */
   const [continuingIds, setContinuingIds] = useState<ReadonlySet<string>>(() => new Set());
   const continuingIdsRef = useRef(new Set<string>());
-  /* 列表内联回答：一次只提交一个会话的确认，避免连点重复请求。 */
-  const [answeringId, setAnsweringId] = useState("");
-  const answeringRef = useRef(false);
+  /* 列表内联回答：按会话记录在途状态，会话之间互不影响；同一会话防连点。 */
+  const [answeringIds, setAnsweringIds] = useState<ReadonlySet<string>>(() => new Set());
+  const answeringIdsRef = useRef(new Set<string>());
   const [clearing, setClearing] = useState(false);
   const clearingRef = useRef(false);
   /* 分支合入 / 改动状态：列表里用分支标签底色展示（绿=已合入，灰=从未改过代码），
@@ -1537,23 +1538,26 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     behavior: "allow" | "deny",
     answers?: Record<string, string>,
     remember?: boolean,
+    approvedFull?: boolean,
   ) => {
-    if (!target.pending || answeringRef.current) return;
-    answeringRef.current = true;
-    setAnsweringId(target.id);
+    if (!target.pending || hasPending(answeringIdsRef.current, target.id)) return;
+    const next = addPending(answeringIdsRef.current, target.id);
+    if (!next) return;
+    answeringIdsRef.current = next;
+    setAnsweringIds(next);
     setError("");
     try {
       const data = await answerSession(
         target.id,
-        answerBody(target.pending, behavior, answers, remember),
+        answerBody(target.pending, behavior, answers, remember, approvedFull),
       );
       sseTouchedAt.current.set(data.session.id, Date.now());
       setSessions((current) => upsertSession(current, data.session));
     } catch (reason) {
       reportActionError(reason instanceof Error ? reason.message : "提交回答失败");
     } finally {
-      answeringRef.current = false;
-      setAnsweringId("");
+      answeringIdsRef.current = removePending(answeringIdsRef.current, target.id);
+      setAnsweringIds(answeringIdsRef.current);
     }
   }, [reportActionError]);
 
@@ -2172,9 +2176,9 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
                   <Approval
                     pending={entry.session.pending}
                     variant="inline"
-                    busy={answeringId !== ""}
-                    onAnswer={(behavior, answers, remember) => {
-                      void onAnswerSession(entry.session, behavior, answers, remember);
+                    busy={answeringIds.has(entry.session.id)}
+                    onAnswer={(behavior, answers, remember, approvedFull) => {
+                      void onAnswerSession(entry.session, behavior, answers, remember, approvedFull);
                     }}
                   />
                 )}
@@ -2877,6 +2881,7 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
     behavior: "allow" | "deny",
     answers?: Record<string, string>,
     remember?: boolean,
+    approvedFull?: boolean,
   ) {
     if (!session?.pending || answeringRef.current) return;
     answeringRef.current = true;
@@ -2885,7 +2890,7 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
     try {
       const data = await answerSession(
         sessionId,
-        answerBody(session.pending, behavior, answers, remember),
+        answerBody(session.pending, behavior, answers, remember, approvedFull),
       );
       setSession(data.session);
     } catch (reason) {

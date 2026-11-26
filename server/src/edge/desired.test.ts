@@ -6,7 +6,9 @@ import type { DeployForm } from "../deploy.js";
 import { desiredSites } from "./desired.js";
 
 function form(overrides: Partial<DeployForm> = {}): DeployForm {
-  return {
+  // 显式补齐 DeployForm 的必填字段；新增字段时这里会直接报错，不会静默变成
+  // undefined。overrides 只覆盖测试关心的站点字段。
+  const base: DeployForm = {
     startPrimary: true,
     startSecondary: false,
     clonePeer: false,
@@ -38,8 +40,8 @@ function form(overrides: Partial<DeployForm> = {}): DeployForm {
     archiveRetentionDays: 30,
     nodeBin: "",
     projects: [],
-    ...overrides,
   };
+  return Object.assign({}, base, overrides);
 }
 
 test("主/副实例都启用时生成 qubius 与 co-qubius", () => {

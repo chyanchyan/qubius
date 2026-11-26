@@ -229,6 +229,290 @@ qubius_load() {
   export QUBIUS_ENV_FILE
 }
 
+# ── 健康检查与部署决策 ──────────────────────────────────────────────────────
+# 部署/重启前检查 /api/health 的 activeSessions（排队/运行/等待确认的会话数），
+# 并据此决定是否跳过“无变化”的重启。这些 helper 供 deploy.sh、start-all.sh、
+# deploy-job.sh 共用；页面部署的 Node 版本在 deploy-lib.mjs 里有等价实现。
+
+qubius_health_code() {
+  local port=${1:-}
+  curl -sS -m 2 -o /dev/null -w '%{http_code}' \
+    "http://127.0.0.1:$port/api/health" 2>/dev/null || true
+}
+
+# 打印进行中的会话数；服务不可达/字段缺失时打印 0。
+qubius_health_active() {
+  local port=${1:-} node active
+  command -v curl >/dev/null 2>&1 || { printf '0\n'; return 0; }
+  node=$(qubius_resolve_node 2>/dev/null) || { printf '0\n'; return 0; }
+  active=$(curl -fsS -m 2 "http://127.0.0.1:$port/api/health" 2>/dev/null | "$node" -e '
+    let s = "";
+    process.stdin.on("data", (d) => (s += d));
+    process.stdin.on("end", () => {
+      try {
+        const j = JSON.parse(s);
+        const n = j && j.activeSessions;
+        if (Number.isInteger(n) && n > 0) process.stdout.write(String(n));
+      } catch {}
+    });
+  ' 2>/dev/null || true)
+  if [[ $active =~ ^[0-9]+$ ]]; then printf '%s\n' "$active"; else printf '0\n'; fi
+}
+
+# 每 2 秒轮询一次，直到空闲或超时；空闲返回 0，超时返回 1。
+qubius_wait_idle() {
+  local label=$1 port=$2 limit=$3 count start now
+  count=$(qubius_health_active "$port")
+  start=$(date +%s)
+  while (( count > 0 )); do
+    now=$(date +%s)
+    (( now - start >= limit )) && break
+    qubius_info "$label：还有 $count 个会话进行中，等待空闲（已等 $((now - start)) 秒 / 最多 $limit 秒）"
+    sleep 2
+    count=$(qubius_health_active "$port")
+  done
+  (( count <= 0 ))
+}
+
+# 与 Node 版 envBool 一致：1/true/yes/on 都算开启。
+qubius_deploy_on() {
+  case ${1:-} in
+    1 | true | yes | on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 即将停止/重启一个健康实例前调用：有进行中的会话时等待、强制或中止。
+# 会话数 <=0、或服务不健康（连不上）时直接放行。
+qubius_guard_busy() {
+  local label=$1 port=$2 count answer wait_value=0 force=${QUBIUS_DEPLOY_FORCE:-0}
+  # 交互选择“强制”后，同一次部署里对同一端口不再重复询问（构建后还会复检一次）。
+  case ${QUBIUS_GUARD_FORCED_PORTS:-" "} in
+    *" $port "*) return 0 ;;
+  esac
+  count=$(qubius_health_active "$port")
+  (( count > 0 )) || return 0
+
+  if qubius_deploy_on "${force,,}"; then
+    qubius_warn "$label：有 $count 个进行中的会话，QUBIUS_DEPLOY_FORCE 已强制继续（这些会话会被中断）"
+    return 0
+  fi
+
+  if [[ -n ${QUBIUS_DEPLOY_WAIT:-} ]]; then
+    if [[ ! ${QUBIUS_DEPLOY_WAIT} =~ ^[0-9]+$ ]]; then
+      qubius_warn "$label：QUBIUS_DEPLOY_WAIT 必须是整数秒，当前为 [${QUBIUS_DEPLOY_WAIT}]，已中止部署。"
+      qubius_warn "  - 改成 QUBIUS_DEPLOY_WAIT=<秒>，或设 QUBIUS_DEPLOY_FORCE=1 强制重启"
+      exit 3
+    fi
+    wait_value=${QUBIUS_DEPLOY_WAIT}
+    if qubius_wait_idle "$label" "$port" "$wait_value"; then
+      qubius_info "$label：已空闲，继续"
+      return 0
+    fi
+    count=$(qubius_health_active "$port")
+    qubius_warn "$label：等待 ${wait_value} 秒后仍有 $count 个会话进行中，已中止部署。"
+    qubius_warn "  - 设 QUBIUS_DEPLOY_FORCE=1 强制重启（会中断这些会话）"
+    qubius_warn "  - 或先停止这些会话后重试"
+    exit 3
+  fi
+
+  if [[ -t 0 ]]; then
+    while true; do
+      printf '%s：有 %s 个会话进行中。 [w]等待 / [f]强制 / [c]取消（默认取消）：' \
+        "$label" "$count" >&2
+      read -r answer || answer=""
+      case ${answer,,} in
+        w | wait)
+          # 设置了 QUBIUS_DEPLOY_WAIT 时上面已处理；走到这里说明没设置。
+          wait_value=600
+          if qubius_wait_idle "$label" "$port" "$wait_value"; then
+            qubius_info "$label：已空闲，继续"
+            return 0
+          fi
+          count=$(qubius_health_active "$port")
+          (( count <= 0 )) && return 0
+          qubius_warn "$label：等待后仍有 $count 个会话进行中，已中止部署。"
+          exit 3
+          ;;
+        f | force)
+          QUBIUS_GUARD_FORCED_PORTS="${QUBIUS_GUARD_FORCED_PORTS:- }$port "
+          qubius_warn "$label：已选择强制重启（这些会话会被中断）"
+          return 0
+          ;;
+        *)
+          qubius_warn "$label：已取消部署"
+          exit 3
+          ;;
+      esac
+    done
+  fi
+
+  qubius_warn "$label：有 $count 个会话进行中，非交互环境已中止部署。"
+  qubius_warn "  - 设 QUBIUS_DEPLOY_FORCE=1 强制重启（会中断这些会话）"
+  qubius_warn "  - 设 QUBIUS_DEPLOY_WAIT=<秒> 等待空闲后再重启"
+  exit 3
+}
+
+# 文件 sha256；文件为空或不存在时返回 "none"（配置文件缺失也参与决策）。
+qubius_hash_file() {
+  local file=${1:-}
+  if [[ -n $file && -f $file ]]; then
+    sha256sum "$file" | awk '{print $1}'
+  else
+    printf 'none\n'
+  fi
+}
+
+qubius_config_file_for_role() {
+  if [[ ${1:-} == secondary ]]; then
+    printf '%s/config-secondary.yaml\n' "$QUBIUS_CONFIG_DIR"
+  else
+    printf '%s/config.yaml\n' "$QUBIUS_CONFIG_DIR"
+  fi
+}
+
+# 读取 JSON 文件的字符串/布尔字段；失败时输出空串。
+qubius_json_field() {
+  local file=$1 field=$2 node
+  [[ -f $file ]] || return 0
+  node=$(qubius_resolve_node 2>/dev/null) || return 0
+  "$node" -e '
+    const fs = require("fs");
+    try {
+      const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const v = j && j[process.argv[2]];
+      if (typeof v === "string") process.stdout.write(v);
+      else if (typeof v === "boolean") process.stdout.write(v ? "true" : "false");
+    } catch {}
+  ' "$file" "$field" 2>/dev/null || true
+}
+
+# 需要重新 npm ci 时返回 0（与 start-all.sh 的 needs_install 一致）。
+qubius_needs_install() {
+  local repo=$1 hash_file hash
+  hash_file=$repo/node_modules/.qubius-lock-hash
+  [[ -d $repo/node_modules ]] || return 0
+  [[ -f $repo/package-lock.json ]] || return 0
+  hash=$(sha256sum "$repo/package-lock.json" 2>/dev/null | awk '{print $1}')
+  [[ -n $hash ]] || return 0
+  if [[ -f $hash_file && $(cat "$hash_file" 2>/dev/null) == "$hash" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# 构建输入里是否有未提交改动。显式排除 staging 的 dist.next/dist.prev，
+# 不依赖仓库 .gitignore（构建 staging 单元可能还没落地）。
+qubius_build_status() {
+  local repo=$1
+  git -C "$repo" status --porcelain --untracked-files=normal -- \
+    server web package.json package-lock.json \
+    ':(exclude)server/dist.next' ':(exclude)server/dist.prev' \
+    ':(exclude)web/dist.next' ':(exclude)web/dist.prev' \
+    ':(exclude)dist.next' ':(exclude)dist.prev' 2>/dev/null
+}
+
+# 构建产物不是最新时返回 0（与 start-all.sh 的 needs_build 一致）。
+qubius_needs_build() {
+  local repo=$1 head stamp
+  [[ -f $repo/server/dist/index.js && -f $repo/web/dist/index.html ]] || return 0
+  [[ -d $repo/node_modules ]] || return 0
+  head=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)
+  [[ -n $head ]] || return 0
+  qubius_needs_install "$repo" && return 0
+  if [[ -n $(qubius_build_status "$repo") ]]; then
+    return 0
+  fi
+  [[ $(qubius_json_field "$repo/server/dist/build.json" dirty) == true ]] && return 0
+  stamp=$(qubius_json_field "$repo/server/dist/build.json" head)
+  [[ $stamp == "$head" ]] || return 0
+  return 1
+}
+
+# 原子写入每个角色的部署 stamp（head / configHash / envHash / port）。
+# port 是这次部署实际使用的端口，供以后改端口时也能检查旧端口上的会话。
+qubius_write_deploy_stamp() {
+  local file=$1 head=$2 config_hash=$3 env_hash=$4 port=${5:-} dir tmp
+  dir=$(dirname "$file")
+  mkdir -p "$dir"
+  tmp="${file}.tmp.$$"
+  printf '{"head":"%s","configHash":"%s","envHash":"%s","port":"%s"}\n' \
+    "$head" "$config_hash" "$env_hash" "$port" >"$tmp"
+  mv -f "$tmp" "$file"
+}
+
+qubius_write_role_stamp() {
+  local repo=$1 data=$2 config=$3 port=${4:-} head
+  head=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)
+  qubius_write_deploy_stamp "$data/.deploy-stamp" "$head" \
+    "$(qubius_hash_file "$config")" \
+    "$(qubius_hash_file "${QUBIUS_ENV_FILE:-$(qubius_env_file)}")" \
+    "$port"
+}
+
+# 读取 stamp 里上次部署实际使用的端口；没有或非法时输出空串。
+qubius_deploy_stamp_port() {
+  local file=$1 port
+  port=$(qubius_json_field "$file" port)
+  if [[ $port =~ ^[0-9]+$ ]]; then printf '%s\n' "$port"; fi
+}
+
+# 依次检查多个端口上的会话（同一端口去重）；任一端口忙就按 guard 的规则等待/中止。
+qubius_guard_busy_ports() {
+  local label=$1 seen=" " port
+  shift
+  for port in "$@"; do
+    [[ -n $port ]] || continue
+    case " $seen " in *" $port "*) continue ;; esac
+    seen="$seen$port "
+    qubius_guard_busy "$label" "$port"
+  done
+}
+
+# 决定是否需要重启：需要返回 0，无变化返回 1；原因写入 QUBIUS_DEPLOY_REASON。
+# QUBIUS_DEPLOY_RESTART=1 强制重启；config/env/HEAD 变化时即使不构建也要重启。
+qubius_deploy_should_restart() {
+  local repo=$1 data=$2 config=$3 healthy=${4:-0} build_needed=${5:-0}
+  local stamp head saved_head saved_config saved_env force=${QUBIUS_DEPLOY_RESTART:-0}
+  QUBIUS_DEPLOY_REASON=""
+
+  if qubius_deploy_on "${force,,}"; then
+    QUBIUS_DEPLOY_REASON="QUBIUS_DEPLOY_RESTART=1，强制重启"
+    return 0
+  fi
+  (( healthy )) || { QUBIUS_DEPLOY_REASON="服务未运行或不健康"; return 0; }
+  (( build_needed )) && { QUBIUS_DEPLOY_REASON="构建产物不是最新"; return 0; }
+
+  stamp="$data/.deploy-stamp"
+  [[ -f $stamp ]] || { QUBIUS_DEPLOY_REASON="没有部署 stamp（首次部署？）"; return 0; }
+  head=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)
+  [[ -n $head ]] || { QUBIUS_DEPLOY_REASON="无法读取 git HEAD"; return 0; }
+  saved_head=$(qubius_json_field "$stamp" head)
+  saved_config=$(qubius_json_field "$stamp" configHash)
+  saved_env=$(qubius_json_field "$stamp" envHash)
+  [[ $saved_head == "$head" ]] || { QUBIUS_DEPLOY_REASON="git HEAD 变化"; return 0; }
+  [[ $saved_config == "$(qubius_hash_file "$config")" ]] \
+    || { QUBIUS_DEPLOY_REASON="config 文件变化"; return 0; }
+  [[ $saved_env == "$(qubius_hash_file "${QUBIUS_ENV_FILE:-$(qubius_env_file)}")" ]] \
+    || { QUBIUS_DEPLOY_REASON="env 文件变化"; return 0; }
+
+  QUBIUS_DEPLOY_REASON="无变化"
+  return 1
+}
+
+# 计算角色当前状态并输出 "<restart|skip>\t<原因>"，供 deploy-job.sh 复用。
+qubius_deploy_role_action() {
+  local repo=$1 data=$2 config=$3 port=$4 healthy=0 build_needed=0 action
+  if [[ $(qubius_health_code "$port") == 200 ]]; then healthy=1; fi
+  if qubius_needs_build "$repo"; then build_needed=1; fi
+  if qubius_deploy_should_restart "$repo" "$data" "$config" "$healthy" "$build_needed"; then
+    action=restart
+  else
+    action=skip
+  fi
+  printf '%s\t%s\n' "$action" "$QUBIUS_DEPLOY_REASON"
+}
+
 # ── ops lock：手工执行的 install/build/start-all 也参与部署页同一把锁 ─────────
 # 被页面作业调用时环境里已有 QUBIUS_OPS_TOKEN，直接跳过，避免嵌套 claim 死锁。
 # 只有本进程真正 claim 成功时才安装 EXIT/INT/TERM trap 负责释放。

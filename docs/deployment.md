@@ -107,7 +107,7 @@ cd ~/co-qubius && QUBIUS_SECONDARY=1 ./deploy/install.sh
 - 把 `deploy/templates/config.yaml.in` 渲染成当前角色的配置（主 `config.yaml`，副 `config-secondary.yaml`），写到 `QUBIUS_CONFIG_DIR`（默认 `<checkout>/.qubius`）；已存在的不覆盖，有差异时备份 `*.bak.<时间戳>`（`--force-config` 时覆盖）。
 - 生成 systemd unit 到 `$QUBIUS_CONFIG_DIR/systemd/`、logrotate 配置到 `$QUBIUS_CONFIG_DIR/logrotate.d/qubius`（只生成，不安装）。
 - 主实例维护 `@reboot <主 checkout>/deploy/start-all.sh` crontab（systemd unit 已启用或 `QUBIUS_SKIP_CRONTAB=1` 时跳过）；副实例不维护。
-- 缺 `node_modules`/构建产物或代码变化时执行 `<checkout>/deploy/build.sh`（`--no-build` 跳过；实例在跑且没加 `--restart` 时也跳过，避免前后端版本错配）。
+- 缺 `node_modules`/构建产物或代码变化时执行 `<checkout>/deploy/build.sh`（默认先 staging 构建再原子切换，见下面的「构建 staging、原子切换与回滚」；`--no-build` 跳过；实例在跑且没加 `--restart` 时也跳过，避免前后端版本错配）。
 - `--clone-peer` 时克隆另一实例的 checkout；`--restart` 时执行 `<checkout>/deploy/start-all.sh --restart`（systemd 接管时只打印手工步骤）。
 - 手工运行时占用 `<configDir>/ops.lock`，与部署页触发的部署和公网入口作业互斥；被部署任务调用时（env 里已有 `QUBIUS_OPS_TOKEN`）自动跳过，避免嵌套死锁。副实例的 `sync`/`rollback` 也参与同一把锁，被占用时快速失败并写维护日志。`@reboot` 的 `start-all.sh` 同样参与；开机时锁被占用（如上次被强杀的手工任务仍在宽限期）会启动失败并记录到 `start-all.log`，不自动重试。
 
@@ -124,6 +124,32 @@ cd ~/co-qubius && QUBIUS_SECONDARY=1 ./deploy/install.sh
 
 `start-all.sh` 按 `QUBIUS_START_PRIMARY` / `QUBIUS_START_SECONDARY`（默认都为 `1`）启动两个实例，可从任一 checkout 运行。只跑副实例的机器设 `QUBIUS_START_PRIMARY=0`；只跑主实例设 `QUBIUS_START_SECONDARY=0`，否则缺失的 checkout 会让它以非零退出。`QUBIUS_START_LAN=0` 时只启动实例，不启动/重启局域网入口（已在运行的代理不停止）。`build.sh` 在依赖变化或缺 `node_modules` 时先 `npm ci`，成功后写 `server/dist/build.json`（`head`、`builtAt`、`dirty`）；`start-all.sh` 用它判断是否重建，工作区脏也会触发下次重建。
 
+### 构建 staging、原子切换与回滚
+
+`deploy/build.sh` 不再直接覆盖正在使用的 `server/dist`、`web/dist`。构建先写到同级的 `dist.next`，成功后再用同一文件系统内的 `mv`/rename 原子切换；旧产物留在 `dist.prev` 供回滚。构建期间旧服务继续读取旧的 live 目录，页面不会因为 `dist` 被清空而 404，构建失败也不会丢失旧产物。
+
+显式模式（调用方不应再依赖默认模式做部署）：
+
+- `build.sh --deps <repo>`：只按 `package-lock.json` 哈希决定是否 `npm ci`，不构建。
+- `build.sh --stage <repo>`：把 server/web 构建到 `server/dist.next`、`web/dist.next` 并写 staging 的 `build.json`；live 完全不动，失败时清理 `.next`。
+- `build.sh --swap <repo>`：校验 staging 的 `index.js`、`build.json`、`index.html` 后，把两侧 `.next` 切换为 live，旧 live 移入 `.prev`；两侧要么都成功，要么恢复原状。
+- `build.sh --rollback <repo>`：删除失败的 live，用两侧 `.prev` 恢复，并清掉残留 `.next`。
+- 默认 `build.sh <repo>` 仍是“按需安装依赖 + `--stage` + `--swap`”，保留给 `install.sh` 和手工构建。
+
+`start-all.sh` / `deploy.sh`（systemd）的部署顺序：
+
+1. 忙碌预检通过后，需要 `npm ci` 时先停实例，把 `node_modules` 改名为 `node_modules.prev`（旧 .prev 先删），再执行 `--deps` 和 `--stage`；任一步失败都恢复 `node_modules.prev`、丢弃 staging，并按旧 live 拉起旧版本。
+2. 不需要 `npm ci` 时直接在旧服务运行期间 `--stage`；失败只丢弃 staging，旧服务不受影响。
+3. 停止前无条件再复检一次会话（新端口 + `.deploy-stamp` 里的旧端口）。构建期间新来会话时中止部署；如果之前因安装依赖停过实例，会先恢复依赖、丢弃 staging 并拉起旧版本，再以退出码 3 结束。
+4. 停实例 → `--swap` → 启动 → 校验 `/api/health` 和 health 里的 `head`。启动失败时停止新进程 → `--rollback` → 恢复 `node_modules.prev`（如有）→ 按旧 live 启动 → 只做健康校验；旧版本也起不来会明确报错。
+5. 成功后才写 `.deploy-stamp`。
+
+多角色部署中，已经成功启动新版本的角色保持新版本（stamp 已写入）；失败角色和尚未启动的角色恢复旧版本。这样每个角色的 `.deploy-stamp` 始终与它实际运行的版本一致，不会出现“stamp 记新版本、进程跑旧版本”。只有本次部署确实备份过 `node_modules`（`npm ci` 路径）时才会恢复 `.prev`；上一次部署遗留的 `node_modules.prev` 不会在未安装依赖的失败部署里覆盖当前依赖。
+
+磁盘占用：成功部署后保留一份 `server/dist.prev`、`web/dist.prev`；安装过依赖时还保留 `node_modules.prev`。因此部署后磁盘上大约有两份构建产物（以及两份 `node_modules`，后者通常远大于产物）。旧 `.prev` 在下次成功 `--swap` 时清理；`node_modules.prev` 在下次安装依赖前覆盖、或在下一次没有安装依赖的成功部署后清理。部署/构建失败时保留的 `.prev` 也可以手工用 `build.sh --rollback <repo>` 恢复。
+
+Windows/macOS 的 Node 部署任务（`deploy/deploy-job.mjs`）使用 `deploy/deploy-lib.mjs` 里同一套 `swapDist` / `rollbackDist` / `node_modules.prev` 逻辑，行为与 shell 一致。Windows 上运行中的 node 进程可能锁住原生模块或文件，因此 Node 路径在安装依赖、重命名 `node_modules`、切换 `dist` 之前都会先停止实例；不要在服务运行时手工替换这些目录。
+
 ### make 快捷部署
 
 `make` 是统一的启动/部署入口，所有目标都通过 Node 执行，Windows、Linux 和 macOS 都能用。Linux 上内部调用 `deploy/*.sh`（保留 systemd、flock、双实例逻辑），Windows/macOS 由 `deploy/cli.mjs` 用 Node 启动/停止，部署走 `deploy/deploy-job.mjs`。npm 脚本仍然保留。
@@ -139,11 +165,37 @@ cd ~/co-qubius && QUBIUS_SECONDARY=1 ./deploy/install.sh
 | `make deploy-wan` | 在 `lan` 基础上应用公网入口：走运行中实例的 `/api/edge`（plan → 确认域名 → apply → 轮询状态），与部署页同一套作业 |
 
 - 部署对象是 env 里的 `QUBIUS_PRIMARY_DIR` / `QUBIUS_SECONDARY_DIR`，默认是当前 checkout。
+- `make restart` 是显式重启：即使构建产物、HEAD、config/env 都没有变化，也会停旧进程并重新启动（Linux 会向 `start-all.sh --restart` 注入 `QUBIUS_DEPLOY_RESTART=1`），可用于恢复卡住进程或仅 shell env 变化后的状态；`make start` 则保持“无变化只做健康校验、不重启”。`start-all.sh --restart` 单独使用时同样受 `QUBIUS_DEPLOY_RESTART` 控制。
 - 自动检测 systemd user unit：`qubius.service` 等已启用或运行中时用 `systemctl --user restart`，否则交给 `start-all.sh --restart`（本机模式会传 `QUBIUS_START_LAN=0`）。依赖变化（`node_modules` 缺失或 `package-lock.json` 变化）时会先停 unit 再 `npm ci`。
 - 部署后检查 `/api/health`，存在构建 stamp 时校验 `head` 与 checkout 的 git HEAD；`deploy-lan` / `deploy-wan` 还会等待局域网端口监听。
 - `deploy-lan` / `deploy-wan` 在结尾会把自动生成的 `<dataDir>/auth-token` 打印一次；页面部署则一次性显示在 `/deploy` 上。
 - `deploy-wan` 需要 env 里已配置 `QUBIUS_EDGECTL_CONFIG`；计划里的差异和警告会先打印，确认后才应用。`QUBIUS_EDGE_YES=1`（或 `--yes`）跳过交互确认，`QUBIUS_EDGE_DOMAIN` 指定确认域名，`QUBIUS_EDGE_WAIT` 指定等待作业的秒数。启用访问令牌时从 `QUBIUS_AUTH_TOKEN` 或 `<dataDir>/auth-token` 读取。
 - 手工执行时参与和部署页相同的 ops lock；部署页任务或公网入口作业进行中时会等待/失败。
+
+### 忙碌保护：不静默打断正在工作的会话
+
+停止或重启一个健康的实例之前，部署会读取 `/api/health` 的 `activeSessions`（排队、运行、等待确认的会话总数）：
+
+- 没有进行中的会话 → 正常继续。
+- `QUBIUS_DEPLOY_FORCE=1` → 跳过保护，强制重启（会中断这些会话）。
+- `QUBIUS_DEPLOY_WAIT=<秒>` → 每 2 秒轮询，直到空闲或超时；超时以退出码 3 失败。
+- Linux 上的交互终端（`make deploy*` 走 `deploy.sh` / `start-all.sh`）→ 询问 `[w]等待 / [f]强制 / [c]取消`，默认取消；选 `w` 时按 `QUBIUS_DEPLOY_WAIT`（未设置则 600 秒）等待。
+- 非交互环境（页面部署、cron，以及 Windows/macOS 的 Node 部署任务）→ 直接失败并以退出码 3 结束，消息里写明还有几个会话。
+
+修改端口时，检查范围同时包含新端口和上次部署实际使用的端口（记录在 `.deploy-stamp` 的 `port` 字段），避免旧端口上的会话被静默中断。被跳过的“无变化”部署不会触发忙碌保护，因为不会停止任何进程。
+
+### 无变化时跳过重启
+
+部署会为每个角色计算两件事：
+
+- `build_needed`：构建产物是否落后于当前 git HEAD / 工作区（与 `start-all.sh` 的判定一致）。
+- config/env 指纹：`${QUBIUS_CONFIG_DIR}/config.yaml`（副实例 `config-secondary.yaml`）和 `QUBIUS_ENV` 文件的 sha256。
+
+每个角色在 `${dataDir}/.deploy-stamp` 原子记录 `head`、`configHash`、`envHash`。服务健康、无需构建、stamp 与当前值一致且未设置 `QUBIUS_DEPLOY_RESTART=1` 时，跳过构建和重启，只做健康校验，并照常应用局域网/公网入口。config 或 env 变化时即使不构建也会重启（监听地址、allowedHosts 等只在启动时读取）。页面部署在无变化时也不会先停掉当前进程，页面不会因此断线。字段说明见 `deploy/env.example`。
+
+### 强制重启
+
+`QUBIUS_DEPLOY_RESTART=1` 忽略“无变化”判定，始终重启；第一次部署或没有 stamp 时也会正常重启。三个开关都可以写在 env 文件里，或通过环境变量传给 `make deploy*` / 部署页任务。
 
 ## 页面部署与冷启动
 
@@ -176,9 +228,9 @@ Windows 没有 bash/systemd/flock，部署页改走 Node 任务 `deploy/deploy-j
 1. 读取 `<configDir>/env` 和 `projects.yaml`，为每个启用的角色渲染 `config.yaml` / `config-secondary.yaml`（旧文件内容不同时备份 `*.bak.<时间戳>`）。
 2. 副实例目录缺失且启用了 `clonePeer` 时 `git clone`。
 3. 勾选「部署前从远端拉取最新代码」时，从各 checkout 的 `origin` 快进拉取当前分支（与 Linux 的 `deploy/pull-latest.sh` 语义一致）。
-4. `package-lock.json` 变化或 `node_modules` 缺失时 `npm ci`，然后按需 `npm run build`，写 `server/dist/build.json`。
-5. 停掉旧的服务进程（当前服务根据 server 传入的 PID 和 `process.argv[1]` 判断，其它实例按 `<dataDir>/qubius.pid`）。Windows 上 `process.kill` 是硬杀，所以 server 启动时会在 `<dataDir>/shutdown-token` 写一个随机令牌；部署任务先请求 `POST /api/internal/shutdown` 让它 flush 会话并优雅退出，15 秒未退出才强制结束。等端口释放后启动 `node server/dist/index.js`。
-6. 用 `/api/health` 校验端口、pid 和 `head`；`QUBIUS_START_LAN=1` 且配置目录里有 `lan-proxy.credentials` 时顺带重启 `deploy/lan-proxy.mjs`。部署页勾选局域网入口会自动写入凭据，并在部署响应里一次性返回用户名/密码/访问令牌。
+4. 与 Linux 一样用 staging 构建：需要安装依赖时先停旧进程并把 `node_modules` 备份为 `node_modules.prev`，再 `npm ci`；随后 server 用 `tsc --outDir dist.next`、web 先 `tsc --noEmit` 再 `vite build --outDir dist.next`，写 `server/dist.next/build.json`。不需要安装依赖时旧服务继续运行，live 完全不动。
+5. 停止前再检查一次会话；停掉旧的服务进程（当前服务根据 server 传入的 PID 和 `process.argv[1]` 判断，其它实例按 `<dataDir>/qubius.pid`）。Windows 上 `process.kill` 是硬杀，所以 server 启动时会在 `<dataDir>/shutdown-token` 写一个随机令牌；部署任务先请求 `POST /api/internal/shutdown` 让它 flush 会话并优雅退出，15 秒未退出才强制结束。等端口释放后把 `dist.next` 原子切换为 live（旧产物留作 `.prev`），再启动 `node server/dist/index.js`。
+6. 用 `/api/health` 校验端口、pid 和 `head`；失败时停止新进程、用 `.prev` 回滚、恢复 `node_modules.prev`，再启动旧版本。只有成功后才写部署 stamp。`QUBIUS_START_LAN=1` 且配置目录里有 `lan-proxy.credentials` 时顺带重启 `deploy/lan-proxy.mjs`。部署页勾选局域网入口会自动写入凭据，并在部署响应里一次性返回用户名/密码/访问令牌。
 
 默认目录和 Linux 一致：配置、env、数据和日志都在当前 checkout 的 `.qubius/`（整个目录已 gitignore），不再使用 `%APPDATA%` / `%LOCALAPPDATA%`。`QUBIUS_CONFIG_DIR` 等 env 仍然优先。手工 `npm start` 时会自动读取 `.qubius/` 里的配置和 env，不需要额外设置 `QUBIUS_CONFIG`。
 
