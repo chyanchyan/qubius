@@ -9,6 +9,7 @@ import readline from "node:readline/promises";
 import { spawn } from "node:child_process";
 import {
   DEFAULT_REGISTRY,
+  NPM_LOGLEVELS,
   REGISTRIES,
   defaultConfigDir,
   listenerPids,
@@ -29,7 +30,7 @@ const npm = "npm";
 
 function help() {
   console.log(`用法：npm run quickstart [-- --registry <地址或序号>] [--config-dir <绝对路径>]
-                     [--port <端口>] [--dry-run]
+                     [--port <端口>] [--verbose] [--loglevel <级别>] [--dry-run]
 
 不带参数时会交互式询问：
   1. npm 源：官方源、npmmirror（淘宝）、腾讯云、华为云，也可以直接粘贴地址
@@ -38,6 +39,9 @@ function help() {
   3. 监听端口：默认 8787（副实例 8788），只绑定 127.0.0.1
 
 随后依次执行 npm ci、npm run build、npm start。
+--verbose（或 -v）输出 npm 安装/构建的详细日志，并实时显示依赖的安装脚本输出；
+--loglevel 可以直接指定 npm 日志级别（${NPM_LOGLEVELS.join("、")}），
+不想看日志时用 --loglevel silent。
 只有首次启动需要选择配置目录；运行中的服务不能切换配置目录。
 已有配置时端口以配置里的 listen 为准；被占用时交互菜单可以选择
 停止占用进程（二次确认；Windows 上强制结束）或换一个空闲端口。`);
@@ -98,19 +102,26 @@ async function askConfigDir(preset, env) {
   }
 }
 
-function run(label, args, env) {
+function run(label, args, env, { verbose = false } = {}) {
   return new Promise((resolve, reject) => {
     console.log(`\n[quickstart] ${label}`);
+    if (verbose) console.log(`[quickstart] 命令：npm ${args.join(" ")}`);
+    const startedAt = Date.now();
     // Windows 上 npm 是 npm.cmd，需要经 cmd.exe 启动。
     const child = spawn(npm, args, { stdio: "inherit", shell: isWindows, env });
     child.on("error", (error) => reject(new Error(`${label} 启动失败：${error.message}`)));
     child.on("exit", (code, signal) => {
+      const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
       if (signal) {
         reject(new Error(`${label} 被信号 ${signal} 终止`));
         return;
       }
-      if (code === 0) resolve();
-      else reject(new Error(`${label} 失败（退出码 ${code ?? "未知"}）`));
+      if (code === 0) {
+        console.log(`[quickstart] ${label} 完成（用时 ${seconds}s）`);
+        resolve();
+      } else {
+        reject(new Error(`${label} 失败（退出码 ${code ?? "未知"}，用时 ${seconds}s）`));
+      }
     });
   });
 }
@@ -332,6 +343,22 @@ async function main() {
   }
 
   const env = { ...process.env };
+  // 不指定时沿用 npm 默认的 notice 级别；--verbose / --loglevel 让安装过程更详细。
+  let npmLoglevel = "";
+  if (options.loglevel !== undefined) {
+    npmLoglevel = String(options.loglevel).trim();
+    if (!NPM_LOGLEVELS.includes(npmLoglevel)) {
+      throw new Error(`--loglevel 只支持 ${NPM_LOGLEVELS.join("、")}，收到：${options.loglevel ?? ""}`);
+    }
+  } else if (options.verbose) {
+    npmLoglevel = "verbose";
+  }
+  if (npmLoglevel) {
+    env.npm_config_loglevel = npmLoglevel;
+    // npm 默认会缓存依赖的安装脚本（例如 node-pty 编译）输出，只在失败时展示。
+    env.npm_config_foreground_scripts = "true";
+  }
+
   const registry = await askRegistry(options.registry);
   env.npm_config_registry = registry;
 
@@ -343,6 +370,9 @@ async function main() {
 
   console.log(`\n[quickstart] npm 源：${registry}`);
   console.log(`[quickstart] 配置目录：${configDir || `默认（${defaultConfigDir(env)}）`}`);
+  if (npmLoglevel) {
+    console.log(`[quickstart] 详细日志：npm --loglevel=${npmLoglevel}，并实时显示依赖安装脚本输出`);
+  }
 
   const configFile = findConfigFile(env);
   const configuredPort = configFile ? configListenPort(configFile) : undefined;
@@ -364,7 +394,9 @@ async function main() {
       ? configuredPort ?? 8787
       : parsePort(options.port) ?? parsePort(env[envKey]) ?? (secondary ? 8788 : 8787);
     console.log(`[quickstart] 监听端口：${port}（仅 127.0.0.1；对外暴露请用反向代理或 SSH 隧道）`);
-    console.log("[quickstart] --dry-run：将依次执行 npm ci、npm run build、npm start");
+    const ciPreview = ["ci", "--no-audit", "--no-fund"];
+    if (npmLoglevel) ciPreview.push(`--loglevel=${npmLoglevel}`, "--foreground-scripts");
+    console.log(`[quickstart] --dry-run：将依次执行 npm ${ciPreview.join(" ")}、npm run build、npm start`);
     return;
   }
 
@@ -380,19 +412,22 @@ async function main() {
   }
   console.log(`[quickstart] 监听端口：${port}（仅 127.0.0.1；对外暴露请用反向代理或 SSH 隧道）`);
 
+  const ciArgs = ["ci", "--no-audit", "--no-fund"];
+  if (npmLoglevel) ciArgs.push(`--loglevel=${npmLoglevel}`, "--foreground-scripts");
+
   try {
-    await run("安装依赖：npm ci", ["ci", "--no-audit", "--no-fund"], env);
+    await run("安装依赖：npm ci", ciArgs, env, { verbose: Boolean(npmLoglevel) });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
       `${message}\n可以重新运行并换一个 npm 源；如果失败在 node-pty 编译，请先安装 python3、make 和 C++ 编译器（g++ 或 clang++）。`,
     );
   }
-  await run("构建：npm run build", ["run", "build"], env);
+  await run("构建：npm run build", ["run", "build"], env, { verbose: Boolean(npmLoglevel) });
 
   console.log(`\n[quickstart] 构建完成。启动后打开 http://127.0.0.1:${port}/deploy 完成首次部署向导。`);
   console.log("[quickstart] 按 Ctrl-C 停止服务。\n");
-  await run("启动服务：npm start", ["start"], env);
+  await run("启动服务：npm start", ["start"], env, { verbose: Boolean(npmLoglevel) });
 }
 
 main().catch((error) => {

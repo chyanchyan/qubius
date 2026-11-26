@@ -84,6 +84,8 @@
 
 新机器克隆仓库后，可以先运行 `npm run quickstart`：它会让用户选择 npm 官方源或国内镜像（npmmirror、腾讯云、华为云）、可选的配置目录和监听端口，然后执行 `npm ci`、`npm run build`、`npm start`。启动后打开 `http://127.0.0.1:<端口>`（默认 8787）进入首次部署向导；服务只绑定 `127.0.0.1`。`npm run quickstart -- --registry 2 --config-dir <绝对路径> --port 8790 --dry-run` 可以非交互地预览将执行的步骤；配置目录只在启动前可选，运行中的服务不能切换。
 
+安装和构建过程默认按 npm 的 `notice` 级别输出，只显示每个步骤的最终结果。排查依赖安装、node-pty 编译等问题时加 `--verbose`（等价于 `--loglevel=verbose` 并打开 `--foreground-scripts`），会输出 npm 的详细日志并实时显示依赖安装脚本的输出；需要最全的日志可以加 `--loglevel=silly`，只想看 quickstart 自己的提示则用 `--loglevel=silent`。
+
 启动前会检查端口：8787（副实例 8788）被占用时会列出占用进程的 PID 和命令，并给出三个选项：停止占用进程（二次确认；Linux/macOS 发送 SIGTERM 优雅停止，Windows 用 `taskkill /F` 强制结束，可能丢失最近约 1 秒未落盘的会话改动）、换一个空闲端口、退出；也可以用 `--port` 直接指定。检测到已有 `config.yaml` / `config-secondary.yaml` 时，端口以配置里的 `listen` 为准，此时仍可选择停止旧实例或退出，改端口需要修改配置。
 
 需要 systemd、副实例或自定义目录布局时，继续用下面的安装脚本。在每个 checkout 里运行自己的安装脚本（默认 `~/qubius` 和 `~/co-qubius`）：
