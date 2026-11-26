@@ -17,6 +17,7 @@ import {
 import { createPortal } from "react-dom";
 import { answerBody } from "./answers";
 import { addPending, hasPending, removePending } from "./pending-actions";
+import { willQueue } from "./queue-view";
 import { ARCHIVE_RESTORE_NOTE, deleteDetail } from "./archive-copy";
 import { filterArchivedSessions, isPendingCleanup } from "./archive-search";
 import {
@@ -2816,14 +2817,19 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
     const workflow = detected ?? (workflowMode || undefined);
     if (detected) setWorkflowMode(detected);
     /* 先把这条消息画进记录，再发请求：POST 往返 + SSE 回显期间的空白不再出现。
-       条目带 status = "sending"，由服务端返回的真实条目替换。 */
+       条目带 status = "sending"，由服务端返回的真实条目替换。
+       排队发送的那条不画进记录：它只在输入框上方的排队面板里，等 agent 真正
+       取走后才出现在消息记录中。 */
     const current = sessionRef.current;
-    const optimistic = current ? beginOptimisticSend(current, text, draftImages) : null;
+    const queuedSend = current ? willQueue(current, interject) : false;
+    const optimistic = current && !queuedSend ? beginOptimisticSend(current, text, draftImages) : null;
+    if (current) {
+      draft.clearDraft();
+      attachments.clear();
+    }
     if (optimistic) {
       optimisticRef.current = optimistic;
       setSession((previous) => (previous ? appendOptimistic(previous, optimistic.item) : previous));
-      draft.clearDraft();
-      attachments.clear();
     }
     try {
       const data = await sendMessage(
@@ -2843,6 +2849,9 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
       if (optimistic) {
         optimisticRef.current = null;
         setSession((previous) => (previous ? dropOptimistic(previous, optimistic.item.id) : previous));
+      }
+      // 排队发送没有临时条目，但输入区一样已经清空：失败时同样要补回。
+      if (current) {
         // 发送期间用户可能已经在输入新内容；只补回空白的输入框，不覆盖新输入。
         setPrompt((current) => (current.trim() ? current : draftText));
         attachments.restoreImages(draftImages);
@@ -3173,7 +3182,7 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
 
   const active = session.phase === "queued" || session.phase === "running" || session.phase === "needs_input";
   /* 轮次刚落定但还有排队消息没被取走时，Enter 仍然是排队语义。 */
-  const queueMode = active || Boolean(session.queue && session.queue.length > 0);
+  const queueMode = willQueue(session, false);
   const continueBusy = actions.busy === "continue";
   /* 后台 shell 任务运行时不改变 phase（仍是 completed），但服务端会拒绝
      回滚/分叉；菜单要按这里一起隐藏。 */

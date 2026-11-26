@@ -102,9 +102,9 @@ agent 用 Bash 的 `run_in_background` 启动下载、安装等耗时命令后�
 - `PATCH /api/sessions/<id>`：改名、置顶，或改 `providerId` / `model` / `effort`。
 - `POST /api/sessions/<id>/messages`：body `{ prompt, images?, workflow?, interject? }`。`interject: true` 是插话，立即交给正在跑的 agent；缺省是排队，当前轮结束后再执行。
 - `GET /api/sessions/<id>/queue/<promptId>`：读取未被取走的排队消息完整正文，用于编辑。
-- `PATCH /api/sessions/<id>/queue/<promptId>`：body `{ text }`，改写排队消息正文（对话记录同步更新）。
+- `PATCH /api/sessions/<id>/queue/<promptId>`：body `{ text }`，改写排队消息正文（消息还没写进对话记录）。
 - `POST /api/sessions/<id>/queue/<promptId>/send`：现在发送，提前放行这条排队消息。
-- `DELETE /api/sessions/<id>/queue/<promptId>`：删除未被取走的排队消息（队列和对话记录一起移除）。
+- `DELETE /api/sessions/<id>/queue/<promptId>`：删除未被取走的排队消息（只从队列移除，对话记录里本来就没有它）。
 - `GET /api/sessions/<id>/git`、`POST /api/sessions/<id>/git`（`commit` / `commit-push` / `push`）。
 - `GET|POST /api/sessions/<id>/diff-comments`：读取或新建 diff 行级评论；`PATCH|DELETE /api/sessions/<id>/diff-comments/<commentId>` 修改/删除单条，`DELETE /api/sessions/<id>/diff-comments` 清空。评论存在 `<dataDir>/diff-comments/<对话 id>.json`。
 - `GET|POST /api/sessions/<id>/pull-request`：读取或创建当前分支的 GitHub PR / GitLab MR。依赖本机已登录的 `gh` / `glab`；创建前会校验会话分支并 `git push -u origin HEAD`（不 force），body `{ title, body, base? }`。
@@ -142,7 +142,7 @@ agent 用 Bash 的 `run_in_background` 启动下载、安装等耗时命令后�
 - 每行可直接改名、置顶/取消置顶或进入详情；等待确认的对话在行下方直接展开回答表单。
 - 底部是按接口分组的 token 和成本汇总，再列出最耗用的对话。
 
-详情页工具条可改名、置顶、导出和「继续上次」。输入框上方自上而下依次是工作流/子任务进度条、当前改动（Diff）和排队消息面板：对话正在跑时 Enter 默认排队，当前轮结束后依次执行；`Ctrl+Enter`（macOS 上 `Cmd+Enter`）插话，立即交给正在跑的 agent。每条排队消息可以「现在发送」、编辑或删除（触摸端长按发送按钮等同插话，队列条目上的按钮常驻）。排队消息在对话记录里固定排在当前这一轮的内容之后，不会被插在发送位置；轮末被 agent 取走后才接着显示它自己的回复。删除会同时移除对话记录里的这条用户消息；排队消息全部处理完后不会继续停在“排队”。发送时先在本地渲染并标「发送中」，服务端确认后换成正式条目，失败则撤回并把内容放回输入框。「导出 Markdown」保存用户、助手、工具、thinking 和图片链接。
+详情页工具条可改名、置顶、导出和「继续上次」。输入框上方自上而下依次是工作流/子任务进度条、当前改动（Diff）和排队消息面板：对话正在跑时 Enter 默认排队，当前轮结束后依次执行；`Ctrl+Enter`（macOS 上 `Cmd+Enter`）插话，立即交给正在跑的 agent。每条排队消息可以「现在发送」、编辑或删除（触摸端长按发送按钮等同插话，队列条目上的按钮常驻）。排队消息只显示在输入框上方的排队面板里，不占据对话记录的位置；轮末被 agent 真正取走时才写进消息记录，并接着显示它自己的回复。删除只从队列里移除；排队消息全部处理完后不会继续停在“排队”。发送时先在本地渲染并标「发送中」，服务端确认后换成正式条目，失败则撤回并把内容放回输入框。「导出 Markdown」保存用户、助手、工具、thinking 和图片链接。
 
 对话空闲时，可回滚的每条用户消息点气泡即可编辑，下方同时显示「⋯」菜单，提供回滚到这条消息之前、编辑并重新发送和分叉新对话（行为见[会话机制](#会话机制)）。回滚/分叉/重发前的选择在气泡旁的内联面板里完成，不弹阻塞式对话框，点面板外或按 Escape 收起；点编辑框外的区域会直接取消编辑。当前对话回滚重发时面板里有「同时回滚代码改动」勾选项；回滚后输入框为空时会自动填回原消息文本。旧版本发送的消息没有 SDK 标记，不显示这些操作；对话运行中、排队、等待确认或有后台任务正在运行时也会隐藏。
 

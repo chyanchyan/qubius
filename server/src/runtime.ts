@@ -841,7 +841,6 @@ export class Runtime {
         this.restarting.add(id);
         this.releasing.add(id);
         live.close();
-        this.recordPrompt(id, queued, true);
         const bucket = this.buffered.get(id) ?? [];
         bucket.push(queued);
         this.buffered.set(id, bucket);
@@ -854,12 +853,13 @@ export class Runtime {
       // 只看「当前轮是否真的在跑」：残留的 running 子任务不会有 result 来
       // 放行，若把它算作忙，排队消息会永远挂住并占着并发槽。
       const defer = options.interject !== true && (!agentIdle || live.size > 0);
-      this.recordPrompt(id, queued, defer);
+      // 立即执行的这条先写进记录，POST 返回的记录和本地乐观条目才能对上；
+      // 排队的那条不占记录位置，等 agent 真正取走时才写（见 onConsume）。
+      if (!defer) this.recordPrompt(id, queued);
       live.push(queued, defer);
       return;
     }
     if (!this.store.get(id)) return;
-    this.recordPrompt(id, queued, true);
     const bucket = this.buffered.get(id) ?? [];
     bucket.push(queued);
     this.buffered.set(id, bucket);
@@ -869,13 +869,18 @@ export class Runtime {
   }
 
   /**
-   * 把一条 prompt 写进对话记录。排队中的消息带 queued 标记，固定显示在记录
-   * 末尾，当前轮后续的输出插到它前面，不会被插在发送位置。
+   * 把一条 prompt 写进对话记录。
+   *
+   * 排队中的消息不占记录位置：它们只存在于运行时队列和输入框上方的排队面板，
+   * 等 agent 真正取走时才通过这里落进记录。立即执行的那条在提交时先写，保证
+   * POST 返回的记录里已经有它。
    *
    * 新建会话的首条消息已经由 store.create 记录、回滚重发也先写好了记录：
-   * 用 uuid 去重，重复调用不会再多出一条。
+   * 用 uuid 去重，重复调用不会再多出一条。写过的条目记在 prompt.transcriptId
+   * 上，agent 取走时再调用一次会直接跳过。
    */
-  private recordPrompt(id: string, prompt: QueuedPrompt, queued: boolean): void {
+  private recordPrompt(id: string, prompt: QueuedPrompt): void {
+    if (prompt.transcriptId) return;
     const session = this.store.get(id);
     if (!session) return;
     // 新建会话的首条消息、回滚重发都已经先写好了记录：找到原条目就行。
@@ -892,7 +897,6 @@ export class Runtime {
       prompt.text,
       prompt.storedImages ?? [],
       prompt.uuid,
-      { queued },
     );
     const message = updated.messages.find((item) => item.role === "user" && !before.has(item.id));
     if (message) prompt.transcriptId = message.id;
@@ -1194,10 +1198,10 @@ export class Runtime {
       return true;
     }, (item, skill) => {
       // 消息真正开始执行时才切换当前轮的工作流；排队期间不能提前生效。
-      // 回滚截断点由 applySdkMessage 在 user 回显时记录（真实/fake 走同一路径）。
+      // 同一时刻把消息写进对话记录：排队期间它只在排队面板里，被 agent 取走
+      // 后才出现在记录中。回滚截断点由 applySdkMessage 在 user 回显时记录。
       if (this.store.get(id)) {
-        // agent 已经取走：去掉排队标记，后面的输出才会排到这条消息之后。
-        if (item.transcriptId) this.store.clearQueuedMessage(id, item.transcriptId);
+        this.recordPrompt(id, item);
         this.store.setWorkflow(id, skill);
       }
     });

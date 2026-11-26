@@ -1132,7 +1132,7 @@ test("fake 运行：两条排队 prompt 都通过 user 回显记录 forkPoint", 
   }
 });
 
-test("排队消息排在正在运行的那一轮之后，被 agent 取走后才让后续输出跟进", async () => {
+test("排队消息被 agent 取走前只在队列里，取走后按真实顺序写进记录", async () => {
   const dataDir = tempDir();
   let store: Store | undefined;
   try {
@@ -1140,26 +1140,26 @@ test("排队消息排在正在运行的那一轮之后，被 agent 取走后才�
     store = runtimeStore;
     runtimeStore.create(createInput("s1"));
     runtime.submit("s1", { text: "慢慢来", images: [] });
-    // 第一轮的正文还没到达时又排了一条：它固定在记录末尾等着。
+    // 第一轮的正文还没到达时又排了一条：它不占对话记录的位置。
     runtime.submit("s1", { text: "第二条", images: [] });
 
-    // 第一轮的正文到达后，排队消息仍然排在它后面，而不是停在发送位置。
     await waitUntil(() => runtimeStore.get("s1")?.messages.some((item) => item.role === "assistant") === true);
     const during = runtimeStore.get("s1")!.messages;
-    assert.equal(during.at(-1)?.text, "第二条");
-    assert.equal(during.at(-1)?.queued, true);
-    assert.ok(during.slice(0, -1).some((item) => item.role === "assistant"));
+    assert.ok(!during.some((item) => item.text === "第二条"));
+    assert.deepEqual(runtime.queueSnapshot("s1").map((item) => item.text), ["第二条"]);
 
-    // 轮末放行、agent 取走：标记清除，第二条自己的输出接在它后面。
+    // 轮末放行、agent 真正取走：这一刻才写进记录，第二条自己的输出接在它后面。
     await waitUntil(() => {
       const messages = runtimeStore.get("s1")?.messages ?? [];
       const index = messages.findIndex((item) => item.text === "第二条");
       return index >= 0
-        && messages.every((item) => item.queued !== true)
         && messages.slice(index + 1).some((item) => item.role === "assistant");
     }, 3000);
     const after = runtimeStore.get("s1")!.messages;
-    assert.ok(after.findIndex((item) => item.text === "第二条") < after.length - 1);
+    const index = after.findIndex((item) => item.text === "第二条");
+    // 第一轮的输出已经在它前面，不是停在发送位置。
+    assert.ok(index > 0);
+    assert.ok(after.slice(0, index).some((item) => item.role === "assistant"));
 
     await runtime.stop("s1");
   } finally {

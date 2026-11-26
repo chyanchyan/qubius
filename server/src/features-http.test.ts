@@ -318,8 +318,9 @@ test("排队消息支持查看、编辑、现在发送和删除", async () => {
     );
     assert.equal(edited.status, 200);
     assert.equal(entryOf(edited.data, "改过的排队")?.id, firstId);
-    // 对话记录里的同一条消息也要同步改写。
-    assert.ok(harness.store.get(id)?.messages.some((item) => item.text === "改过的排队"));
+    // 排队期间消息只存在于队列里，编辑不会提前写进对话记录。
+    assert.ok(!harness.store.get(id)?.messages.some((item) => item.text === "改过的排队"));
+    assert.ok(!harness.store.get(id)?.messages.some((item) => item.text === longText));
 
     const sentNow = await call<QueueSnapshot>(
       harness,
@@ -328,7 +329,7 @@ test("排队消息支持查看、编辑、现在发送和删除", async () => {
     );
     assert.equal(sentNow.status, 200);
 
-    // 删除会同时移除队列和对话记录里的消息。
+    // 删除只从队列移除；它本来就还没写进对话记录。
     const removed = await call<QueueSnapshot>(
       harness,
       "DELETE",
