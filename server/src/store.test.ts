@@ -1769,6 +1769,39 @@ test("create/addUserMessage 保存 sdkUuid，并给用户消息写入 at", async
   }
 });
 
+test("排队消息固定排在末尾，会立即执行的消息插到它前面", async () => {
+  const dataDir = tempDir();
+  try {
+    const store = new Store(dataDir);
+    store.create(createInput("s1", "第一问"));
+    store.addUserMessage("s1", "排队", [], "q1", { queued: true });
+    // 排队期间插话：要排在排队消息之前，因为它是当前轮的一部分。
+    store.addUserMessage("s1", "插话", [], "q2");
+    const users = store.get("s1")!.messages.filter((item) => item.role === "user");
+    assert.deepEqual(users.map((item) => item.text), ["第一问", "插话", "排队"]);
+    assert.equal(users[2]?.queued, true);
+    assert.equal(users[1]?.queued, undefined);
+
+    // agent 取走后标记清除，后续消息正常排在它后面。
+    store.clearQueuedMessage("s1", store.get("s1")!.messages.find((item) => item.text === "排队")!.id);
+    assert.equal(store.get("s1")!.messages.some((item) => item.queued === true), false);
+    store.addUserMessage("s1", "后续", [], "q3");
+    assert.deepEqual(
+      store.get("s1")!.messages.filter((item) => item.role === "user").map((item) => item.text),
+      ["第一问", "插话", "排队", "后续"],
+    );
+
+    // 停止会话时把剩余排队标记一起清掉。
+    store.addUserMessage("s1", "又一条排队", [], "q4", { queued: true });
+    store.clearQueuedMessages("s1");
+    assert.equal(store.get("s1")!.messages.some((item) => item.queued === true), false);
+
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("applyRewind 在 newSdkSession 且没有新 SDK 会话 id 时抛错", () => {
   const dataDir = tempDir();
   try {

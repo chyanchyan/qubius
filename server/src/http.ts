@@ -1459,12 +1459,13 @@ export function createAppServer(options: {
         // 每条用户消息都带一个 uuid：SDK 会把它作为 transcript 的 chain uuid，
         // 回滚/分叉依赖它。
         const sdkUuid = randomUUID();
-        store.addUserMessage(id, input.text, images, sdkUuid);
         // 没有活跃 query 时，立即把工作流写进 summary，前端不必等 agent 消费
         // prompt。已有 live query 时让 submit 先走配置重启判断，工作流仍由
         // runtime 在 prompt 被消费/轮末时切换。
         if (!runtime.isActive(id)) store.previewWorkflow(id, input.workflow, input.text);
-        runtime.submit(id, toRuntimePrompt(input, sdkUuid), { interject: input.interject });
+        // 记录由 runtime 统一写入：排队中的消息带内部标记，固定排在正在运行
+        // 那一轮的输出之后，而不是插在发送位置。
+        runtime.submit(id, toRuntimePrompt(input, sdkUuid, images), { interject: input.interject });
         sendJson(res, 200, { session: withQueue(store.summary(id, true)) });
         return;
       }
@@ -1612,7 +1613,7 @@ export async function createSession(
   if (skill === "discuss" || skill === "dis-prl") {
     return ctx.store.prepareDiscussion(session.id, undefined, skill);
   }
-  ctx.runtime.submit(session.id, toRuntimePrompt(input, sdkUuid));
+  ctx.runtime.submit(session.id, toRuntimePrompt(input, sdkUuid, images));
   return session;
 }
 
@@ -2321,7 +2322,7 @@ function readDiscussionParticipants(
   return participants;
 }
 
-function toRuntimePrompt(input: PromptInput, uuid?: string): RuntimePrompt {
+function toRuntimePrompt(input: PromptInput, uuid?: string, storedImages?: ImageRef[]): RuntimePrompt {
   return {
     text: input.text,
     images: input.images.map((image) => ({
@@ -2329,6 +2330,8 @@ function toRuntimePrompt(input: PromptInput, uuid?: string): RuntimePrompt {
       // 解析时已经拿到 base64，直接复用；只有手工构造的图片才需要再编码。
       data: image.base64 ?? image.data.toString("base64"),
     })),
+    // 供 runtime 在 prompt 真正被 agent 取走时写进对话记录。
+    ...(storedImages && storedImages.length > 0 ? { storedImages } : {}),
     ...(input.workflow ? { workflow: input.workflow } : {}),
     ...(uuid ? { uuid } : {}),
   };

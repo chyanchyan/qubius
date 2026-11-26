@@ -557,7 +557,13 @@ export class Store {
     return session;
   }
 
-  addUserMessage(id: string, text: string, images: ImageRef[] = [], sdkUuid?: string): SessionCore {
+  addUserMessage(
+    id: string,
+    text: string,
+    images: ImageRef[] = [],
+    sdkUuid?: string,
+    options: { queued?: boolean } = {},
+  ): SessionCore {
     const current = this.require(id);
     const now = new Date().toISOString();
     const message: TranscriptItem = {
@@ -568,14 +574,55 @@ export class Store {
     };
     if (images.length > 0) message.images = images;
     if (sdkUuid) message.sdkUuid = sdkUuid;
+    // 排队消息固定排在记录末尾；会立即执行的消息（插话）插到它们前面，
+    // 不能接到队列后面，否则先发的那条排队消息反而排到了它后面。
+    let messages: TranscriptItem[];
+    if (options.queued) {
+      message.queued = true;
+      messages = [...current.messages, message];
+    } else {
+      let index = current.messages.length;
+      while (index > 0 && isQueuedUser(current.messages[index - 1])) index -= 1;
+      messages = index === current.messages.length
+        ? [...current.messages, message]
+        : [...current.messages.slice(0, index), message, ...current.messages.slice(index)];
+    }
     // 工作流不在这里切换：消息可能还在排队。由 runtime 在 prompt 真正被 agent
     // 消费时调用 setWorkflow；同一条 query run 里则等上一轮 result 后再生效。
     return this.commit({
       ...current,
-      messages: limitTranscript([...current.messages, message]),
+      messages: limitTranscript(messages),
       summary: summarizeInput(text, images),
       updatedAt: now,
     });
+  }
+
+  /**
+   * agent 取走一条排队消息：清掉“排队中”标记，之后这一轮的新输出才会排到它
+   * 后面。找不到（例如旧消息或已经清过）时什么都不做。
+   */
+  clearQueuedMessage(id: string, messageId: string): void {
+    const current = this.sessions.get(id);
+    if (!current) return;
+    const index = current.messages.findIndex(
+      (item) => item.id === messageId && item.queued === true,
+    );
+    if (index < 0) return;
+    const messages = current.messages.slice();
+    messages[index] = { ...messages[index]!, queued: undefined };
+    this.commit({ ...current, messages });
+  }
+
+  /**
+   * 停止会话后队列里的消息不会再执行：清掉所有“排队中”标记，避免后续输出
+   * 一直插在它们前面。消息本身留在记录里（用户确实发过）。
+   */
+  clearQueuedMessages(id: string): void {
+    const current = this.sessions.get(id);
+    if (!current || !current.messages.some((item) => item.queued === true)) return;
+    const messages = current.messages.map((item) =>
+      item.queued === true ? { ...item, queued: undefined } : item);
+    this.commit({ ...current, messages });
   }
 
   /**
@@ -1645,6 +1692,9 @@ function recover(session: SessionCore): SessionCore {
           ...item,
           partial: undefined,
           streaming: undefined,
+          // 排队标记只属于上一个进程的运行时队列；重启后这些消息不会再被执行，
+          // 留着会让后续输出一直插到它们前面。
+          queued: undefined,
           text: typeof item.text === "string" ? item.text : "",
         })),
     ),
@@ -2014,6 +2064,11 @@ function startedBeforeCut(startedAt: string | undefined, cutAt: string | undefin
   const cut = Date.parse(cutAt);
   if (!Number.isFinite(started) || !Number.isFinite(cut)) return startedAt < cutAt;
   return started < cut;
+}
+
+/** 还没被 agent 取走、固定在记录末尾的排队用户消息。 */
+function isQueuedUser(item: TranscriptItem | undefined): boolean {
+  return Boolean(item && item.role === "user" && item.queued === true);
 }
 
 function summarizeInput(text: string, images: ImageRef[] | undefined): string {

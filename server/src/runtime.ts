@@ -41,6 +41,7 @@ import type {
   DiscussionStrategy,
   Effort,
   ImageMediaType,
+  ImageRef,
   PendingQuestion,
   PendingRequest,
   QueueEntry,
@@ -160,6 +161,8 @@ interface Waiter {
 export interface RuntimePrompt {
   text: string;
   images: Array<{ mediaType: ImageMediaType; data: string }>;
+  /** 已经存进会话目录、用于对话记录的图片引用；缺省时记录里不带图片。 */
+  storedImages?: ImageRef[];
   /** 聊天输入区显式选择的工作流；会作为独立文本块提示 agent 调用对应 skill。 */
   workflow?: WorkflowSkill;
   /**
@@ -187,7 +190,12 @@ export function workflowInstruction(skill: WorkflowSkill): string {
 }
 
 /** 排队中的消息额外带上提交时间和用于撤回的 id。 */
-export type QueuedPrompt = RuntimePrompt & { id: string; createdAt: string };
+export type QueuedPrompt = RuntimePrompt & {
+  id: string;
+  createdAt: string;
+  /** 写进对话记录后的条目 id；被 agent 取走时用它清掉排队标记。 */
+  transcriptId?: string;
+};
 
 /** 一轮 query 启动时读到的运行配置；用于检测中途改了 provider/model/effort。 */
 export interface RunConfig {
@@ -830,6 +838,7 @@ export class Runtime {
         this.restarting.add(id);
         this.releasing.add(id);
         live.close();
+        this.recordPrompt(id, queued, true);
         const bucket = this.buffered.get(id) ?? [];
         bucket.push(queued);
         this.buffered.set(id, bucket);
@@ -842,16 +851,48 @@ export class Runtime {
       // 只看「当前轮是否真的在跑」：残留的 running 子任务不会有 result 来
       // 放行，若把它算作忙，排队消息会永远挂住并占着并发槽。
       const defer = options.interject !== true && (!agentIdle || live.size > 0);
+      this.recordPrompt(id, queued, defer);
       live.push(queued, defer);
       return;
     }
     if (!this.store.get(id)) return;
+    this.recordPrompt(id, queued, true);
     const bucket = this.buffered.get(id) ?? [];
     bucket.push(queued);
     this.buffered.set(id, bucket);
     if (!this.waiting.includes(id)) this.waiting.push(id);
     this.store.markQueued(id);
     this.schedule();
+  }
+
+  /**
+   * 把一条 prompt 写进对话记录。排队中的消息带 queued 标记，固定显示在记录
+   * 末尾，当前轮后续的输出插到它前面，不会被插在发送位置。
+   *
+   * 新建会话的首条消息已经由 store.create 记录、回滚重发也先写好了记录：
+   * 用 uuid 去重，重复调用不会再多出一条。
+   */
+  private recordPrompt(id: string, prompt: QueuedPrompt, queued: boolean): void {
+    const session = this.store.get(id);
+    if (!session) return;
+    // 新建会话的首条消息、回滚重发都已经先写好了记录：找到原条目就行。
+    const existing = prompt.uuid
+      ? session.messages.find((item) => item.role === "user" && item.sdkUuid === prompt.uuid)
+      : undefined;
+    if (existing) {
+      prompt.transcriptId = existing.id;
+      return;
+    }
+    const before = new Set(session.messages.map((item) => item.id));
+    const updated = this.store.addUserMessage(
+      id,
+      prompt.text,
+      prompt.storedImages ?? [],
+      prompt.uuid,
+      { queued },
+    );
+    const message = updated.messages.find((item) => item.role === "user" && !before.has(item.id));
+    if (message) prompt.transcriptId = message.id;
   }
 
   /** 这个对话还没被 agent 取走的消息，按提交顺序返回。 */
@@ -965,6 +1006,9 @@ export class Runtime {
     this.queues.get(id)?.close();
     this.rejectWaiter(id, new Error("已停止"));
     this.markStopped(id);
+    // 队列里的消息随停止一起作废；清掉排队标记，否则后续输出会一直插到
+    // 这些不会执行的消息前面。
+    this.store.clearQueuedMessages(id);
     let timedOut = false;
     try {
       const run = this.runs.get(id);
@@ -1136,10 +1180,14 @@ export class Runtime {
       if (!runConfigChanged(config, current) && !skillsChanged) return false;
       this.restarting.add(id);
       return true;
-    }, (_item, skill) => {
+    }, (item, skill) => {
       // 消息真正开始执行时才切换当前轮的工作流；排队期间不能提前生效。
       // 回滚截断点由 applySdkMessage 在 user 回显时记录（真实/fake 走同一路径）。
-      if (this.store.get(id)) this.store.setWorkflow(id, skill);
+      if (this.store.get(id)) {
+        // agent 已经取走：去掉排队标记，后面的输出才会排到这条消息之后。
+        if (item.transcriptId) this.store.clearQueuedMessage(id, item.transcriptId);
+        this.store.setWorkflow(id, skill);
+      }
     });
     this.queues.set(id, queue);
     const buffered = this.buffered.get(id) ?? [];
