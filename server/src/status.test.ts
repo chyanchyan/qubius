@@ -870,6 +870,46 @@ test("思考中途插入排队消息时仍只落一条思考", () => {
   assert.equal(state.messages.some((item) => item.text === "Q2"), true);
 });
 
+test("排队消息固定在记录末尾，本轮输出接在它前面", () => {
+  let state = blank();
+  state.messages.push({ id: "u1", role: "user", text: "Q1" });
+  state = applySdkMessage(state, {
+    type: "stream_event",
+    uuid: "t1",
+    parent_tool_use_id: null,
+    event: { type: "content_block_delta", delta: { type: "text_delta", text: "先答" } },
+  });
+  // 用户在这一轮跑到一半时排队发了下一条：带排队标记，排在记录末尾。
+  state.messages.push({ id: "q2", role: "user", text: "Q2", queued: true });
+  state = applySdkMessage(state, {
+    type: "stream_event",
+    uuid: "t2",
+    parent_tool_use_id: null,
+    event: { type: "content_block_delta", delta: { type: "text_delta", text: "一半" } },
+  });
+  state = applySdkMessage(state, {
+    type: "assistant",
+    uuid: "a1",
+    parent_tool_use_id: null,
+    message: { content: [{ type: "text", text: "先答一半" }] },
+  });
+  // 正文没有被排队消息拆成两条，排队消息始终排在最后。
+  const answers = state.messages.filter((item) => item.role === "assistant");
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0]?.text, "先答一半");
+  assert.deepEqual(state.messages.map((item) => item.text), ["Q1", "先答一半", "Q2"]);
+
+  // 轮末结果同样插在排队消息之前，排队消息不会停在发送位置。
+  state = applySdkMessage(state, {
+    type: "result",
+    subtype: "success",
+    uuid: "r1",
+    result: "本轮完成。",
+    is_error: false,
+  });
+  assert.deepEqual(state.messages.map((item) => item.text), ["Q1", "先答一半", "本轮完成。", "Q2"]);
+});
+
 test("一轮结束时残留的流式片段不再进行中", () => {
   let state = blank();
   state = applySdkMessage(state, {

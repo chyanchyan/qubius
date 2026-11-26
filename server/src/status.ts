@@ -356,6 +356,9 @@ export function applySdkMessage(prev: SessionCore, message: SdkMessage, seenLook
   // seen 仍按数组持久化；传入 Set 时用 Set 做 O(1) 去重查询，并在追加时同步裁剪。
   const lookup = seenLookup ?? new Set(prev.seen);
   if (message.uuid && lookup.has(message.uuid)) return prev;
+  // 上一条还没被 agent 取走的排队消息在末尾：本次应用产生的内容要放到它前面，
+  // 否则排队消息会被后续输出甩在中间，看起来像插在发送位置。
+  const hadQueuedTail = isQueuedUser(prev.messages[prev.messages.length - 1]);
   let seen = prev.seen;
   if (message.uuid) {
     seen = [...prev.seen, message.uuid];
@@ -488,6 +491,8 @@ export function applySdkMessage(prev: SessionCore, message: SdkMessage, seenLook
   if (state.messages.length !== prev.messages.length || state.messages.length > limits.transcriptMessages) {
     state.messages = limitTranscript(state.messages);
   }
+  // 排队消息固定排在记录末尾，本轮新增的正文/工具/结果都要在它们之前。
+  if (hadQueuedTail) state.messages = hoistQueuedMessages(state.messages);
   state.phase = derivePhase(state);
   // 本轮已经落定（成功/失败/停止）：补上工作流结束时间。
   if (
@@ -1119,7 +1124,10 @@ function noteResult(state: SessionCore, message: SdkMessage): void {
   if (message.result) {
     const result = capMessageText(message.result);
     state.summary = clip(result, 160);
-    const last = state.messages[state.messages.length - 1];
+    // 末尾可能是还没取走的排队消息，真实的上一条内容在它们前面。
+    let lastIndex = state.messages.length - 1;
+    while (lastIndex >= 0 && isQueuedUser(state.messages[lastIndex])) lastIndex -= 1;
+    const last = lastIndex >= 0 ? state.messages[lastIndex] : undefined;
     if (!last || last.role !== "assistant" || last.text !== result) {
       const item: TranscriptItem = {
         id: message.uuid || randomId(),
@@ -1232,6 +1240,35 @@ function patchStatus(status: string): SubagentStatus {
   return "stopped";
 }
 
+/** 还没被 agent 取走的排队用户消息：它们固定排在记录末尾。 */
+function isQueuedUser(item: TranscriptItem | undefined): boolean {
+  return Boolean(item && item.role === "user" && item.queued === true);
+}
+
+/**
+ * 把排队用户消息挪回记录末尾。顺序本来就对时返回原数组，避免每个流式增量
+ * 都复制一次整段记录。
+ */
+function hoistQueuedMessages(messages: TranscriptItem[]): TranscriptItem[] {
+  let firstQueued = -1;
+  let needsMove = false;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (isQueuedUser(messages[index])) {
+      if (firstQueued < 0) firstQueued = index;
+    } else if (firstQueued >= 0) {
+      needsMove = true;
+      break;
+    }
+  }
+  if (!needsMove) return messages;
+  const queued: TranscriptItem[] = [];
+  const rest: TranscriptItem[] = [];
+  for (const item of messages) {
+    (isQueuedUser(item) ? queued : rest).push(item);
+  }
+  return [...rest, ...queued];
+}
+
 function pushPartial(state: SessionCore, kind: "text" | "thinking"): TranscriptItem {
   const item: TranscriptItem = {
     id: randomId(),
@@ -1248,7 +1285,10 @@ function pushPartial(state: SessionCore, kind: "text" | "thinking"): TranscriptI
 }
 
 function tailPartialIndex(state: SessionCore, kind: "text" | "thinking" | "tool"): number {
-  const index = state.messages.length - 1;
+  // 末尾的排队用户消息不参与“最后一条正在增长的内容”：跳过它们往前找，
+  // 否则每来一个增量都会误建一条新的片段。
+  let index = state.messages.length - 1;
+  while (index >= 0 && isQueuedUser(state.messages[index])) index -= 1;
   if (index < 0) return -1;
   const last = state.messages[index];
   if (!last.partial) return -1;

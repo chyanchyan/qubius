@@ -103,6 +103,12 @@ export interface TranscriptItem {
   /** 发送这条用户消息时随 SDKUserMessage 发出的 uuid；旧消息没有。 */
   sdkUuid?: string;
   /**
+   * 服务端内部标记：这条用户消息还在排队、没被 agent 取走。排队期间它固定
+   * 排在记录末尾，当前轮后续的输出插到它前面，避免消息卡在发送位置；
+   * agent 取走时清除。不发给前端。
+   */
+  queued?: boolean;
+  /**
    * 回滚/分叉用的截断点：这条消息被 agent 取走前，SDK transcript 最后一条
    * 主线程 chain 条目 uuid；没有更早上下文时是 ROOT_FORK_POINT。旧消息没有。
    */
