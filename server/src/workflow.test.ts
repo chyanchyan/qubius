@@ -182,6 +182,133 @@ test("排队 prompt 被折进同一轮时，result 之后不能再把会话标�
   }
 });
 
+test("插话的普通消息不会清掉进行中的工作流", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "做这个", "prl"));
+    store.beginTurn("s1");
+    store.setWorkflow("s1", "prl");
+    const startedAt = store.require("s1").workflow?.startedAt;
+    assert.ok(startedAt);
+    store.apply("s1", {
+      type: "system",
+      subtype: "task_started",
+      uuid: "t1",
+      task_id: "task-1",
+      task_type: "local_agent",
+      run_id: "run-1",
+      description: "[wf:prl:1/1:dev] 登录接口",
+    });
+    // 插话在 result 前被 agent 取走：先记下选择，等 result 后再生效。
+    store.setWorkflow("s1");
+    store.apply("s1", { type: "result", subtype: "success", uuid: "r1" });
+
+    // 子任务还在跑，这一轮没有落定：插话不能把 prl 进度清掉。
+    const folded = store.require("s1");
+    assert.equal(folded.phase, "running");
+    assert.equal(folded.workflow?.skill, "prl");
+    assert.equal(folded.workflow?.startedAt, startedAt);
+    assert.equal(folded.workflow?.endedAt, undefined);
+    assert.equal(folded.subagents[0]?.workflowAt, startedAt);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("主轮落定后、子任务结束前插话同样保留 prl 进度", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "做这个", "prl"));
+    store.beginTurn("s1");
+    store.setWorkflow("s1", "prl");
+    const startedAt = store.require("s1").workflow?.startedAt;
+    assert.ok(startedAt);
+    store.apply("s1", {
+      type: "system",
+      subtype: "task_started",
+      uuid: "t1",
+      task_id: "task-1",
+      task_type: "local_agent",
+      run_id: "run-1",
+      description: "[wf:prl:1/1:dev] 登录接口",
+    });
+    store.apply("s1", { type: "result", subtype: "success", uuid: "r1" });
+
+    // result 已经落定主轮，awaiting 清空：插话直接走 applyWorkflow。
+    store.setWorkflow("s1");
+    const inserted = store.require("s1");
+    assert.equal(inserted.workflow?.skill, "prl");
+    assert.equal(inserted.workflow?.startedAt, startedAt);
+    assert.equal(inserted.workflow?.endedAt, undefined);
+
+    // 插话自己的那一轮结束、子任务也完成后，工作流才落定；
+    // 之后的普通消息照常清掉它。
+    store.apply("s1", {
+      type: "system",
+      subtype: "task_notification",
+      uuid: "t2",
+      task_id: "task-1",
+      status: "completed",
+      summary: "完成",
+    });
+    store.apply("s1", { type: "result", subtype: "success", uuid: "r2" });
+    assert.ok(store.require("s1").workflow?.endedAt);
+    store.setWorkflow("s1");
+    assert.equal(store.require("s1").workflow, undefined);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("沿用同一工作流的插话不会重启进度", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "做这个", "prl"));
+    store.beginTurn("s1");
+    store.setWorkflow("s1", "prl");
+    const startedAt = store.require("s1").workflow?.startedAt;
+    assert.ok(startedAt);
+    store.apply("s1", {
+      type: "system",
+      subtype: "task_started",
+      uuid: "t1",
+      task_id: "task-1",
+      task_type: "local_agent",
+      run_id: "run-1",
+      description: "[wf:prl:1/1:dev] 登录接口",
+    });
+    store.apply("s1", { type: "result", subtype: "success", uuid: "r1" });
+    const before = store.require("s1").workflow;
+
+    // 发送区的下拉还选着 prl：插话带着显式 prl，不能换 startedAt，
+    // 否则已经在跑的子任务会从进度条里掉出去。
+    store.setWorkflow("s1", "prl");
+    const same = store.require("s1");
+    assert.equal(same.workflow?.skill, "prl");
+    assert.equal(same.workflow?.startedAt, startedAt);
+    assert.equal(same.subagents[0]?.workflowAt, startedAt);
+    assert.equal(same.workflow, before);
+
+    // 换成别的工作流才开新的一段（先让插话那一轮落定，第二条才不会被排队）。
+    store.apply("s1", { type: "result", subtype: "success", uuid: "r2" });
+    store.setWorkflow("s1", "ser");
+    const switched = store.require("s1");
+    assert.equal(switched.workflow?.skill, "ser");
+    assert.notEqual(switched.workflow, before);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("排队切换工作流不会清掉等待中的确认", async () => {
   const dataDir = tempDir();
   let store: Store | undefined;

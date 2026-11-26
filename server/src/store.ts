@@ -1076,8 +1076,19 @@ export class Store {
         updatedAt: now,
       }
       : { ...current, updatedAt: now };
-    if (skill) next.workflow = { skill, startedAt: now };
-    else delete next.workflow;
+    // 还没落定的工作流不能被一条新 prompt 清掉或重启：子任务带着这一轮的
+    // workflow.startedAt，清掉会让进度条消失、还在跑的子任务从视图里掉出去，
+    // 换 startedAt 也会让已经跑出的进度归零。用户中途插话（不选工作流，
+    // 或者沿用下拉里仍选着的 prl/ser/plan）时都会走到这里。
+    // 只有显式换成别的工作流，或者当前工作流已经落定，才开新的一段。
+    const running = current.workflow && !current.workflow.endedAt ? current.workflow : undefined;
+    if (skill) {
+      next.workflow = running?.skill === skill ? running : { skill, startedAt: now };
+    } else if (running) {
+      next.workflow = running;
+    } else {
+      delete next.workflow;
+    }
     if (reopen) this.awaitingResult.add(id);
     this.commit(next);
   }
