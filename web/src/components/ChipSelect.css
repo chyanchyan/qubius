@@ -137,6 +137,15 @@ button.chip:disabled {
 
 /* ---- 浮层 / 底部面板 ---- */
 
+/* 面板贴着可见视口底边。移动浏览器的 100vh 是「地址栏收起」时的大视口：
+   地址栏一展开，锚在 100vh 的面板下半截就落到屏幕外（列表最后几项永远
+   看不到）。dvh 跟随地址栏/工具栏的动态状态，老浏览器退回 vh。
+   键盘弹出时 viewport.ts 会把 --app-height/--app-top 设成 px，优先使用。 */
+:root { --chip-viewport-height: 100vh; }
+@supports (height: 100dvh) {
+  :root { --chip-viewport-height: 100dvh; }
+}
+
 .chip-pop-backdrop {
   position: fixed;
   inset: 0;
@@ -150,7 +159,7 @@ button.chip:disabled {
   z-index: 81;
   left: 0;
   right: 0;
-  top: calc(var(--app-top, 0px) + var(--app-height, 100vh));
+  top: calc(var(--app-top, 0px) + var(--app-height, var(--chip-viewport-height)));
   transform: translateY(-100%);
   display: flex;
   flex-direction: column;
@@ -161,7 +170,7 @@ button.chip:disabled {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: min(70vh, calc(var(--app-height, 100vh) * 0.7));
+  max-height: calc(var(--app-height, var(--chip-viewport-height)) * 0.7);
   border-top: 1px solid var(--line);
   border-radius: 16px 16px 0 0;
   background: var(--menu);
@@ -319,7 +328,7 @@ button.chip:disabled {
 }
 
 .chip-config {
-  max-height: min(78vh, calc(var(--app-height, 100vh) * 0.78));
+  max-height: calc(var(--app-height, var(--chip-viewport-height)) * 0.78);
 }
 
 .chip-config-body {
