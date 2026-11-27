@@ -95,7 +95,7 @@ export function renderConfigYaml(options) {
     port,
     publicHost,
     maxConcurrent = 4,
-    approvalTimeoutMinutes = 10,
+    approvalTimeoutMinutes = 0,
     archiveDir = "",
     archiveRetentionDays = 30,
     archiveInstance = role === "secondary" ? "bak" : "main",

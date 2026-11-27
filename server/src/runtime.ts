@@ -75,7 +75,7 @@ const APPEND_PROMPT = [
   "如果后续步骤依赖该命令，等它结束后检查输出和退出码再继续。",
 ].join("\n");
 
-const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 10;
+const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 0;
 
 /**
  * 对话启动前检查目录是否还在。

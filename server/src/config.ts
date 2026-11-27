@@ -396,7 +396,7 @@ function normalizeApprovalTimeout(value: unknown, env: NodeJS.ProcessEnv = proce
   if (value === undefined) {
     // 部署向导把值写进 env，config.yaml 里没写时也生效。
     const fromEnv = bootstrapEnv(env, "QUBIUS_APPROVAL_TIMEOUT_MINUTES");
-    if (fromEnv === undefined) return 10;
+    if (fromEnv === undefined) return 0;
     const parsed = Number(fromEnv);
     if (!Number.isInteger(parsed) || parsed < 0 || parsed > 1440) {
       throw new Error("QUBIUS_APPROVAL_TIMEOUT_MINUTES 必须是 0 到 1440 的整数（0 表示不自动拒绝）");
@@ -486,7 +486,7 @@ export function bootstrapConfig(
     port,
     dataDir,
     maxConcurrent,
-    approvalTimeoutMinutes: 10,
+    approvalTimeoutMinutes: 0,
     projects: mergeProjectLists(projects, extra.projects),
     projectsBase: projects,
     projectsFile,

@@ -534,7 +534,7 @@ test("旧文件没有运行参数时使用调用方给的初始默认值", () =>
   assert.equal(loaded.archiveRetentionDays, 7);
   // 没有注入时退回内置默认值。
   const fallback = loadSettings(dir);
-  assert.equal(fallback.approvalTimeoutMinutes, 10);
+  assert.equal(fallback.approvalTimeoutMinutes, 0);
   assert.equal(fallback.archiveRetentionDays, 30);
 });
 

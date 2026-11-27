@@ -640,7 +640,7 @@ export function deriveDeployForm(
     authTokenSet: Boolean(authTokenStored),
     terminal: parseBool(pick("QUBIUS_TERMINAL", "1"), true),
     maxConcurrent: parseIntOr(pick("QUBIUS_MAX_CONCURRENT", "4"), 4),
-    approvalTimeoutMinutes: parseIntOr(pick("QUBIUS_APPROVAL_TIMEOUT_MINUTES", "10"), 10),
+    approvalTimeoutMinutes: parseIntOr(pick("QUBIUS_APPROVAL_TIMEOUT_MINUTES", "0"), 0),
     limits: {
       transcriptBytes: parseIntOr(
         pick("QUBIUS_LIMIT_TRANSCRIPT_BYTES", String(DEFAULT_LIMITS.transcriptBytes)),
@@ -852,7 +852,7 @@ export function validateDeployForm(
     terminal: record.terminal === undefined ? true : requireBool(record, "terminal", "命令行页开关"),
     maxConcurrent: record.maxConcurrent === undefined ? 4 : requireInt(record, "maxConcurrent", "并发上限"),
     approvalTimeoutMinutes: record.approvalTimeoutMinutes === undefined
-      ? 10
+      ? 0
       : requireInt(record, "approvalTimeoutMinutes", "确认超时"),
     limits: validateLimits(record.limits),
     lanEnabled,
@@ -1038,7 +1038,7 @@ export function deployEnvValues(form: DeployForm, projectsFile: string): Record<
     QUBIUS_AUTH_TOKEN: form.authMode === "custom" ? form.authToken : "",
     QUBIUS_TERMINAL: form.terminal === false ? "0" : "1",
     QUBIUS_MAX_CONCURRENT: String(form.maxConcurrent ?? 4),
-    QUBIUS_APPROVAL_TIMEOUT_MINUTES: String(form.approvalTimeoutMinutes ?? 10),
+    QUBIUS_APPROVAL_TIMEOUT_MINUTES: String(form.approvalTimeoutMinutes ?? 0),
     QUBIUS_LIMIT_TRANSCRIPT_BYTES: String(form.limits?.transcriptBytes ?? DEFAULT_LIMITS.transcriptBytes),
     QUBIUS_LIMIT_TRANSCRIPT_MESSAGES: String(form.limits?.transcriptMessages ?? DEFAULT_LIMITS.transcriptMessages),
     QUBIUS_LIMIT_MESSAGE_TEXT: String(form.limits?.messageText ?? DEFAULT_LIMITS.messageText),

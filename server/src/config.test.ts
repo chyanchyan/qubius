@@ -8,6 +8,7 @@ import { bootstrapConfig, DEFAULT_ALLOWED_HOSTS, DEFAULT_LIMITS, loadConfig, par
 // 开发 shell 可能带着部署用的 QUBIUS_PROJECTS_FILE；测试只读临时目录。
 delete process.env.QUBIUS_PROJECTS_FILE;
 delete process.env.REMOTE_CODER_PROJECTS_FILE;
+delete process.env.QUBIUS_APPROVAL_TIMEOUT_MINUTES;
 
 test("只接受本机回环地址", () => {
   assert.deepEqual(parseListen("localhost:8787"), { host: "127.0.0.1", port: 8787 });
@@ -37,7 +38,7 @@ test("相对 dataDir 和项目路径相对配置文件解析", () => {
   assert.equal(config.projects[0]?.path, project);
   assert.equal(config.projects[0]?.permission, "acceptEdits");
   assert.equal(config.maxConcurrent, 4);
-  assert.equal(config.approvalTimeoutMinutes, 10);
+  assert.equal(config.approvalTimeoutMinutes, 0);
 });
 
 test("approvalTimeoutMinutes 可配置，0 表示不自动拒绝，非法值会被拒绝", () => {

@@ -46,12 +46,11 @@ dataDir: ./data
 # 之后在页面「设置 → 并发上限」里修改，立即生效；设置文件里没有该值时用这里的值。
 maxConcurrent: 4
 
-# 等待确认（提问/授权）多久没人回应就自动拒绝，单位分钟，默认 10。
-# 户外使用、手机可能很久才看到通知时，可以调大，例如 60。
-# 设为 0 表示不自动拒绝，界面上也不再显示倒计时。
+# 等待确认（提问/授权）多久没人回应就自动拒绝，单位分钟，默认 0（不自动拒绝）。
+# 设为大于 0 的值才会倒计时并自动拒绝，例如 60。
 # 部署向导会写进 env 的 QUBIUS_APPROVAL_TIMEOUT_MINUTES，这里不写也会生效。
 # 这里只作为首次启动的默认值；之后在页面「设置」里修改，保存后立即生效。
-# approvalTimeoutMinutes: 10
+# approvalTimeoutMinutes: 0
 
 # 会话裁剪、请求体与历史分页上限；下面是默认值，可不写。
 # 也可用环境变量覆盖：QUBIUS_LIMIT_TRANSCRIPT_BYTES、QUBIUS_LIMIT_TRANSCRIPT_MESSAGES、

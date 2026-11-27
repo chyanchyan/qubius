@@ -150,7 +150,7 @@ test("默认目录收敛到 checkout 内的 .qubius，端口和仓库地址符�
   assert.equal(form.authMode, "off");
   assert.equal(form.terminal, true);
   assert.equal(form.maxConcurrent, 4);
-  assert.equal(form.approvalTimeoutMinutes, 10);
+  assert.equal(form.approvalTimeoutMinutes, 0);
   assert.deepEqual(form.limits, {
     transcriptBytes: 8 * 1024 * 1024,
     transcriptMessages: 5_000,
@@ -661,7 +661,7 @@ test("访问令牌、额外域名、终端和超时写入 env 并由表单校验
   assert.equal(accepted.authMode, "off");
   assert.equal(accepted.terminal, true);
   assert.equal(accepted.maxConcurrent, 4);
-  assert.equal(accepted.approvalTimeoutMinutes, 10);
+  assert.equal(accepted.approvalTimeoutMinutes, 0);
   assert.equal(accepted.lanEnabled, false);
   assert.equal(accepted.lanAuthUser, "qubius");
   assert.equal(accepted.lanAuthPassword, "");

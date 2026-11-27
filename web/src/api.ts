@@ -547,7 +547,7 @@ export const DEFAULT_MAX_CONCURRENT = 4;
 /** 与服务端 settings.ts / config.ts 的校验区间保持一致。 */
 export const APPROVAL_TIMEOUT_MIN = 0;
 export const APPROVAL_TIMEOUT_MAX = 1440;
-export const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 10;
+export const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 0;
 
 export const ARCHIVE_RETENTION_MIN = 1;
 export const ARCHIVE_RETENTION_MAX = 3650;

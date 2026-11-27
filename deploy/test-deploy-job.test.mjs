@@ -169,7 +169,7 @@ function expectedConfig({ dataDir, port }) {
     port,
     publicHost: PUBLIC_HOST,
     maxConcurrent: 4,
-    approvalTimeoutMinutes: 10,
+    approvalTimeoutMinutes: 0,
     archiveDir: "",
     archiveRetentionDays: 30,
     archiveInstance: "main",
