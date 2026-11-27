@@ -11,8 +11,9 @@ import {
   backupNodeModules,
   buildDirtyStatus,
   busyDecision,
-  choosePullRemote,
+  choosePullSource,
   classifyIPv4,
+  githubRepoPullUrl,
   cleanupNodeModulesPrev,
   deployDecision,
   deployPorts,
@@ -663,29 +664,51 @@ test("backupNodeModules / restoreNodeModules / cleanup", () => {
   assert.equal(fs.readFileSync(path.join(repo2, "node_modules.prev", "keep.txt"), "utf8"), "keep\n");
 });
 
-test("choosePullRemote：显式 > github 远端 > github.com 的 origin > origin", () => {
+test("choosePullSource：显式 > github 远端 > github.com 的 origin > 配置地址 > origin", () => {
+  const remote = (value) => ({ kind: "remote", value });
   // 显式远端优先，即使开了 GitHub 偏好。
-  assert.equal(
-    choosePullRemote({ override: "upstream", preferGithub: true, hasGithub: true }),
-    "upstream",
+  assert.deepEqual(
+    choosePullSource({ override: "upstream", preferGithub: true, hasGithub: true }),
+    remote("upstream"),
   );
   // 有名为 github 的远端时直接用它。
-  assert.equal(
-    choosePullRemote({ preferGithub: true, hasGithub: true, originUrl: "https://gitlab.example/x.git" }),
-    "github",
+  assert.deepEqual(
+    choosePullSource({ preferGithub: true, hasGithub: true, originUrl: "https://gitlab.example/x.git" }),
+    remote("github"),
   );
   // 没有 github 远端，但 origin 就是 GitHub：用 origin。
-  assert.equal(
-    choosePullRemote({ preferGithub: true, hasGithub: false, originUrl: "git@github.com:owner/repo.git" }),
-    "origin",
+  assert.deepEqual(
+    choosePullSource({ preferGithub: true, hasGithub: false, originUrl: "git@github.com:owner/repo.git" }),
+    remote("origin"),
   );
-  // 没有 GitHub 远端：回落到 origin（即使它指向私有仓库）。
-  assert.equal(
-    choosePullRemote({ preferGithub: true, hasGithub: false, originUrl: "https://gitlab.example/x.git" }),
-    "origin",
+  // 没有 GitHub 远端时用配置的 GitHub 仓库地址。
+  assert.deepEqual(
+    choosePullSource({
+      preferGithub: true,
+      hasGithub: false,
+      originUrl: "https://gitlab.example/x.git",
+      githubRepo: "owner/repo",
+    }),
+    { kind: "url", value: "https://github.com/owner/repo.git" },
   );
-  // 没开偏好时始终 origin。
-  assert.equal(choosePullRemote({ hasGithub: true }), "origin");
+  // 都没配置时回落到 origin（即使它指向私有仓库）。
+  assert.deepEqual(
+    choosePullSource({ preferGithub: true, hasGithub: false, originUrl: "https://gitlab.example/x.git" }),
+    remote("origin"),
+  );
+  // 没开偏好时始终 origin，即使配置了 GitHub 仓库。
+  assert.deepEqual(
+    choosePullSource({ hasGithub: true, githubRepo: "owner/repo" }),
+    remote("origin"),
+  );
+});
+
+test("githubRepoPullUrl 接受 owner/repo 和完整地址", () => {
+  assert.equal(githubRepoPullUrl("owner/repo"), "https://github.com/owner/repo.git");
+  assert.equal(githubRepoPullUrl("https://github.com/owner/repo.git"), "https://github.com/owner/repo.git");
+  assert.equal(githubRepoPullUrl("git@github.com:owner/repo.git"), "git@github.com:owner/repo.git");
+  assert.equal(githubRepoPullUrl(""), "");
+  assert.equal(githubRepoPullUrl("not a repo"), "");
 });
 
 test("buildDirtyStatus 排除构建 staging 的 dist.next/dist.prev", () => {

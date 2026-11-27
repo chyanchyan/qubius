@@ -8,6 +8,7 @@ import {
   compareVersions,
   fetchGithubVersion,
   githubRepoFromRemote,
+  normalizeGithubRepo,
   resolveGithubRepo,
 } from "./github-version.js";
 
@@ -34,6 +35,38 @@ test("从 SSH / HTTPS remote 解析 owner/repo", () => {
   assert.equal(githubRepoFromRemote("https://user:token@github.com/chyanchyan/qubius"), "chyanchyan/qubius");
   assert.equal(githubRepoFromRemote("git@gitlab.com:chyanchyan/qubius.git"), undefined);
   assert.equal(githubRepoFromRemote("not a remote"), undefined);
+});
+
+test("normalizeGithubRepo 归一化 owner/repo 与完整地址", () => {
+  assert.equal(normalizeGithubRepo(" chyanchyan/qubius "), "chyanchyan/qubius");
+  assert.equal(
+    normalizeGithubRepo("https://github.com/chyanchyan/qubius.git"),
+    "chyanchyan/qubius",
+  );
+  assert.equal(
+    normalizeGithubRepo("git@github.com:chyanchyan/qubius.git"),
+    "chyanchyan/qubius",
+  );
+  assert.equal(normalizeGithubRepo(""), "");
+  assert.equal(normalizeGithubRepo("   "), "");
+  assert.equal(normalizeGithubRepo("https://gitlab.com/a/b.git"), undefined);
+  assert.equal(normalizeGithubRepo("not a repo"), undefined);
+});
+
+test("fetchGithubVersion 使用传入的 env 解析镜像", async () => {
+  const requested: string[] = [];
+  const result = await fetchGithubVersion({
+    repoRoot: tempRepo(),
+    current: "0.1.0",
+    env: { QUBIUS_GITHUB_REPO: "owner/repo" },
+    fetchImpl: (async (input: string | URL | Request) => {
+      requested.push(String(input));
+      return new Response(JSON.stringify({ version: "0.1.0" }), { status: 200 });
+    }) as typeof fetch,
+  });
+  assert.deepEqual(requested, ["https://raw.githubusercontent.com/owner/repo/main/package.json"]);
+  assert.equal(result.repo, "owner/repo");
+  assert.equal(result.status, "same");
 });
 
 test("版本比较覆盖相等、新旧和预发布", () => {

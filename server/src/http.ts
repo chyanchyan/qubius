@@ -19,9 +19,11 @@ import {
   applyDeploy,
   deployBusy,
   deployConfigDir,
+  readDeployEnvValue,
   readDeployJob,
   readDeployState,
   redeployWithPull,
+  saveGithubRepo,
   type ApplyDeployResult,
 } from "./deploy.js";
 import {
@@ -564,10 +566,19 @@ export function createAppServer(options: {
       return;
     }
     if (url.pathname === "/api/deploy/github-version" && method === "GET") {
+      // env 文件里的 QUBIUS_GITHUB_REPO 是部署页直接可改的设置；以文件为准，
+      // 这样保存后无需重启就能反映到版本对照（进程环境只作回落）。
+      const githubEnv = { ...process.env };
+      const configured = readDeployEnvValue(process.env, process.platform, repoRoot, "QUBIUS_GITHUB_REPO");
+      if (configured !== undefined) {
+        if (configured.trim()) githubEnv.QUBIUS_GITHUB_REPO = configured;
+        else delete githubEnv.QUBIUS_GITHUB_REPO;
+      }
       // 外网不可用时不报 5xx，页面显示为“无法获取”即可。
       sendJson(res, 200, await fetchGithubVersion({
         repoRoot,
         current: BUILD_INFO.version,
+        env: githubEnv,
       }));
       return;
     }
@@ -690,6 +701,23 @@ export function createAppServer(options: {
         throw error;
       }
       sendDeployResult(res, result);
+      return;
+    }
+    if (url.pathname === "/api/deploy/github-repo" && method === "POST") {
+      // 部署页「GitHub 仓库」快捷设置：只改 env 里的一个键，不触发重新部署。
+      if (options.setupRequired) throw new HttpError(400, "还没有部署配置，请先完成首次部署");
+      const body = await readJson(req);
+      const configDir = deployConfigDir(process.env, process.platform, repoRoot);
+      if (deployBusy(configDir)) throw new HttpError(409, "已有部署任务在运行");
+      try {
+        sendJson(res, 200, {
+          ok: true,
+          ...saveGithubRepo({ repoRoot, repo: bodyRecord(body).repo }),
+        });
+      } catch (error) {
+        if (error instanceof DeployValidationError) throw new HttpError(400, error.message);
+        throw error;
+      }
       return;
     }
     if (url.pathname === "/api/edge" || url.pathname.startsWith("/api/edge/")) {

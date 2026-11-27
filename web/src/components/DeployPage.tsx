@@ -13,6 +13,7 @@ import {
   isDeployResidualError,
   resetAuthToken as resetAuthTokenApi,
   resetLanPassword as resetLanPasswordApi,
+  saveGithubRepo,
   updateDeploy,
   type DeployForm,
   type DeployJob,
@@ -507,6 +508,11 @@ export function DeployPage() {
   const [deployState, setDeployState] = useState<DeployState | null>(null);
   /** GitHub 镜像版本与当前版本对照；拉取失败也保留对象，显示失败原因。 */
   const [githubVersion, setGithubVersion] = useState<GithubVersionState | null>(null);
+  /** 部署页可直接保存的 GitHub 镜像地址（owner/repo；空串自动识别）。 */
+  const [githubRepoInput, setGithubRepoInput] = useState("");
+  const [savingGithubRepo, setSavingGithubRepo] = useState(false);
+  const [githubRepoError, setGithubRepoError] = useState("");
+  const [githubRepoNotice, setGithubRepoNotice] = useState("");
   const [form, setForm] = useState<DeployForm | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -748,6 +754,9 @@ export function DeployPage() {
       .then((data) => {
         if (!mounted.current || controller.signal.aborted) return;
         setDeployState(data);
+        setGithubRepoInput(data.githubRepo ?? "");
+        setGithubRepoError("");
+        setGithubRepoNotice("");
         // 首次部署默认使用当前运行的 checkout，并尽量从 origin 补上仓库地址。
         setForm(
           data.setupRequired
@@ -1075,7 +1084,7 @@ export function DeployPage() {
     const confirmed = await dialogs.confirm({
       title: "拉取最新代码并更新部署？",
       message:
-        `${version}将从 GitHub 远端（没有时用 origin）快进拉取当前分支，`
+        `${version}将从 GitHub 远端（没有时用配置的 GitHub 仓库或 origin）快进拉取当前分支，`
         + "按当前已保存的配置重新构建并重启服务。"
         + "有进行中的会话、工作区有未提交改动或与远端分叉时会中止更新（不会打断会话）。",
       confirmLabel: "更新并部署",
@@ -1094,6 +1103,32 @@ export function DeployPage() {
       handleDeployError(reason);
     } finally {
       if (submitAbort.current === controller) submitAbort.current = null;
+    }
+  }
+
+  /** 保存 GitHub 镜像地址；只改 env 里的一个键，保存后立刻重新检查版本。 */
+  async function onSaveGithubRepo() {
+    if (savingGithubRepo) return;
+    setSavingGithubRepo(true);
+    setGithubRepoError("");
+    setGithubRepoNotice("");
+    try {
+      const result = await saveGithubRepo(githubRepoInput.trim());
+      if (!mounted.current) return;
+      setGithubRepoInput(result.repo);
+      setDeployState((current) => (current ? { ...current, githubRepo: result.repo } : current));
+      setGithubRepoNotice(result.repo ? "已保存，并重新检查了 GitHub 版本。" : "已清除，改为自动从远端识别。");
+      try {
+        const info = await getGithubVersion();
+        if (mounted.current) setGithubVersion(info);
+      } catch {
+        // 版本对照失败不影响保存结果，保留原来的展示。
+      }
+    } catch (reason) {
+      if (!mounted.current) return;
+      setGithubRepoError(readableError(reason, "保存 GitHub 仓库失败"));
+    } finally {
+      if (mounted.current) setSavingGithubRepo(false);
     }
   }
 
@@ -1282,9 +1317,40 @@ export function DeployPage() {
             重新部署…
           </button>
           <p className="deploy-inline-hint">
-            「更新」从 GitHub 远端拉取最新代码（没有 GitHub 远端时用 origin），按当前已保存的配置
-            重新构建并重启，不用逐项确认；「重新部署」从向导第一步开始，可以修改任意配置后再提交。
+            「更新」从 GitHub 远端拉取最新代码（依次尝试 github 远端、下面配置的 GitHub 仓库、origin），
+            按当前已保存的配置重新构建并重启，不用逐项确认；「重新部署」从向导第一步开始，可以修改任意配置后再提交。
           </p>
+        </div>
+      )}
+
+      {!deployState.setupRequired && (
+        <div className="deploy-github-repo">
+          <TextField
+            label="GitHub 仓库"
+            value={githubRepoInput}
+            placeholder="owner/repo 或 https://github.com/owner/repo"
+            hint="用于 GitHub 版本对照；一键更新在本地没有 github 远端时会从这个地址拉取。留空自动从 remote 识别。"
+            disabled={savingGithubRepo}
+            action={(
+              <button
+                type="button"
+                className="btn"
+                disabled={savingGithubRepo || busy}
+                onClick={onSaveGithubRepo}
+              >
+                {savingGithubRepo ? "保存中…" : "保存"}
+              </button>
+            )}
+            onChange={(value) => {
+              setGithubRepoInput(value);
+              setGithubRepoError("");
+              setGithubRepoNotice("");
+            }}
+          />
+          {githubRepoError && (
+            <Notice tone="error" onDismiss={() => setGithubRepoError("")}>{githubRepoError}</Notice>
+          )}
+          {githubRepoNotice && <p className="deploy-inline-hint">{githubRepoNotice}</p>}
         </div>
       )}
 

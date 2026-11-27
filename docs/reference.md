@@ -116,7 +116,8 @@ agent 用 Bash 的 `run_in_background` 启动下载、安装等耗时命令后�
 - `POST /api/projects`：body `{ id, name, path, permission? }`，加入本机已有的 git 仓库；立即生效并写入额外项目文件，不需要重启。
 - `POST /api/projects/new`：body `{ name, parent, permission? }`，在母目录 `parent` 下新建 `<parent>/<name>` 目录，`git init -b main` 并提交空初始提交后加入项目列表；母目录不存在、目标目录已存在或项目 id 冲突时返回 4xx。
 - `GET /api/deploy`：部署表单、实际配置文件/env 路径，以及 `current`（当前生效的 `dataDir`、`allowedHosts`、令牌来源/文件、归档、终端开关、局域网入口状态）。表单里的 `lanAuthPassword` 永远为空，只用 `lanAuthPasswordSet` 表示已设置。`POST /api/deploy/apply` 成功时返回 `{jobId, oneTime}`：`oneTime.lan` 含局域网用户名、密码和访问地址，`oneTime.authToken` 是部署后生效的令牌，只在这次响应里出现一次。
-- `POST /api/deploy/update`：不需要 body。按当前已保存的 env/配置重新部署，只在本次任务强制构建前拉取最新代码（优先从 GitHub 远端，没有时回落 `origin`），不会把强制开关写回 env。成功返回 `{jobId, oneTime?}`，busy/residual 与 `apply` 相同的结构化 409；还没有部署配置时返回 400。
+- `POST /api/deploy/update`：不需要 body。按当前已保存的 env/配置重新部署，只在本次任务强制构建前拉取最新代码（依次尝试 github 远端、配置的 GitHub 仓库、`origin`），不会把强制开关写回 env。成功返回 `{jobId, oneTime?}`，busy/residual 与 `apply` 相同的结构化 409；还没有部署配置时返回 400。
+- `POST /api/deploy/github-repo`：body `{ repo }`，把 GitHub 镜像地址（`owner/repo` 或完整 GitHub URL，空串表示自动识别）写入实际生效的 env 文件，只改这一个键，不重启服务；保存后版本对照立即使用新值。返回 `{ ok, repo }`（归一化后的 `owner/repo` 或空串）；格式不正确返回 400，部署任务运行中返回 409。
 - `POST /api/deploy/lan-credentials/reset`：body `{ user? }`，立即生成新密码并写 `<configDir>/lan-proxy.credentials`；如果当前实例的局域网入口在运行，响应发出后会自动重启它（systemd unit 或 pidfile 进程）。返回 `{ ok, lan: { user, password, urls, restart: "scheduled"|"none", restartMethod, restartNote } }`，`restartNote` 会说明是否已重启、是否需要重新登录。
 - `POST /api/deploy/auth-token/reset`：立即生成 64 位十六进制令牌并切换到运行中的服务端；旧令牌保留 60 秒宽限，避免在途请求 401。新令牌持久化到 env（`QUBIUS_AUTH=1`、`QUBIUS_AUTH_TOKEN`），当前来源是 auth-token 文件或 config.yaml 时同步更新；返回 `{ ok, token, source, file?, restartNeeded: false, note }`，`note` 明确写“无需重启”。
 - `GET /api/config/token`：当前访问令牌，未启用时 404；启用时调用方本身已通过令牌校验。`GET /api/health` 额外返回 `authRequired` 和 `authTokenFile`（只含路径）。

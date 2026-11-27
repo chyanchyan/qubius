@@ -35,6 +35,18 @@ export function githubRepoFromRemote(remote: string): string | undefined {
   return undefined;
 }
 
+/**
+ * 把 QUBIUS_GITHUB_REPO 的输入归一成 owner/repo。
+ * 接受 owner/repo、https/ssh 形式的 github.com 地址；空串返回空串（表示自动识别），
+ * 无法识别时返回 undefined。
+ */
+export function normalizeGithubRepo(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (REPO_RE.test(trimmed)) return trimmed;
+  return githubRepoFromRemote(trimmed);
+}
+
 function versionString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -158,13 +170,15 @@ export function resolveGithubRepo(
 export async function fetchGithubVersion(options: {
   repoRoot: string;
   current?: string;
+  /** 解析镜像用的环境变量；部署页传入合并了 env 文件的值，默认 process.env。 */
+  env?: NodeJS.ProcessEnv;
   /** 测试注入；默认使用全局 fetch。 */
   fetchImpl?: typeof fetch;
   /** 测试注入；默认当前时间。 */
   now?: () => Date;
 }): Promise<GithubVersionState> {
   const checkedAt = (options.now ?? (() => new Date()))().toISOString();
-  const repo = resolveGithubRepo(options.repoRoot);
+  const repo = resolveGithubRepo(options.repoRoot, options.env);
   const base: GithubVersionState = {
     status: "unknown",
     checkedAt,

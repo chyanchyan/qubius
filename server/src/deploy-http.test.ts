@@ -334,6 +334,59 @@ test("POST /api/deploy/update 首次部署前返回 400", async () => {
   }
 });
 
+test("POST /api/deploy/github-repo 只改 env 并立即反映到 GET /api/deploy", async () => {
+  const harness = await startHarness();
+  try {
+    const envFile = path.join(harness.configDir, "env");
+    fs.writeFileSync(envFile, [
+      "QUBIUS_PRIMARY_PORT=19181",
+      "QUBIUS_SECONDARY_PORT=19182",
+      "# 保留注释",
+      "QUBIUS_GITEA_TOKEN=keep-me",
+      "QUBIUS_GITHUB_REPO=old/repo",
+      "",
+    ].join("\n"));
+
+    const saved = await call<{ ok: boolean; repo: string }>(
+      harness,
+      "POST",
+      "/api/deploy/github-repo",
+      { repo: "https://github.com/owner/repo.git" },
+    );
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.repo, "owner/repo");
+    const text = fs.readFileSync(envFile, "utf8");
+    assert.equal((text.match(/^QUBIUS_GITHUB_REPO=/gm) ?? []).length, 1);
+    assert.match(text, /^QUBIUS_GITHUB_REPO=owner\/repo$/m);
+    assert.match(text, /^QUBIUS_GITEA_TOKEN=keep-me$/m);
+    assert.match(text, /^# 保留注释$/m);
+
+    const state = await call<DeployState>(harness, "GET", "/api/deploy");
+    assert.equal(state.data.githubRepo, "owner/repo");
+
+    const bad = await call<{ error: string }>(
+      harness,
+      "POST",
+      "/api/deploy/github-repo",
+      { repo: "not a repo" },
+    );
+    assert.equal(bad.status, 400);
+
+    const cleared = await call<{ repo: string }>(
+      harness,
+      "POST",
+      "/api/deploy/github-repo",
+      { repo: "" },
+    );
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.data.repo, "");
+    const after = await call<DeployState>(harness, "GET", "/api/deploy");
+    assert.equal(after.data.githubRepo, "");
+  } finally {
+    await harness.close();
+  }
+});
+
 test("已有部署任务在跑时 POST 返回 409，且不写配置", async () => {
   const harness = await startHarness();
   try {

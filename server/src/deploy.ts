@@ -14,6 +14,7 @@ import {
   type Role,
 } from "./config.js";
 import { resolveDeployEnvFile, type DeployEnvSource } from "./deploy-env.js";
+import { normalizeGithubRepo } from "./github-version.js";
 import { jobTimestamp } from "./job-state.js";
 import { tryLanAddress } from "./lan-address.js";
 import {
@@ -166,6 +167,8 @@ export interface DeployState {
   envFile: string;
   /** envFile 的解析来源，与 deploy/lib.sh 的优先级一致。 */
   envSource: DeployEnvSource;
+  /** 显式配置的 GitHub 镜像（owner/repo，空串表示自动识别）。 */
+  githubRepo: string;
   role: "primary" | "secondary";
   /** 当前进程的配置摘要；测试或不传 config 时省略。 */
   current?: DeployCurrentConfig;
@@ -309,6 +312,26 @@ export function deployConfigDir(
 ): string {
   const configured = (env.QUBIUS_CONFIG_DIR ?? "").trim();
   return path.resolve(configured || defaultConfigDir(env, platform, repoRoot));
+}
+
+/**
+ * 读取实际生效 env 文件里的单个键（只看文件，不合并进程环境）。
+ * 用于部署页可直接修改、无需重启的辅助设置，例如 QUBIUS_GITHUB_REPO；
+ * 文件不存在或键未写入时返回 undefined，让调用方回落到进程环境。
+ */
+export function readDeployEnvValue(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  repoRoot: string,
+  key: string,
+): string | undefined {
+  const configDir = deployConfigDir(env, platform, repoRoot);
+  const { file } = resolveDeployEnvFile(env, configDir, repoRoot);
+  try {
+    return parseEnvFile(fs.readFileSync(file, "utf8"), env)[key];
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -1033,6 +1056,29 @@ export function deployEnvValues(form: DeployForm, projectsFile: string): Record<
 function shellValue(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * 只修改 env 文本里的一个键，保留注释和其它行；缺失时追加到末尾。
+ * 与 mergeEnvText 不同，这里不会补齐 MANAGED_KEYS 的空值，适合保存单个设置。
+ */
+function setEnvTextValue(text: string, key: string, value: string): string {
+  const line = `${key}=${shellValue(value)}`;
+  const lines: string[] = [];
+  let replaced = false;
+  for (const current of text.split(/\r?\n/)) {
+    const match = current.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    if (match && match[1] === key) {
+      if (replaced) continue;
+      lines.push(line);
+      replaced = true;
+      continue;
+    }
+    lines.push(current);
+  }
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  if (!replaced) lines.push(line);
+  return `${lines.join("\n")}\n`;
 }
 
 /**
@@ -2001,6 +2047,10 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
     const values = deployEnvValues(form, projectsFile);
     if (options.forcePullLatest) values.QUBIUS_PULL_LATEST = "1";
     if (options.preferGithubRemote) values.QUBIUS_PULL_PREFER_GITHUB = "1";
+    // 页面单独保存的 GitHub 镜像不在 MANAGED_KEYS 里，显式传给任务，
+    // 让一键更新在本地没有 github 远端时也能按它拉取。
+    const githubRepo = nonEmpty(stored.QUBIUS_GITHUB_REPO) ?? nonEmpty(env.QUBIUS_GITHUB_REPO);
+    if (githubRepo) values.QUBIUS_GITHUB_REPO = githubRepo;
     const result = startDeployJob({
       configDir,
       repoRoot: options.repoRoot,
@@ -2030,6 +2080,46 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
     }
     release();
   }
+}
+
+export interface SaveGithubRepoOptions {
+  repoRoot: string;
+  /** 页面提交的仓库；接受 owner/repo 或完整 GitHub 地址，空串表示清除。 */
+  repo: unknown;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * 保存部署页的 GitHub 镜像地址到实际生效的 env 文件（只改这一个键）。
+ * 不重启服务：版本对照接口每次读取 env 文件；一键更新任务启动时也会带上它。
+ */
+export function saveGithubRepo(options: SaveGithubRepoOptions): { repo: string } {
+  if (typeof options.repo !== "string") {
+    throw new DeployValidationError("GitHub 仓库必须是字符串");
+  }
+  if (options.repo.length > 512) {
+    throw new DeployValidationError("GitHub 仓库地址过长");
+  }
+  const repo = normalizeGithubRepo(options.repo);
+  if (repo === undefined) {
+    throw new DeployValidationError("GitHub 仓库必须是 owner/repo 或 github.com 地址");
+  }
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const configDir = deployConfigDir(env, platform, options.repoRoot);
+  const { file: envFile, source } = resolveDeployEnvFile(env, configDir, options.repoRoot);
+  if (source === "QUBIUS_ENV" && !fs.existsSync(envFile)) {
+    throw new DeployValidationError(`QUBIUS_ENV 指向的 env 文件不存在：${envFile}`);
+  }
+  let existing = "";
+  try {
+    existing = fs.readFileSync(envFile, "utf8");
+  } catch {
+    existing = "";
+  }
+  writeAtomic(envFile, setEnvTextValue(existing, "QUBIUS_GITHUB_REPO", repo), 0o600);
+  return { repo };
 }
 
 export interface RedeployWithPullOptions {
@@ -2096,7 +2186,7 @@ export interface ReadDeployStateOptions {
 }
 
 export async function readDeployState(options: ReadDeployStateOptions): Promise<DeployState> {
-  const { configDir, envFile, envSource, form, projectsError } = deriveDeployForm(
+  const { configDir, envFile, envSource, form, projectsError, stored } = deriveDeployForm(
     options.env,
     options.role,
     options.repoRoot,
@@ -2104,6 +2194,11 @@ export async function readDeployState(options: ReadDeployStateOptions): Promise<
   const configFile = options.configFile
     ? path.resolve(options.configFile)
     : path.join(configDir, options.role === "secondary" ? "config-secondary.yaml" : "config.yaml");
+  // env 文件里显式写了这个键（包括清空）就以文件为准，否则回落到进程环境。
+  const storedGithub = Object.prototype.hasOwnProperty.call(stored, "QUBIUS_GITHUB_REPO")
+    ? (stored.QUBIUS_GITHUB_REPO ?? "").trim()
+    : undefined;
+  const githubRepo = storedGithub ?? (options.env?.QUBIUS_GITHUB_REPO ?? "").trim();
   // 只有首次部署（没有配置文件）才需要这个提示，正常页面不必每次都查 git。
   const detectedRepoUrl = options.setupRequired === true
     ? detectRepoUrl(path.resolve(options.repoRoot))
@@ -2144,6 +2239,7 @@ export async function readDeployState(options: ReadDeployStateOptions): Promise<
     configFile,
     envFile,
     envSource,
+    githubRepo,
     role: options.role,
     ...(current ? { current } : {}),
     port: options.port,

@@ -22,7 +22,7 @@ import {
   activeSessionsFromHealth,
   backupNodeModules,
   busyDecision,
-  choosePullRemote,
+  choosePullSource,
   cleanupNodeModulesPrev,
   deployDecision,
   deployPorts,
@@ -523,17 +523,18 @@ function gitResult(repo, args) {
 }
 
 /**
- * 与 deploy/pull-latest.sh 一致地选择远端：显式 QUBIUS_PULL_REMOTE 优先；
+ * 与 deploy/pull-latest.sh 一致地选择拉取源：显式 QUBIUS_PULL_REMOTE 优先；
  * QUBIUS_PULL_PREFER_GITHUB=1 时优先名为 github 的远端，其次 origin 指向
- * github.com；都没有时回落到 origin。
+ * github.com，再其次配置的 QUBIUS_GITHUB_REPO，最后回落到 origin。
  */
-function resolvePullRemote(repo) {
-  if (pullRemoteOverride) return pullRemoteOverride;
-  if (!pullPreferGithub) return "origin";
-  return choosePullRemote({
+function resolvePullSource(repo) {
+  if (pullRemoteOverride) return { kind: "remote", value: pullRemoteOverride };
+  if (!pullPreferGithub) return { kind: "remote", value: "origin" };
+  return choosePullSource({
     preferGithub: true,
     hasGithub: gitResult(repo, ["remote", "get-url", "github"]).status === 0,
     originUrl: (gitResult(repo, ["remote", "get-url", "origin"]).stdout ?? "").trim(),
+    githubRepo: envValue("QUBIUS_GITHUB_REPO") ?? "",
   });
 }
 
@@ -546,13 +547,17 @@ function pullLatestCode(entry) {
   if (!gitHead(entry.repo)) {
     fail(step, `${entry.label}不是 git 仓库：${entry.repo}`);
   }
-  const remote = resolvePullRemote(entry.repo);
-  if (!/^[A-Za-z0-9._/-]+$/.test(remote) || remote.startsWith("-") || remote.includes("..")) {
-    fail(step, `远端名非法：${remote}`);
+  const source = resolvePullSource(entry.repo);
+  if (source.kind === "remote") {
+    if (!/^[A-Za-z0-9._/-]+$/.test(source.value) || source.value.startsWith("-") || source.value.includes("..")) {
+      fail(step, `远端名非法：${source.value}`);
+    }
+    if (gitResult(entry.repo, ["remote", "get-url", source.value]).status !== 0) {
+      fail(step, `${entry.label}没有 ${source.value} 远端，无法拉取最新代码`);
+    }
   }
-  if (gitResult(entry.repo, ["remote", "get-url", remote]).status !== 0) {
-    fail(step, `${entry.label}没有 ${remote} 远端，无法拉取最新代码`);
-  }
+  // URL 形式的地址可能带凭据，日志只显示标签。
+  const sourceLabel = source.kind === "url" ? "GitHub 镜像" : source.value;
   const status = gitResult(entry.repo, ["status", "--porcelain"]);
   if (status.status !== 0) {
     fail(step, `无法读取${entry.label}工作区状态`);
@@ -570,15 +575,15 @@ function pullLatestCode(entry) {
   }
   const from = gitHead(entry.repo);
   writeStatus("running", step, `正在拉取${entry.label}最新代码`);
-  say(`拉取${entry.label}最新代码：${remote}/${branch}`);
-  run(`拉取${entry.label}最新代码`, "git", ["-C", entry.repo, "fetch", "--prune", remote, branch], {
+  say(`拉取${entry.label}最新代码：${sourceLabel}/${branch}`);
+  run(`拉取${entry.label}最新代码`, "git", ["-C", entry.repo, "fetch", "--prune", source.value, branch], {
     step,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   });
   const toResult = gitResult(entry.repo, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
   const to = (toResult.stdout ?? "").trim();
   if (toResult.status !== 0 || !to) {
-    fail(step, `读不到 ${remote}/${branch} 的最新提交`);
+    fail(step, `读不到 ${sourceLabel}/${branch} 的最新提交`);
   }
   if (to === from) {
     say(`${entry.label}代码已经是最新：${from.slice(0, 8)}`);
@@ -588,7 +593,7 @@ function pullLatestCode(entry) {
   if (ancestor.status === 1) {
     fail(
       step,
-      `${entry.label}本地 ${branch}（${from.slice(0, 8)}）与 ${remote}/${branch}（${to.slice(0, 8)}）已分叉，请先在终端手动合并`,
+      `${entry.label}本地 ${branch}（${from.slice(0, 8)}）与 ${sourceLabel}/${branch}（${to.slice(0, 8)}）已分叉，请先在终端手动合并`,
     );
   }
   if (ancestor.status !== 0) {

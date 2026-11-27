@@ -174,25 +174,39 @@ export function validateProjectsIndent(text) {
   return { ok: true };
 }
 
+/** 把 QUBIUS_GITHUB_REPO 转成 fetch 用的 URL；空或无法识别时返回空串。 */
+export function githubRepoPullUrl(value = "") {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return "";
+  if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(trimmed)) return `https://github.com/${trimmed}.git`;
+  if (/^(?:https?|ssh|file):\/\/|^git@/.test(trimmed)) return trimmed;
+  return "";
+}
+
 /**
- * 选择部署前拉取的远端，与 deploy/pull-latest.sh 的 resolve_remote 保持一致：
+ * 选择部署前拉取的源，与 deploy/pull-latest.sh 的 resolve_source 保持一致：
  *   - 显式 override（QUBIUS_PULL_REMOTE）优先；
  *   - preferGithub 且存在名为 github 的远端时用它；
  *   - preferGithub 且 origin 指向 github.com 时用 origin；
+ *   - preferGithub 且配置了 QUBIUS_GITHUB_REPO 时直接 fetch 该地址；
  *   - 其它情况回落 origin（常见于安装时从私有仓库克隆）。
+ * 返回 { kind: "remote" | "url", value }。
  */
-export function choosePullRemote({
+export function choosePullSource({
   override = "",
   preferGithub = false,
   hasGithub = false,
   originUrl = "",
+  githubRepo = "",
 } = {}) {
-  if (override) return override;
+  if (override) return { kind: "remote", value: override };
   if (preferGithub) {
-    if (hasGithub) return "github";
-    if (/github\.com[:/]/.test(originUrl)) return "origin";
+    if (hasGithub) return { kind: "remote", value: "github" };
+    if (/github\.com[:/]/.test(originUrl)) return { kind: "remote", value: "origin" };
+    const url = githubRepoPullUrl(githubRepo);
+    if (url) return { kind: "url", value: url };
   }
-  return "origin";
+  return { kind: "remote", value: "origin" };
 }
 
 /** sha256 摘要；文件不存在时返回 undefined。 */

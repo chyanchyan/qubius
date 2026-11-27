@@ -22,6 +22,7 @@ import {
   readDeployJob,
   redeployWithPull,
   renderProjectsYaml,
+  saveGithubRepo,
   startDeployJob,
   validateDeployForm,
   writeDeployEnv,
@@ -728,6 +729,7 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
   );
   fs.writeFileSync(path.join(configDir, "env"), [
     "QUBIUS_PULL_LATEST=0",
+    "QUBIUS_GITHUB_REPO=owner/repo",
     `QUBIUS_PRIMARY_DIR=${base}`,
     `QUBIUS_DATA_PRIMARY=${dataPrimary}`,
     "QUBIUS_START_PRIMARY=1",
@@ -742,6 +744,7 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
     `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(recorded)}, JSON.stringify({\n`
       + "  pullLatest: process.env.QUBIUS_PULL_LATEST ?? \"\",\n"
       + "  preferGithub: process.env.QUBIUS_PULL_PREFER_GITHUB ?? \"\",\n"
+      + "  githubRepo: process.env.QUBIUS_GITHUB_REPO ?? \"\",\n"
       + "  configDir: process.env.QUBIUS_CONFIG_DIR ?? \"\",\n"
       + "  primaryDir: process.env.QUBIUS_PRIMARY_DIR ?? \"\",\n"
       + "}));\n",
@@ -757,12 +760,15 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
   const job = JSON.parse(await waitForFile(recorded)) as {
     pullLatest: string;
     preferGithub: string;
+    githubRepo: string;
     configDir: string;
     primaryDir: string;
   };
   // 本次任务强制拉取并优先 GitHub。
   assert.equal(job.pullLatest, "1");
   assert.equal(job.preferGithub, "1");
+  // 部署页保存的 GitHub 镜像也随任务带上。
+  assert.equal(job.githubRepo, "owner/repo");
   // 其它配置来自当前 env。
   assert.equal(job.configDir, configDir);
   assert.equal(job.primaryDir, base);
@@ -793,6 +799,42 @@ test("redeployWithPull 在没有部署配置或项目文件损坏时拒绝", () 
   assert.throws(
     () => redeployWithPull({ repoRoot: base, env, platform: "linux" }),
     /projects 文件无法读取/,
+  );
+});
+
+test("saveGithubRepo 只改一个键，保留注释和其它设置", () => {
+  const base = tmp();
+  const configDir = path.join(base, "config");
+  fs.mkdirSync(configDir, { recursive: true });
+  const envFile = path.join(configDir, "env");
+  fs.writeFileSync(envFile, [
+    "# 保留注释",
+    "QUBIUS_GITEA_TOKEN=keep-me",
+    "QUBIUS_GITHUB_REPO=old/repo",
+    "QUBIUS_PRIMARY_PORT=8787",
+    "",
+  ].join("\n"));
+  const env = { HOME: base, QUBIUS_CONFIG_DIR: configDir };
+
+  assert.deepEqual(
+    saveGithubRepo({ repoRoot: base, repo: "https://github.com/owner/repo.git", env }),
+    { repo: "owner/repo" },
+  );
+  let text = fs.readFileSync(envFile, "utf8");
+  // 重复键只保留一行，且归一化成 owner/repo。
+  assert.equal((text.match(/^QUBIUS_GITHUB_REPO=/gm) ?? []).length, 1);
+  assert.match(text, /^QUBIUS_GITHUB_REPO=owner\/repo$/m);
+  assert.match(text, /^QUBIUS_GITEA_TOKEN=keep-me$/m);
+  assert.match(text, /^# 保留注释$/m);
+
+  // 空串表示清除，回落到自动识别。
+  assert.deepEqual(saveGithubRepo({ repoRoot: base, repo: "", env }), { repo: "" });
+  text = fs.readFileSync(envFile, "utf8");
+  assert.match(text, /^QUBIUS_GITHUB_REPO=''$/m);
+
+  assert.throws(
+    () => saveGithubRepo({ repoRoot: base, repo: "https://gitlab.com/a/b.git", env }),
+    /GitHub 仓库/,
   );
 });
 

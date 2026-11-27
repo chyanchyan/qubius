@@ -110,6 +110,8 @@ export interface DeployState {
   envFile: string;
   /** envFile 的解析来源，与 deploy/lib.sh 的优先级一致。 */
   envSource: "QUBIUS_ENV" | "config-dir" | "repo" | "default";
+  /** 显式配置的 GitHub 镜像（owner/repo，空串表示自动识别）；旧服务端没有这个字段。 */
+  githubRepo?: string;
   role: "primary" | "secondary";
   /** 当前进程的配置摘要；旧服务端没有。 */
   current?: DeployCurrentConfig;
@@ -141,6 +143,21 @@ export interface GithubVersionState {
 
 export function getGithubVersion(signal?: AbortSignal): Promise<GithubVersionState> {
   return request("/api/deploy/github-version", undefined, signal);
+}
+
+/**
+ * 保存 GitHub 镜像地址（owner/repo 或 GitHub URL；空串表示自动识别）。
+ * 只改 env 里的这一个键，立即生效，不触发重新部署。
+ */
+export function saveGithubRepo(
+  repo: string,
+  signal?: AbortSignal,
+): Promise<{ ok: true; repo: string }> {
+  return request(
+    "/api/deploy/github-repo",
+    { method: "POST", body: JSON.stringify({ repo }) },
+    signal,
+  );
 }
 
 /** 局域网入口一次性信息：只在部署响应里出现，后续 GET 不含密码。 */

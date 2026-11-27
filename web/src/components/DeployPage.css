@@ -37,6 +37,17 @@
 
 .deploy-redeploy .deploy-inline-hint { margin: 0; }
 
+/* GitHub 镜像地址：紧跟在「更新 / 重新部署」按钮下方，单独一行，不触发重新部署。 */
+.deploy-github-repo {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  max-width: 40em;
+  margin: 0 0 calc(12px * var(--control-scale));
+}
+
+.deploy-github-repo .deploy-inline-hint { margin: 0; }
+
 .deploy-section {
   display: flex;
   flex-direction: column;

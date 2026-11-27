@@ -153,4 +153,61 @@ QUBIUS_PULL_PREFER_GITHUB=1 "$PULL" "$WORK3" >/dev/null 2>&1 \
   || fail "没有 github 远端时应回落到 origin"
 [[ $(cat "$WORK3/file.txt") == two ]] || fail "回落 origin 后工作区未更新"
 
+# 9. prefer github、没有 github 远端、配置了 QUBIUS_GITHUB_REPO：直接从该地址拉取。
+ORIGIN4="$TMP/origin4.git"
+MIRROR4="$TMP/mirror4.git"
+SEED4="$TMP/seed4"
+WORK4="$TMP/work4"
+git init --quiet --bare "$ORIGIN4"
+git init --quiet --bare "$MIRROR4"
+git init --quiet "$SEED4"
+(
+  cd "$SEED4"
+  echo one >file.txt
+  git add file.txt
+  git commit -qm one
+  git remote add origin "$ORIGIN4"
+  git remote add mirror "$MIRROR4"
+  git push -q origin main
+  git push -q mirror main
+)
+git clone --quiet "$ORIGIN4" "$WORK4"
+(
+  cd "$SEED4"
+  echo from-mirror >mirror.txt
+  git add mirror.txt
+  git commit -qm mirror-only
+  git push -q mirror main
+)
+QUBIUS_PULL_PREFER_GITHUB=1 QUBIUS_GITHUB_REPO="file://$MIRROR4" \
+  "$PULL" "$WORK4" >/dev/null 2>&1 \
+  || fail "配置 QUBIUS_GITHUB_REPO 后应从该地址快进成功"
+[[ $(cat "$WORK4/mirror.txt" 2>/dev/null) == from-mirror ]] || fail "没有从配置的 GitHub 地址拉取"
+
+# 10. QUBIUS_GITHUB_REPO 无法识别时回落到 origin。
+ORIGIN5="$TMP/origin5.git"
+SEED5="$TMP/seed5"
+WORK5="$TMP/work5"
+git init --quiet --bare "$ORIGIN5"
+git init --quiet "$SEED5"
+(
+  cd "$SEED5"
+  echo one >file.txt
+  git add file.txt
+  git commit -qm one
+  git remote add origin "$ORIGIN5"
+  git push -q origin main
+)
+git clone --quiet "$ORIGIN5" "$WORK5"
+(
+  cd "$SEED5"
+  echo two >file.txt
+  git commit -qam two
+  git push -q origin main
+)
+QUBIUS_PULL_PREFER_GITHUB=1 QUBIUS_GITHUB_REPO="not-a-repo" \
+  "$PULL" "$WORK5" >/dev/null 2>&1 \
+  || fail "无效的 QUBIUS_GITHUB_REPO 应回落到 origin"
+[[ $(cat "$WORK5/file.txt") == two ]] || fail "回落到 origin 后工作区未更新"
+
 echo "deploy/pull-latest.sh 测试通过"
