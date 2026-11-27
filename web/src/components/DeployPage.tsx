@@ -1036,6 +1036,22 @@ export function DeployPage() {
       return;
     }
 
+    /* Windows 页面部署会在宿主机弹出控制台窗口询问「是否停止当前实例」；
+       手机远程访问时看不到也点不到那个窗口，改到页面上确认。 */
+    const needsStopConfirm = deployState?.platform === "win32";
+    if (needsStopConfirm) {
+      const running = (deployState?.instances ?? []).filter((item) => item.running);
+      const ports = running.length > 0
+        ? running.map((item) => `${ROLE_LABEL[item.role]}端口 ${item.port}`).join("、")
+        : `端口 ${deployState?.port ?? ""}`;
+      const confirmed = await dialogs.confirm({
+        title: "停止当前实例并部署？",
+        message: `部署会先停止正在运行的实例（${ports}），构建完成后重新启动，页面会短暂断开。继续吗？`,
+        confirmLabel: "停止并部署",
+      });
+      if (!confirmed) return;
+    }
+
     const controller = startDeployTracking(form);
     try {
       // 两个实例共用同一个仓库：副实例地址始终跟随界面上唯一的仓库输入。
@@ -1045,6 +1061,7 @@ export function DeployPage() {
         publicHost: hosts.publicHost,
         publicHostSecondary: hosts.publicHostSecondary,
         secondaryRepoUrl: form.primaryRepoUrl,
+        confirmStopInstance: needsStopConfirm,
       };
       let result;
       try {
@@ -1093,11 +1110,15 @@ export function DeployPage() {
           ? "GitHub 版本号与当前一致，但可能还有未发版的提交。"
           : ""
       : "";
+    // Windows 部署会先停止当前实例；这里一并确认，部署任务不再在宿主机
+    // 控制台窗口里追问（手机远程部署无法操作那个窗口）。
+    const needsStopConfirm = deployState.platform === "win32";
     const confirmed = await dialogs.confirm({
       title: "拉取最新代码并更新部署？",
       message:
         `${version}将从 GitHub 远端（没有时用配置的 GitHub 仓库或 origin）快进拉取当前分支，`
         + "按当前已保存的配置重新构建并重启服务。"
+        + (needsStopConfirm ? "部署会先停止当前实例，页面会短暂断开。" : "")
         + "有进行中的会话、工作区有未提交改动或与远端分叉时会中止更新（不会打断会话）。",
       confirmLabel: "更新并部署",
     });
@@ -1107,7 +1128,9 @@ export function DeployPage() {
     // 端口/域名当成部署结果，导致错误的“端口已变化”提示和访问地址。
     const controller = startDeployTracking(deployState.form);
     try {
-      const result = await updateDeploy(controller.signal);
+      const result = await updateDeploy(controller.signal, {
+        confirmStopInstance: needsStopConfirm,
+      });
       if (!mounted.current || controller.signal.aborted) return;
       acceptDeploy(result);
     } catch (reason) {

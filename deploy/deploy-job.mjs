@@ -408,6 +408,9 @@ const deployWait = deployWaitRaw === undefined
   : (/^\d+$/.test(deployWaitRaw.trim()) ? Number(deployWaitRaw.trim()) : Number.NaN);
 const deployRestart = envBool("QUBIUS_DEPLOY_RESTART", false);
 deployConsole = envBool("QUBIUS_DEPLOY_CONSOLE", false);
+/* 页面部署会先在页面上确认“停止当前实例”，这里不再在终端窗口里追问；
+   手机远程部署时用户看不到宿主机弹出的窗口，追问会让任务一直卡住。 */
+const confirmStopInstance = envBool("QUBIUS_DEPLOY_CONFIRM_STOP", false);
 
 if (maxConcurrent < 1 || maxConcurrent > 256) {
   fail("prepare", `QUBIUS_MAX_CONCURRENT 必须在 1 到 256 之间：${maxConcurrent}`);
@@ -1235,8 +1238,12 @@ async function confirmPorts() {
     if (known.length > 0) {
       say(`端口 ${entry.port} 由运行中的${entry.label}占用：`);
       for (const pid of known) say(`  ${describeListener(pid)}`);
-      const proceed = await askYesNo("部署会先停止当前实例，继续？[Y/n] ", true);
-      if (!proceed) fail("port", "已取消部署：保留当前运行实例");
+      if (confirmStopInstance) {
+        say("页面已确认停止当前实例，继续部署");
+      } else {
+        const proceed = await askYesNo("部署会先停止当前实例，继续？[Y/n] ", true);
+        if (!proceed) fail("port", "已取消部署：保留当前运行实例");
+      }
     }
   }
 }

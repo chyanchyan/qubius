@@ -747,6 +747,7 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
       + "  githubRepo: process.env.QUBIUS_GITHUB_REPO ?? \"\",\n"
       + "  configDir: process.env.QUBIUS_CONFIG_DIR ?? \"\",\n"
       + "  primaryDir: process.env.QUBIUS_PRIMARY_DIR ?? \"\",\n"
+      + "  confirmStop: process.env.QUBIUS_DEPLOY_CONFIRM_STOP ?? \"\",\n"
       + "}));\n",
   );
 
@@ -754,6 +755,7 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
     repoRoot: base,
     env: { HOME: base, QUBIUS_CONFIG_DIR: configDir },
     platform: "darwin",
+    confirmStopInstance: true,
   });
   assert.ok("jobId" in result, `期望启动部署任务，实际：${JSON.stringify(result)}`);
 
@@ -763,6 +765,7 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
     githubRepo: string;
     configDir: string;
     primaryDir: string;
+    confirmStop: string;
   };
   // 本次任务强制拉取并优先 GitHub。
   assert.equal(job.pullLatest, "1");
@@ -772,11 +775,40 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
   // 其它配置来自当前 env。
   assert.equal(job.configDir, configDir);
   assert.equal(job.primaryDir, base);
+  // 页面确认可以停止当前实例后，部署任务跳过控制台提问。
+  assert.equal(job.confirmStop, "1");
 
-  // env 文件里保存的配置不变；强制开关不会持久化。
+  // env 文件里保存的配置不变；强制开关和这次确认都不会持久化。
   const envText = fs.readFileSync(path.join(configDir, "env"), "utf8");
   assert.match(envText, /^QUBIUS_PULL_LATEST=0$/m);
   assert.doesNotMatch(envText, /QUBIUS_PULL_PREFER_GITHUB/);
+  assert.doesNotMatch(envText, /QUBIUS_DEPLOY_CONFIRM_STOP/);
+});
+
+test("applyDeploy 未确认时不会替页面答应停止当前实例", async () => {
+  const base = tmp();
+  const configDir = path.join(base, "config");
+  fs.mkdirSync(configDir, { recursive: true });
+  makeRepo(base);
+  const recorded = path.join(base, "recorded-confirm.json");
+  writeJob(
+    base,
+    "#!/bin/bash\nexit 1\n",
+    `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(recorded)}, JSON.stringify({\n`
+      + "  confirmStop: process.env.QUBIUS_DEPLOY_CONFIRM_STOP ?? \"\",\n"
+      + "}));\n",
+  );
+
+  const result = applyDeploy({
+    body: { ...validForm(base), configDir },
+    repoRoot: base,
+    env: { HOME: base, QUBIUS_CONFIG_DIR: configDir },
+    platform: "darwin",
+  });
+  assert.ok("jobId" in result, `期望启动部署任务，实际：${JSON.stringify(result)}`);
+
+  const job = JSON.parse(await waitForFile(recorded)) as { confirmStop: string };
+  assert.equal(job.confirmStop, "");
 });
 
 test("redeployWithPull 在没有部署配置或项目文件损坏时拒绝", () => {

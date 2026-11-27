@@ -93,6 +93,8 @@ export interface DeployForm {
   projects: DeployProject[];
   /** 数据目录与当前配置文件不同且旧目录有会话时的二次确认。 */
   confirmDataDirChange?: boolean;
+  /** 页面已确认部署可以先停止当前实例；Windows 部署任务据此跳过控制台提问。 */
+  confirmStopInstance?: boolean;
 }
 
 export interface DeployInstanceInfo {
@@ -857,6 +859,7 @@ export function validateDeployForm(
     nodeBin: requireString(record, "nodeBin", "Node 路径"),
     projects: validateProjects(record.projects),
     confirmDataDirChange: record.confirmDataDirChange === true,
+    confirmStopInstance: record.confirmStopInstance === true,
   };
   // clonePeer 只对副实例有意义；没启用副实例时归一化为 false，避免 env 里残留 1。
   form.clonePeer = form.startSecondary && form.clonePeer;
@@ -2045,6 +2048,9 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
     // 一次性开关只进本次任务的进程环境：env 文件保持用户保存的配置不变。
     // QUBIUS_PULL_PREFER_GITHUB 不在 MANAGED_KEYS 里，不会被写回。
     const values = deployEnvValues(form, projectsFile);
+    // 页面已经确认过可以停止当前实例；Windows 部署任务据此跳过控制台提问，
+    // 手机远程部署时没人能操作宿主机上弹出的终端窗口。
+    if (form.confirmStopInstance) values.QUBIUS_DEPLOY_CONFIRM_STOP = "1";
     if (options.forcePullLatest) values.QUBIUS_PULL_LATEST = "1";
     if (options.preferGithubRemote) values.QUBIUS_PULL_PREFER_GITHUB = "1";
     // 页面单独保存的 GitHub 镜像不在 MANAGED_KEYS 里，显式传给任务，
@@ -2130,6 +2136,8 @@ export interface RedeployWithPullOptions {
   dataDir?: string;
   port?: number;
   platform?: NodeJS.Platform;
+  /** 页面已确认更新可以先停止当前实例。 */
+  confirmStopInstance?: boolean;
 }
 
 /**
@@ -2157,7 +2165,11 @@ export function redeployWithPull(options: RedeployWithPullOptions): ApplyDeployR
     throw new DeployValidationError(`现有 projects 文件无法读取：${derived.projectsError}`);
   }
   return applyDeploy({
-    body: derived.form,
+    // 一键更新不接受页面表单，但“停止当前实例”的确认是用户刚在页面上做的，
+    // 只把这个布尔值带进来，不改动任何配置字段。
+    body: options.confirmStopInstance === true
+      ? { ...derived.form, confirmStopInstance: true }
+      : derived.form,
     repoRoot: options.repoRoot,
     ...(options.configFile ? { configFile: options.configFile } : {}),
     env,

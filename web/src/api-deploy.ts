@@ -62,6 +62,8 @@ export interface DeployForm {
   projects: DeployProject[];
   /** 数据目录变化且旧目录有会话时的二次确认。 */
   confirmDataDirChange?: boolean;
+  /** 页面已确认部署可以先停止当前实例（Windows 部署任务据此跳过控制台提问）。 */
+  confirmStopInstance?: boolean;
 }
 
 export interface DeployInstanceInfo {
@@ -191,8 +193,16 @@ export function getDeployStatus(signal?: AbortSignal): Promise<{ job: DeployJob 
  */
 export function updateDeploy(
   signal?: AbortSignal,
+  options: { confirmStopInstance?: boolean } = {},
 ): Promise<{ ok: true; jobId: string; oneTime?: DeployOneTimeInfo }> {
-  return request("/api/deploy/update", { method: "POST", body: "{}" }, signal);
+  return request(
+    "/api/deploy/update",
+    {
+      method: "POST",
+      body: JSON.stringify({ confirmStopInstance: options.confirmStopInstance === true }),
+    },
+    signal,
+  );
 }
 
 /** 读取当前启用的 API 访问令牌；未启用时 404。 */

@@ -703,8 +703,12 @@ export function createAppServer(options: {
       // 「从 GitHub 更新并部署」：按服务端当前保存的配置重新部署，构建前拉取。
       // 不接受页面表单，避免把未保存的改动或客户端伪造的配置写进 env。
       if (options.setupRequired) throw new HttpError(400, "还没有部署配置，请先完成首次部署");
-      // 动作本身不需要参数；读掉请求体，保持与其它 POST 接口一致的连接语义。
-      await readJson(req);
+      // 动作本身不需要配置参数；只接受“已确认停止当前实例”这个布尔值。
+      const body = await readJson(req);
+      const confirmStopInstance = Boolean(
+        body && typeof body === "object" && !Array.isArray(body)
+        && (body as { confirmStopInstance?: unknown }).confirmStopInstance === true,
+      );
       let result;
       try {
         result = redeployWithPull({
@@ -713,6 +717,7 @@ export function createAppServer(options: {
           role: config.role,
           dataDir: config.dataDir,
           port: config.port,
+          confirmStopInstance,
         });
       } catch (error) {
         if (error instanceof DeployDataDirChangeError) {
