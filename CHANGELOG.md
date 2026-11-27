@@ -2,6 +2,16 @@
 
 每个版本包含一句摘要和改动列表，规则见 `CLAUDE.md`。
 
+## [0.12.0] - 2026-11-27
+
+Windows/macOS 上用 make 启动和部署时，服务直接在终端前台运行，不再藏在后台。
+
+- `make start`、`make restart`、`make deploy`、`make deploy-lan` 默认在当前终端前台运行服务，日志同时打在窗口和 `qubius.log` 里；Ctrl+C 或关闭窗口即停止。
+- 输出没有 TTY（CI、重定向）时自动保持后台；需要后台运行可以设置 `QUBIUS_BACKGROUND=1`。
+- 前台服务退出或 Ctrl+C 时会一并停掉局域网入口，不留下后台进程。
+- `make deploy-lan` 生成的 API 访问令牌直接显示在终端窗口里，不写入部署日志。
+- `make deploy-wan` 仍按后台方式启动（需要在部署任务返回后应用公网入口）；Linux 的 systemd 管理方式不变。
+
 ## [0.11.1] - 2026-11-27
 
 修复 Windows 上刷新部署页会闪出终端窗口、任务管理器堆积控制台窗口主机的问题。
