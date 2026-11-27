@@ -1272,6 +1272,23 @@ const AssistantRow = memo(function AssistantRow({
           )}
         </div>
       )}
+      {item.speaker && item.roleRun && (
+        <div className="discussion-speaker">
+          {/* 服务端的 speaker 已经是「执行 · model」，不再另加角色标签。 */}
+          <span className="discussion-speaker-name">{item.speaker}</span>
+          {item.roleRun.unit && (
+            <span className="discussion-speaker-subtask" title={item.roleRun.unit.title}>
+              单元 {item.roleRun.unit.index}
+            </span>
+          )}
+          {item.roleRun.integrating && (
+            <span className="discussion-speaker-subtask">集成</span>
+          )}
+          {item.roleRun.round > 1 && (
+            <span className="discussion-speaker-round">第 {item.roleRun.round} 轮</span>
+          )}
+        </div>
+      )}
       <MarkdownBody text={text} scrollRef={scrollRef} stickRef={stickRef} />
       {item.partial ? (
         <span className="caret" />

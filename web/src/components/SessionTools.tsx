@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { sendMessage, type QueueEntry, type Session, type WorkflowSkill } from "../api";
+import { sendMessage, startRoleRun, type QueueEntry, type Session, type WorkflowSkill } from "../api";
 import { startDiscussion } from "../api-discussion";
+import { continueKind } from "../continue-target";
 import {
   cancelQueuedPrompt,
   editQueuedPrompt,
@@ -37,11 +38,18 @@ function errorText(reason: unknown, fallback: string): string {
 /**
  * 中断/停止后继续：沿用上一轮的工作流，避免 prl/ser/plan 控件消失。
  * 讨论会话没有「继续」这种正文：直接用保存的参与者把上一轮讨论重跑一遍。
+ * prl-role 同样不能发字面量「继续」：直接用保留的四角色团队重跑，
+ * 让最后一条用户消息仍是原请求，编排拿到的 topic 才是对的。
  * 详情页菜单和列表页的「继续」按钮共用这一条发送路径。
  */
 export async function sendContinue(session: Session): Promise<Session> {
-  if (session.discussion && session.discussion.participants.length > 0) {
+  const kind = continueKind(session);
+  if (kind === "discussion" && session.discussion) {
     const data = await startDiscussion(session.id, session.discussion.participants);
+    return data.session;
+  }
+  if (kind === "role" && session.roleRun?.team) {
+    const data = await startRoleRun(session.id, session.roleRun.team);
     return data.session;
   }
   const workflow = session.workflow?.skill;

@@ -132,9 +132,11 @@ export interface TranscriptItem {
   speaker?: string;
   /** 多模型讨论发言的阶段和轮次；普通对话没有。 */
   discussion?: DiscussionMessageMeta;
+  /** prl-role 发言的角色、轮次和单元；普通对话没有。 */
+  roleRun?: RoleMessageMeta;
 }
 
-export type WorkflowSkill = "prl" | "ser" | "plan" | "discuss" | "dis-prl";
+export type WorkflowSkill = "prl" | "ser" | "plan" | "discuss" | "dis-prl" | "prl-role";
 
 export type DiscussionKind = "decompose" | "answer" | "review" | "rebuttal" | "final";
 
@@ -202,6 +204,91 @@ export interface DiscussionState {
   error?: string;
   startedAt?: string;
   endedAt?: string;
+}
+
+/**
+ * prl-role 角色团队的四个角色。
+ *
+ * 编排模型负责拆分，执行模型负责每个单元的开发，子审核模型负责每个单元的
+ * 评审，集成审核模型负责全部单元结束后的整体审核。
+ */
+export type RoleKind =
+  | "orchestrator"
+  | "executor"
+  | "sub-reviewer"
+  | "integration-reviewer";
+
+/** 一个角色选用的接口、模型和思考强度。 */
+export interface RoleBinding {
+  providerId: string;
+  /** 保存时的接口名，接口被删除后仍能显示；启动时会重新校验。 */
+  providerName: string;
+  model: string;
+  effort: Effort;
+}
+
+/** prl-role 的四角色团队；四个角色都必须有值。 */
+export interface RoleTeam {
+  orchestrator: RoleBinding;
+  executor: RoleBinding;
+  subReviewer: RoleBinding;
+  integrationReviewer: RoleBinding;
+}
+
+export type RoleRunPhase = "setup" | "running" | "completed" | "failed" | "stopped";
+
+export type RoleUnitPhase = "pending" | "running" | "passed" | "needs_attention" | "stopped";
+
+/** 一个工作单元的开发-评审进度。 */
+export interface RoleUnitState {
+  /** 从 1 开始。 */
+  index: number;
+  title: string;
+  phase: RoleUnitPhase;
+  /** 当前轮次（从 1 开始）。 */
+  round: number;
+  /** 最近一次评审结论；还没评审时缺省。 */
+  verdict?: "pass" | "changes" | "unknown";
+  /** 最近一次评审原文（截断），修复轮会交给执行模型。 */
+  issues?: string;
+  /** 执行者最近一轮的自述摘要（截断）。 */
+  executorSummary?: string;
+}
+
+/** 当前会话的 prl-role 运行状态；普通对话没有这个字段。 */
+export interface RoleRunState {
+  phase: RoleRunPhase;
+  /** 开始运行后保存的团队配置；setup 阶段可能缺省。 */
+  team?: RoleTeam;
+  units: RoleUnitState[];
+  /** 当前单元轮次（从 1 开始）；还没开始时为 0。 */
+  round: number;
+  maxRounds: number;
+  /** 正在调用的角色；阶段之间缺省。 */
+  activeRole?: RoleKind;
+  /** 正在处理的单元下标（从 1 开始）。 */
+  activeUnit?: number;
+  /** 正在执行的角色最近调用的工具名。 */
+  activeTool?: string;
+  /** 所有单元结束后正在做集成审核。 */
+  integrating?: boolean;
+  /** 集成审核是否通过。 */
+  agreed?: boolean;
+  error?: string;
+  startedAt?: string;
+  endedAt?: string;
+}
+
+/** 一条 prl-role 发言的归属：角色、轮次、单元或集成阶段。 */
+export interface RoleMessageMeta {
+  kind: RoleKind;
+  round: number;
+  unit?: { index: number; title: string };
+  integrating?: boolean;
+  /** 本次调用实际使用的接口，用于用量统计按真实角色归账；旧数据缺省时回退会话接口。 */
+  providerId?: string;
+  providerName?: string;
+  model?: string;
 }
 
 /** 一轮 prl/ser/plan/discuss 工作流；由发送区选择或消息末尾 token 触发。 */
@@ -305,6 +392,8 @@ export interface SessionCore {
   workflow?: WorkflowRun;
   /** 多模型讨论的参与者和进度；普通对话为 undefined。 */
   discussion?: DiscussionState;
+  /** prl-role 角色团队的运行状态；普通对话为 undefined。 */
+  roleRun?: RoleRunState;
   messages: TranscriptItem[];
   pending: PendingRequest | null;
   seen: string[];
@@ -379,6 +468,8 @@ export interface PublicSettings {
   limits: LimitsConfig;
   /** 会话在本机保留多少天后归档；只有配置了归档目录时生效。 */
   archiveRetentionDays: number;
+  /** 设置页保存的 prl-role 默认四角色团队；没有配置时缺省。 */
+  roleTeam?: RoleTeam;
 }
 
 export interface SessionSummary {
@@ -411,6 +502,8 @@ export interface SessionSummary {
   workflow?: WorkflowRun;
   /** 多模型讨论的参与者和进度；普通对话为 undefined。 */
   discussion?: DiscussionState;
+  /** prl-role 角色团队的运行状态；普通对话为 undefined。 */
+  roleRun?: RoleRunState;
   pending: PendingRequest | null;
   /** 已提交但还没被 agent 取走的消息；由 HTTP/SSE 层按运行时队列补齐。 */
   queue?: QueueEntry[];

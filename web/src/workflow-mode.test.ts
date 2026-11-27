@@ -14,6 +14,18 @@ test("detectWorkflowSkill：识别末尾 prl/ser/plan/discuss/dis-prl 和斜杠�
   assert.equal(detectWorkflowSkill("拆开并行讨论 dis-prl"), "dis-prl");
   assert.equal(detectWorkflowSkill("拆开并行讨论 DIS-PRL"), "dis-prl");
   assert.equal(detectWorkflowSkill("/dis-prl 这个方案"), "dis-prl");
+  assert.equal(detectWorkflowSkill("帮我做这个 prl-role"), "prl-role");
+  assert.equal(detectWorkflowSkill("帮我做这个 prl-role。"), "prl-role");
+  assert.equal(detectWorkflowSkill("帮我做这个 PRL-ROLE"), "prl-role");
+  assert.equal(detectWorkflowSkill("/prl-role 这个方案"), "prl-role");
+});
+
+test("detectWorkflowSkill：prl-role 不会退化成 prl", () => {
+  assert.equal(detectWorkflowSkill("帮我实现 prl"), "prl");
+  assert.equal(detectWorkflowSkill("用 prl-role 模式"), null);
+  assert.equal(detectWorkflowSkill("prl-role"), "prl-role");
+  assert.equal(detectWorkflowSkill("/prl"), "prl");
+  assert.equal(detectWorkflowSkill("/prl-role"), "prl-role");
 });
 
 test("detectWorkflowSkill：不误判词内子串和英文 the plan", () => {
@@ -29,10 +41,10 @@ test("detectWorkflowSkill：多个 token 取最后一个", () => {
   assert.equal(detectWorkflowSkill("prl ser"), "ser");
 });
 
-test("WORKFLOW_OPTIONS：普通在最前，五种工作流都可选", () => {
+test("WORKFLOW_OPTIONS：普通在最前，六种工作流都可选", () => {
   assert.deepEqual(
     WORKFLOW_OPTIONS.map((option) => option.value),
-    ["", "prl", "ser", "plan", "discuss", "dis-prl"],
+    ["", "prl", "ser", "plan", "discuss", "dis-prl", "prl-role"],
   );
 });
 

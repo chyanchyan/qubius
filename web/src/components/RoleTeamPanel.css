@@ -1,0 +1,306 @@
+/* prl-role 角色团队：配置弹窗内容和运行中的只读进度面板。
+   视觉沿用 DiscussionPanel，强调色用 warn（与发送区 prl-role 一致）。 */
+
+.role-team-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--control-scale));
+}
+
+.role-team-dialog-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.role-team-rows {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+}
+
+.role-team-row {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+}
+
+.role-team-role {
+  display: flex;
+  flex: 0 0 8.5rem;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.role-team-role-name {
+  color: var(--fg);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.role-team-role-hint {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-team-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: calc(28px * var(--control-scale));
+  padding: 0 calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-12);
+}
+
+.role-team-effort {
+  flex: 0 0 8.5rem;
+}
+
+.role-team-select:focus-visible {
+  outline: 2px solid var(--warn);
+  outline-offset: 1px;
+}
+
+.role-team-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: calc(8px * var(--control-scale));
+}
+
+/* 弹窗错误：遮罩会盖住 App 的 dock-notice，必须在对话框内可见。 */
+.role-team-error {
+  margin: 0;
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid color-mix(in srgb, var(--red) 55%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--error);
+  font-size: var(--fs-12);
+}
+
+.role-team-later,
+.role-team-start,
+.role-team-configure {
+  height: calc(28px * var(--control-scale));
+  padding: 0 calc(11px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--fs-12);
+}
+
+.role-team-later:hover:not(:disabled),
+.role-team-configure:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.role-team-start {
+  border-color: color-mix(in srgb, var(--warn) 60%, transparent);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  font-weight: 600;
+}
+
+.role-team-start:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warn) 28%, transparent);
+}
+
+.role-team-later:disabled,
+.role-team-start:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.role-team-later:focus-visible,
+.role-team-start:focus-visible,
+.role-team-configure:focus-visible {
+  outline: 2px solid var(--warn);
+  outline-offset: 1px;
+}
+
+/* 点过「稍后配置」后的内联提示条，点击可重新打开弹窗。 */
+.role-team-hint {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  margin: 0 calc(8px * var(--control-scale)) calc(6px * var(--control-scale));
+  padding: calc(6px * var(--control-scale)) calc(9px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: 10px;
+  background: var(--menu);
+}
+
+.role-team-hint-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--warn);
+  font-size: var(--fs-12);
+}
+
+.role-team-configure {
+  flex: none;
+  height: calc(26px * var(--control-scale));
+}
+
+/* 运行中/已结束：和工作流进度条同一视觉层级。 */
+.role-team-panel {
+  flex: none;
+  margin: 0 calc(8px * var(--control-scale)) calc(6px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: 10px;
+  background: var(--menu);
+  overflow: hidden;
+}
+
+.role-team-panel[data-phase="running"] { border-left-color: var(--warn); }
+.role-team-panel[data-phase="completed"] { border-left-color: var(--green); }
+.role-team-panel[data-phase="failed"] { border-left-color: var(--red); }
+.role-team-panel[data-phase="stopped"] { border-left-color: var(--muted); }
+
+.role-team-head {
+  display: flex;
+  align-items: baseline;
+  gap: calc(8px * var(--control-scale));
+  padding: calc(7px * var(--control-scale)) calc(9px * var(--control-scale)) calc(5px * var(--control-scale));
+}
+
+.role-team-title {
+  flex: none;
+  color: var(--warn);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.role-team-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-team-status[data-state="failed"] { color: var(--red); }
+.role-team-status[data-state="stopped"] { color: var(--muted); }
+
+.role-team-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(4px * var(--control-scale)) calc(12px * var(--control-scale));
+  padding: 0 calc(9px * var(--control-scale)) calc(6px * var(--control-scale));
+}
+
+.role-team-model {
+  display: inline-flex;
+  align-items: baseline;
+  gap: calc(4px * var(--control-scale));
+  min-width: 0;
+  font-size: var(--fs-11);
+}
+
+.role-team-model-role {
+  color: var(--muted);
+}
+
+.role-team-model-name {
+  overflow: hidden;
+  max-width: 14rem;
+  color: var(--fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-team-units {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3px * var(--control-scale));
+  margin: 0;
+  padding: 0 calc(9px * var(--control-scale)) calc(8px * var(--control-scale));
+  list-style: none;
+}
+
+.role-team-unit {
+  display: flex;
+  align-items: baseline;
+  gap: calc(6px * var(--control-scale));
+  min-width: 0;
+  padding: calc(2px * var(--control-scale)) calc(6px * var(--control-scale));
+  border-radius: 6px;
+  font-size: var(--fs-12);
+}
+
+.role-team-unit[data-active] {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+.role-team-unit-index {
+  flex: none;
+  width: calc(16px * var(--control-scale));
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: var(--fs-11);
+  text-align: right;
+}
+
+.role-team-unit-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-team-unit-phase {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.role-team-unit[data-phase="passed"] .role-team-unit-phase { color: var(--green); }
+.role-team-unit[data-phase="running"] .role-team-unit-phase { color: var(--warn); }
+.role-team-unit[data-phase="needs_attention"] .role-team-unit-phase { color: var(--red); }
+.role-team-unit[data-phase="stopped"] .role-team-unit-phase { color: var(--muted); }
+
+.role-team-unit-round {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+/* 窄屏：角色名占一整行，三个下拉平分下一行；进度面板允许滚动。 */
+@media (max-width: 560px) {
+  .role-team-row {
+    flex-wrap: wrap;
+  }
+
+  .role-team-role {
+    flex: 1 1 100%;
+  }
+
+  .role-team-select,
+  .role-team-effort {
+    flex: 1 1 0;
+  }
+
+  .role-team-unit {
+    flex-wrap: wrap;
+  }
+
+  .role-team-unit-title {
+    flex: 1 1 calc(100% - 40px);
+  }
+}

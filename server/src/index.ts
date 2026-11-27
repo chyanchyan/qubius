@@ -19,6 +19,7 @@ import { ScheduleRunner, ScheduleStore } from "./schedules.js";
 import { defaultSdkConfigDir } from "./sdk-files.js";
 import { createSdkTitleSummarizer } from "./session-title.js";
 import { createSdkDiscussant } from "./discussion.js";
+import { createSdkRoleAgent } from "./role-agent.js";
 import { GeminiBridge } from "./gemini-bridge.js";
 import { findProvider, loadSettings, providerKind } from "./settings.js";
 import { proxyUrlForTarget } from "./proxy.js";
@@ -266,6 +267,8 @@ const runtime = new Runtime(store, {
   ...(fake ? {} : { titleSummarizer: createSdkTitleSummarizer({ credential }) }),
   // 多模型讨论的每次发言都是一次独立模型调用；假运行使用运行时内置的假实现。
   ...(fake ? {} : { discussant: createSdkDiscussant({ credential }) }),
+  // prl-role 的每次角色调用同样是独立模型调用；假运行使用运行时内置的假实现。
+  ...(fake ? {} : { roleAgent: createSdkRoleAgent({ credential }) }),
   secrets: () => settings.current.providers.map((provider) => provider.apiKey),
   skills: {
     filter: (projectId) => enabledSkillFilter({

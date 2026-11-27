@@ -17,6 +17,7 @@ import {
   subagentCounts,
   type SdkMessage,
 } from "./status.js";
+import { MAX_ROLE_ROUNDS } from "./prl-role.js";
 import {
   isEffort,
   type BackgroundTask,
@@ -28,16 +29,24 @@ import {
   type Effort,
   type ImageRef,
   type PendingRequest,
+  type RoleKind,
+  type RoleRunPhase,
+  type RoleRunState,
+  type RoleTeam,
+  type RoleUnitPhase,
+  type RoleUnitState,
   type SessionCore,
   type SessionSummary,
+  type TokenUsage,
   type TranscriptItem,
-  type UsageTotals,
   type WorkflowRun,
   type WorkflowSkill,
 } from "./types.js";
 import { TokenRateMeter } from "./token-rate.js";
 import {
+  summarizeMessagesByProvider,
   usageReport as buildUsageReport,
+  type ProviderUsageBucket,
   type UsageProviderInput,
   type UsageReport,
   type UsageSessionInput,
@@ -160,8 +169,8 @@ export class Store {
   private pending = new Map<string, { first: number; last: number }>();
   /** 整个 Store 共用一个调度定时器，只 arm 到当前最早的截止时间。 */
   private scheduler: NodeJS.Timeout | undefined;
-  /** 会话用量汇总缓存：key 用 updatedAt + 条数反映消息 usage 变化。 */
-  private usageCache = new Map<string, { key: string; totals: UsageTotals }>();
+  /** 会话用量汇总缓存：key 用 updatedAt + 条数反映消息 usage 变化，按实际接口拆分保存。 */
+  private usageCache = new Map<string, { key: string; byProvider: ProviderUsageBucket[] }>();
   /** 各会话的实时输出速度计；只在内存里，进程重启后从零开始。 */
   private tokenRates = new Map<string, TokenRateMeter>();
   /**
@@ -378,6 +387,17 @@ export class Store {
   }
 
   /**
+   * 详情连接用的元数据摘要：消息体由调用方另行分页，但 roleRun 保留全文，
+   * 避免客户端用裁剪后的帧整体覆盖已有进度。
+   */
+  detailSummary(id: string): SessionSummary {
+    const session = this.require(id);
+    const summary = this.summaryOf(session, false);
+    if (session.roleRun) summary.roleRun = session.roleRun;
+    return summary;
+  }
+
+  /**
    * 会话摘要；额外带上内存中的实时输出速度。速度只用于顶栏显示，
    * 不落盘、不参与归档与恢复，取整后省略 0 值。
    */
@@ -402,8 +422,11 @@ export class Store {
     const stop = end === undefined
       ? size
       : Math.max(start, Math.min(Number.isFinite(end) ? Math.trunc(end) : size, size));
+    const summary = this.summaryOf(session, false);
+    // 详情连接需要完整的 roleRun 文本，列表/board 才做裁剪。
+    if (session.roleRun) summary.roleRun = session.roleRun;
     return {
-      summary: this.summaryOf(session, false),
+      summary,
       messages: session.messages.slice(start, stop).map(strip),
       messageCount: size,
     };
@@ -420,32 +443,29 @@ export class Store {
     const live = new Set<string>();
     for (const session of this.sessions.values()) {
       live.add(session.id);
-      const key = `${session.updatedAt}|${session.messages.length}`;
+      const key = `${session.updatedAt}|${session.messages.length}|${session.providerId}|${session.providerName}`;
       const cached = this.usageCache.get(session.id);
-      const input: UsageSessionInput = {
+      let byProvider: ProviderUsageBucket[];
+      if (cached && cached.key === key) {
+        byProvider = cached.byProvider;
+      } else {
+        byProvider = summarizeMessagesByProvider(
+          session.messages,
+          session.providerId,
+          session.providerName,
+        );
+        this.usageCache.set(session.id, { key, byProvider });
+      }
+      inputs.push({
         id: session.id,
         title: session.title,
         projectId: session.projectId,
         providerId: session.providerId,
         providerName: session.providerName,
-      };
-      if (cached && cached.key === key) {
-        input.totals = cached.totals;
-      } else {
-        input.messages = session.messages;
-      }
-      inputs.push(input);
-    }
-    const report = buildUsageReport(inputs, providers);
-    // 用本次扫描结果刷新缓存；存副本，避免调用方改写报告时污染缓存。
-    for (const entry of report.bySession) {
-      const session = this.sessions.get(entry.id);
-      if (!session) continue;
-      this.usageCache.set(entry.id, {
-        key: `${session.updatedAt}|${session.messages.length}`,
-        totals: { ...entry.totals },
+        byProvider,
       });
     }
+    const report = buildUsageReport(inputs, providers);
     // 会话删除后清掉对应缓存；这里也兜底清理已经不在内存里的旧 id。
     for (const id of this.usageCache.keys()) {
       if (!live.has(id)) this.usageCache.delete(id);
@@ -726,6 +746,8 @@ export class Store {
     else if (current.forkedSdkIds) next.forkedSdkIds = current.forkedSdkIds;
     if (options.lastSdkUuid) next.lastSdkUuid = options.lastSdkUuid;
     else delete next.lastSdkUuid;
+    // 回滚后没有配置入口的 setup 角色团队不该留着；已完成的保留展示。
+    if (next.roleRun?.phase === "setup") delete next.roleRun;
     // 回滚后旧的延迟工作流选择不会再开始，直接丢弃。
     this.awaitingResult.delete(id);
     this.deferredWorkflows.delete(id);
@@ -792,7 +814,7 @@ export class Store {
     const current = this.require(id);
     const now = new Date().toISOString();
     const list = participants ?? current.discussion?.participants ?? [];
-    return this.commit({
+    const next: SessionCore = {
       ...current,
       turnActive: false,
       queued: false,
@@ -808,7 +830,10 @@ export class Store {
         startedAt: now,
       },
       updatedAt: now,
-    });
+    };
+    // 切换到讨论模式时清掉角色团队状态，避免两个配置面板同时出现。
+    delete next.roleRun;
+    return this.commit(next);
   }
 
   /** 真正开始一场讨论：占用一轮运行状态，记录参与者并清空上一场的结论。 */
@@ -1010,6 +1035,238 @@ export class Store {
   }
 
   /**
+   * 让 prl-role 会话进入「等待配置四角色团队」状态。
+   *
+   * 新建会话或用户在角色模式下又发了一条消息时调用；不会启动模型调用。
+   * 团队配置保留上一次的选择（或者调用方显式传入的），用户可以直接开始。
+   */
+  prepareRoleRun(id: string, team?: RoleTeam): SessionCore {
+    const current = this.require(id);
+    const now = new Date().toISOString();
+    const resolved = team ?? current.roleRun?.team;
+    const next: SessionCore = {
+      ...current,
+      turnActive: false,
+      queued: false,
+      pending: null,
+      runStartedAt: undefined,
+      runEndedAt: undefined,
+      lastResult: undefined,
+      lastError: undefined,
+      workflow: { skill: "prl-role", startedAt: now },
+      roleRun: {
+        phase: "setup",
+        ...(resolved ? { team: resolved } : {}),
+        units: [],
+        round: 0,
+        maxRounds: MAX_ROLE_ROUNDS,
+        startedAt: now,
+      },
+      updatedAt: now,
+    };
+    // 切换到角色团队模式时清掉讨论状态，避免两个配置面板同时出现。
+    delete next.discussion;
+    return this.commit(next);
+  }
+
+  /** 真正开始角色团队：占用一轮运行状态，记录团队配置并清空上一场的结果。 */
+  beginRoleRun(id: string, team: RoleTeam, maxRounds: number): SessionCore {
+    const current = this.require(id);
+    const now = new Date().toISOString();
+    return this.commit({
+      ...current,
+      turnActive: true,
+      queued: false,
+      pending: null,
+      lastResult: undefined,
+      lastError: undefined,
+      runStartedAt: now,
+      runEndedAt: undefined,
+      workflow: { skill: "prl-role", startedAt: now },
+      roleRun: {
+        phase: "running",
+        team,
+        units: [],
+        round: 1,
+        maxRounds,
+        startedAt: now,
+      },
+      updatedAt: now,
+    });
+  }
+
+  /** 编排完成后登记工作单元；运行已经结束时忽略。 */
+  setRoleUnits(id: string, titles: string[]): void {
+    const current = this.sessions.get(id);
+    if (!current?.roleRun || current.roleRun.phase !== "running") return;
+    const units: RoleUnitState[] = titles.map((title, index) => ({
+      index: index + 1,
+      title,
+      phase: "pending",
+      round: 0,
+    }));
+    this.commit({
+      ...current,
+      roleRun: { ...current.roleRun, units },
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * 更新「第几轮 / 谁在调用 / 正在处理哪个单元」；运行已经落定时忽略。
+   * clearActive 用于阶段之间清空正在调用的角色和工具。
+   */
+  setRoleRunProgress(
+    id: string,
+    patch: {
+      round?: number;
+      activeRole?: RoleKind;
+      activeUnit?: number;
+      activeTool?: string;
+      integrating?: boolean;
+      clearActive?: boolean;
+    },
+  ): void {
+    const current = this.sessions.get(id);
+    if (!current?.roleRun || current.roleRun.phase !== "running") return;
+    const roleRun: RoleRunState = { ...current.roleRun };
+    if (patch.clearActive) {
+      delete roleRun.activeRole;
+      delete roleRun.activeUnit;
+      delete roleRun.activeTool;
+    }
+    if (patch.round !== undefined) roleRun.round = patch.round;
+    if (patch.activeRole !== undefined) roleRun.activeRole = patch.activeRole;
+    if (patch.activeUnit !== undefined) roleRun.activeUnit = patch.activeUnit;
+    if (patch.activeTool !== undefined) roleRun.activeTool = patch.activeTool;
+    if (patch.integrating === true) roleRun.integrating = true;
+    else if (patch.integrating === false) delete roleRun.integrating;
+    this.commit({ ...current, roleRun, updatedAt: new Date().toISOString() });
+  }
+
+  /** 落定一个工作单元；运行已经结束时忽略。 */
+  settleRoleUnit(
+    id: string,
+    index: number,
+    patch: {
+      phase: RoleUnitPhase;
+      round?: number;
+      verdict?: RoleUnitState["verdict"];
+      issues?: string;
+      executorSummary?: string;
+    },
+  ): void {
+    const current = this.sessions.get(id);
+    if (!current?.roleRun || current.roleRun.phase !== "running") return;
+    const units = current.roleRun.units.map((item) => {
+      if (item.index !== index) return item;
+      const next: RoleUnitState = { ...item, phase: patch.phase };
+      if (patch.round !== undefined) next.round = patch.round;
+      if (patch.verdict !== undefined) next.verdict = patch.verdict;
+      if (patch.issues !== undefined) next.issues = patch.issues;
+      if (patch.executorSummary !== undefined) next.executorSummary = patch.executorSummary;
+      return next;
+    });
+    this.commit({
+      ...current,
+      roleRun: { ...current.roleRun, units },
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  /** 追加一条角色发言；role 固定为 assistant，前端靠 speaker/roleRun 标注身份。 */
+  appendRoleMessage(
+    id: string,
+    input: {
+      speaker: string;
+      text: string;
+      role: RoleKind;
+      round: number;
+      unit?: { index: number; title: string };
+      integrating?: boolean;
+      usage?: TokenUsage;
+      providerId?: string;
+      providerName?: string;
+      model?: string;
+    },
+  ): SessionCore {
+    const current = this.require(id);
+    const now = new Date().toISOString();
+    const item: TranscriptItem = {
+      id: randomId(),
+      role: "assistant",
+      text: capMessageText(input.text),
+      at: now,
+      speaker: input.speaker,
+      ...(input.usage ? { usage: input.usage } : {}),
+      roleRun: {
+        kind: input.role,
+        round: input.round,
+        ...(input.unit ? { unit: input.unit } : {}),
+        ...(input.integrating ? { integrating: true } : {}),
+        ...(input.providerId ? { providerId: input.providerId } : {}),
+        ...(input.providerName ? { providerName: input.providerName } : {}),
+        ...(input.model ? { model: input.model } : {}),
+      },
+    };
+    return this.commit({
+      ...current,
+      messages: limitTranscript([...current.messages, item]),
+      updatedAt: now,
+    });
+  }
+
+  /**
+   * 结束角色团队运行：写回成功/失败/停止、集成审核结论以及结束时间。
+   * 幂等：已经不在 running 时直接返回，不会覆盖用户停止时写入的状态。
+   */
+  settleRoleRun(
+    id: string,
+    input: { result: "success" | "error" | "stopped"; error?: string; agreed?: boolean },
+  ): SessionCore | undefined {
+    const current = this.sessions.get(id);
+    if (!current?.roleRun || current.roleRun.phase !== "running") return current;
+    const now = new Date().toISOString();
+    const phase: RoleRunPhase = input.result === "success"
+      ? "completed"
+      : input.result === "stopped" ? "stopped" : "failed";
+    const roleRun: RoleRunState = { ...current.roleRun, phase, endedAt: now };
+    delete roleRun.activeRole;
+    delete roleRun.activeUnit;
+    delete roleRun.activeTool;
+    delete roleRun.integrating;
+    // 停止或失败时，还没结束的单元也要一起落定，前端不会一直显示运行中。
+    roleRun.units = roleRun.units.map((item) => (
+      item.phase === "running" ? { ...item, phase: "stopped" as const } : item
+    ));
+    if (input.agreed !== undefined) roleRun.agreed = input.agreed;
+    if (input.error) roleRun.error = input.error;
+    const workflow = current.workflow && !current.workflow.endedAt
+      ? { ...current.workflow, endedAt: now }
+      : current.workflow;
+    const lastReply = [...current.messages].reverse()
+      .find((item) => item.role === "assistant" && item.text.trim());
+    const failureSummary = input.error ?? (input.result === "stopped" ? "角色团队已停止" : "角色团队运行失败");
+    const summary = input.result === "success"
+      ? (lastReply ? clip(lastReply.text, 160) : (input.agreed === false ? "运行完成 · 集成审核未通过" : "角色团队运行完成"))
+      : failureSummary;
+    return this.commit({
+      ...current,
+      turnActive: false,
+      queued: false,
+      pending: null,
+      ...(workflow ? { workflow } : {}),
+      roleRun,
+      summary,
+      lastResult: input.result,
+      ...(input.result === "success"
+        ? { lastError: undefined }
+        : { lastError: failureSummary }),
+      updatedAt: now,
+    });
+  }
+
+  /**
    * 空闲会话里让本次发送的工作流立即对 UI 生效（POST 响应和 SSE 都会带上），
    * 不必等 agent 消费 prompt。忙时保持当前轮不变，交给 runtime 的 deferred 逻辑。
    */
@@ -1023,8 +1280,11 @@ export class Store {
       && !current.subagents.some((item) => item.status === "running");
     if (!idle) return;
     const resolved = skill ?? detectWorkflowSkill(text) ?? undefined;
+    // 角色团队停在 setup 时 workflow 没有 endedAt，但用户改发普通消息要能清掉它，
+    // 否则会一直被当成「还在跑」而提前返回。
+    const abandonedRoleSetup = current.roleRun?.phase === "setup";
     // 没有新工作流时，只清掉已经落定的旧工作流；还在跑就保留。
-    if (!resolved && current.workflow && !current.workflow.endedAt) return;
+    if (!resolved && !abandonedRoleSetup && current.workflow && !current.workflow.endedAt) return;
 
     const now = new Date().toISOString();
     const next: SessionCore = {
@@ -1036,6 +1296,9 @@ export class Store {
     };
     if (resolved) next.workflow = { skill: resolved, startedAt: now };
     else delete next.workflow;
+    // 角色团队还停在配置阶段时用户改发别的工作流：清掉永不开始的 roleRun，
+    // 否则 derivePhase 会一直显示 setup。已完成的 roleRun 保留展示。
+    if (resolved !== "prl-role" && next.roleRun?.phase === "setup") delete next.roleRun;
     next.phase = derivePhase(next);
     this.commit(next);
   }
@@ -1088,6 +1351,15 @@ export class Store {
       next.workflow = running;
     } else {
       delete next.workflow;
+    }
+    // 同 previewWorkflow：用户改走别的工作流时，丢弃停在 setup 的角色团队。
+    // 这种 prl-role workflow 也从没真正开始过（没有 endedAt），一并清掉，
+    // 否则前端发送区会一直停在 prl-role；已完成的 workflow 保留原有处理。
+    if (skill !== "prl-role" && next.roleRun?.phase === "setup") {
+      delete next.roleRun;
+      if (skill === undefined && next.workflow?.skill === "prl-role" && !next.workflow.endedAt) {
+        delete next.workflow;
+      }
     }
     if (reopen) this.awaitingResult.add(id);
     this.commit(next);
@@ -1345,6 +1617,23 @@ export class Store {
         });
       }
     }
+    // 角色团队被停止/失败中断时，同样收成停止/失败，避免前端一直显示运行中。
+    let roleRun = current.roleRun;
+    if (roleRun?.phase === "running") {
+      roleRun = {
+        ...roleRun,
+        phase: result === "stopped" ? "stopped" : "failed",
+        endedAt: now,
+        error: reason,
+      };
+      delete roleRun.activeRole;
+      delete roleRun.activeUnit;
+      delete roleRun.activeTool;
+      delete roleRun.integrating;
+      roleRun.units = roleRun.units.map((item) => (
+        item.phase === "running" ? { ...item, phase: "stopped" as const } : item
+      ));
+    }
     // 被停止/失败中断的已消费 prompt 不会再开始，丢弃它们的工作流选择。
     this.awaitingResult.delete(id);
     this.deferredWorkflows.delete(id);
@@ -1377,6 +1666,7 @@ export class Store {
       messages,
       ...(workflow ? { workflow } : {}),
       ...(discussion ? { discussion } : {}),
+      ...(roleRun ? { roleRun } : {}),
       lastResult: result,
       lastError: reason,
       summary: reason,
@@ -1455,7 +1745,14 @@ export class Store {
     // 写时复制保证“消息集合变化”必然更换 messages 数组引用（纯标量变化可共享），
     // 因此用数组引用就能可靠地让用量缓存失效，不依赖毫秒级的 updatedAt。
     const previous = this.sessions.get(next.id);
-    if (!previous || previous.messages !== next.messages) this.usageCache.delete(next.id);
+    if (
+      !previous
+      || previous.messages !== next.messages
+      || previous.providerId !== next.providerId
+      || previous.providerName !== next.providerName
+    ) {
+      this.usageCache.delete(next.id);
+    }
     // 本轮结束以 turnActive 落定为界；此后子 agent 收尾只改 phase，不会再加计数。
     if (previous?.turnActive && !next.turnActive) {
       this.turnEnds.set(next.id, (this.turnEnds.get(next.id) ?? 0) + 1);
@@ -1736,6 +2033,10 @@ function recover(session: SessionCore): SessionCore {
   const discussion = recoverDiscussion(session.discussion, normalized.updatedAt || normalized.createdAt);
   if (discussion) normalized.discussion = discussion;
   else delete normalized.discussion;
+  // prl-role 状态同理：字段不合法就整段丢弃；上次进程里没跑完的运行收成已停止。
+  const roleRun = recoverRoleRun(session.roleRun, normalized.updatedAt || normalized.createdAt);
+  if (roleRun) normalized.roleRun = roleRun;
+  else delete normalized.roleRun;
   // SDK 状态只属于上一个进程；重启后不能拿旧值继续把会话撑成运行中。
   delete normalized.agentState;
   const active = isActivePhase(normalized.phase)
@@ -1982,6 +2283,124 @@ function discussionStrategy(skill: WorkflowSkill): DiscussionStrategy {
   return skill === "dis-prl" ? "parallel" : "flat";
 }
 
+/** 磁盘上的角色团队绑定：逐字段校验，任何一项不合法都返回 undefined。 */
+function recoverRoleTeam(value: unknown): RoleTeam | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const readBinding = (raw: unknown) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const binding = raw as Record<string, unknown>;
+    if (typeof binding.providerId !== "string" || !binding.providerId) return undefined;
+    if (typeof binding.model !== "string" || !binding.model) return undefined;
+    if (!isEffort(binding.effort)) return undefined;
+    return {
+      providerId: binding.providerId,
+      providerName: typeof binding.providerName === "string" ? binding.providerName : "",
+      model: binding.model,
+      effort: binding.effort,
+    };
+  };
+  const orchestrator = readBinding(record.orchestrator);
+  const executor = readBinding(record.executor);
+  const subReviewer = readBinding(record.subReviewer);
+  const integrationReviewer = readBinding(record.integrationReviewer);
+  if (!orchestrator || !executor || !subReviewer || !integrationReviewer) return undefined;
+  return { orchestrator, executor, subReviewer, integrationReviewer };
+}
+
+function isRoleKind(value: unknown): value is RoleKind {
+  return value === "orchestrator"
+    || value === "executor"
+    || value === "sub-reviewer"
+    || value === "integration-reviewer";
+}
+
+function isRoleUnitPhase(value: unknown): value is RoleUnitPhase {
+  return value === "pending"
+    || value === "running"
+    || value === "passed"
+    || value === "needs_attention"
+    || value === "stopped";
+}
+
+/**
+ * 归一化磁盘上的 prl-role 状态：逐项校验团队、单元和字段；上一次进程里还在跑
+ * 的运行不可能继续，收成「已停止」。
+ */
+function recoverRoleRun(value: unknown, fallbackTime: string): RoleRunState | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const phase = record.phase;
+  if (
+    phase !== "setup"
+    && phase !== "running"
+    && phase !== "completed"
+    && phase !== "failed"
+    && phase !== "stopped"
+  ) return undefined;
+  const units: RoleUnitState[] = [];
+  if (Array.isArray(record.units)) {
+    for (const item of record.units) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const raw = item as Record<string, unknown>;
+      if (typeof raw.index !== "number" || !Number.isInteger(raw.index) || raw.index < 1) continue;
+      if (typeof raw.title !== "string" || !raw.title.trim()) continue;
+      if (!isRoleUnitPhase(raw.phase)) continue;
+      const round = typeof raw.round === "number" && Number.isInteger(raw.round) && raw.round >= 0
+        ? raw.round
+        : 0;
+      const unit: RoleUnitState = {
+        index: raw.index,
+        title: raw.title.trim(),
+        phase: raw.phase,
+        round,
+      };
+      if (raw.verdict === "pass" || raw.verdict === "changes" || raw.verdict === "unknown") {
+        unit.verdict = raw.verdict;
+      }
+      if (typeof raw.issues === "string" && raw.issues) unit.issues = raw.issues;
+      if (typeof raw.executorSummary === "string" && raw.executorSummary) {
+        unit.executorSummary = raw.executorSummary;
+      }
+      units.push(unit);
+    }
+  }
+  const round = typeof record.round === "number" && Number.isInteger(record.round) && record.round >= 0
+    ? record.round
+    : 0;
+  const maxRounds = typeof record.maxRounds === "number"
+    && Number.isInteger(record.maxRounds)
+    && record.maxRounds >= 1
+    ? record.maxRounds
+    : MAX_ROLE_ROUNDS;
+  const roleRun: RoleRunState = { phase, units, round, maxRounds };
+  const team = recoverRoleTeam(record.team);
+  if (team) roleRun.team = team;
+  if (isRoleKind(record.activeRole)) roleRun.activeRole = record.activeRole;
+  if (typeof record.activeUnit === "number" && Number.isInteger(record.activeUnit) && record.activeUnit >= 1) {
+    roleRun.activeUnit = record.activeUnit;
+  }
+  if (typeof record.activeTool === "string" && record.activeTool) roleRun.activeTool = record.activeTool;
+  if (record.integrating === true) roleRun.integrating = true;
+  if (record.agreed === true || record.agreed === false) roleRun.agreed = record.agreed;
+  if (typeof record.startedAt === "string" && record.startedAt) roleRun.startedAt = record.startedAt;
+  if (typeof record.endedAt === "string" && record.endedAt) roleRun.endedAt = record.endedAt;
+  if (typeof record.error === "string" && record.error) roleRun.error = record.error;
+  if (phase === "running") {
+    roleRun.phase = "stopped";
+    roleRun.endedAt = roleRun.endedAt ?? fallbackTime;
+    roleRun.error = roleRun.error ?? "服务已重启，角色团队运行已中断";
+    delete roleRun.activeRole;
+    delete roleRun.activeUnit;
+    delete roleRun.activeTool;
+    delete roleRun.integrating;
+    roleRun.units = roleRun.units.map((item) => (
+      item.phase === "running" ? { ...item, phase: "stopped" as const } : item
+    ));
+  }
+  return roleRun;
+}
+
 function isDiscussionKind(value: string): value is DiscussionKind {
   return value === "decompose"
     || value === "answer"
@@ -2000,6 +2419,7 @@ function validWorkflow(value: unknown): WorkflowRun | undefined {
     && record.skill !== "plan"
     && record.skill !== "discuss"
     && record.skill !== "dis-prl"
+    && record.skill !== "prl-role"
   ) {
     return undefined;
   }
@@ -2045,8 +2465,24 @@ export function toSummary(session: SessionCore, detail: boolean): SessionSummary
   };
   if (session.workflow) summary.workflow = session.workflow;
   if (session.discussion) summary.discussion = session.discussion;
+  if (session.roleRun) {
+    // 列表/board 帧不需要完整的审核原文和自述；detail 帧才下发全文。
+    summary.roleRun = detail ? session.roleRun : compactRoleRun(session.roleRun);
+  }
   if (detail) summary.messages = session.messages.map(strip);
   return summary;
+}
+
+/** 列表帧用的 roleRun：把较长的单元文本裁到 200 字，避免 SSE 体积随运行增长。 */
+function compactRoleRun(roleRun: RoleRunState): RoleRunState {
+  return {
+    ...roleRun,
+    units: roleRun.units.map((item) => ({
+      ...item,
+      ...(item.issues !== undefined ? { issues: clip(item.issues, 200) } : {}),
+      ...(item.executorSummary !== undefined ? { executorSummary: clip(item.executorSummary, 200) } : {}),
+    })),
+  };
 }
 
 function strip(item: TranscriptItem): TranscriptItem {
@@ -2063,6 +2499,7 @@ function strip(item: TranscriptItem): TranscriptItem {
     usage: item.usage,
     speaker: item.speaker,
     discussion: item.discussion,
+    roleRun: item.roleRun,
     // sdkUuid/forkPoint 是服务端内部指针，不下发；只告诉前端能否回滚/分叉。
     rewindable: Boolean(item.sdkUuid && item.forkPoint),
   };

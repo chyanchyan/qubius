@@ -123,8 +123,8 @@ export function formatElapsed(ms: number): string {
 export function deriveWorkflow(session: Session, now: number): WorkflowView | null {
   const workflow = session.workflow;
   if (!workflow) return null;
-  // 多模型讨论（包括并行讨论）有自己的进度面板，不走 prl/ser/plan 的轨道。
-  if (workflow.skill === "discuss" || workflow.skill === "dis-prl") return null;
+  // 多模型讨论（包括并行讨论）和 prl-role 都有自己的进度面板，不走 prl/ser/plan 的轨道。
+  if (workflow.skill === "discuss" || workflow.skill === "dis-prl" || workflow.skill === "prl-role") return null;
 
   const scoped = session.subagents.filter((agent) => agent.workflowAt === workflow.startedAt);
   const tagged: Array<{ agent: Subagent; tag: ParsedAgentTag }> = [];

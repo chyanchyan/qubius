@@ -753,3 +753,84 @@ test("改接口类型且留空密钥时沿用旧密钥", () => {
   assert.equal(next.providers[0]?.kind, "gemini");
   assert.equal(next.providers[0]?.apiKey, "AIza-new");
 });
+
+/** 一份引用 p1/sonnet 的四角色默认团队；providerName 故意写错，验证会被刷新。 */
+function roleTeamInput() {
+  const binding = { providerId: "p1", providerName: "旧名字", model: "sonnet", effort: "high" as const };
+  return {
+    orchestrator: binding,
+    executor: binding,
+    subReviewer: binding,
+    integrationReviewer: binding,
+  };
+}
+
+test("角色团队：保存时按当前接口刷新 providerName", () => {
+  const next = applySettingsPatch(sample(), { roleTeam: roleTeamInput() });
+  assert.equal(next.roleTeam?.orchestrator.providerName, "官方");
+  assert.equal(next.roleTeam?.executor.model, "sonnet");
+  assert.equal(next.roleTeam?.integrationReviewer.effort, "high");
+});
+
+test("角色团队：省略字段保留原值，null 清除", () => {
+  const withTeam = applySettingsPatch(sample(), { roleTeam: roleTeamInput() });
+  const kept = applySettingsPatch(withTeam, { effort: "low" });
+  assert.equal(kept.roleTeam?.orchestrator.model, "sonnet");
+  assert.equal(kept.effort, "low");
+  const cleared = applySettingsPatch(withTeam, { roleTeam: null });
+  assert.equal(cleared.roleTeam, undefined);
+});
+
+test("角色团队：接口不存在、模型不属于接口或 effort 非法时拒绝", () => {
+  const missingProvider = roleTeamInput();
+  missingProvider.executor = { ...missingProvider.executor, providerId: "nope" };
+  assert.throws(() => applySettingsPatch(sample(), { roleTeam: missingProvider }), /执行模型的接口不存在/);
+
+  const missingModel = roleTeamInput();
+  missingModel.subReviewer = { ...missingModel.subReviewer, model: "nope" };
+  assert.throws(() => applySettingsPatch(sample(), { roleTeam: missingModel }), /子审核模型的模型/);
+
+  const badEffort = roleTeamInput();
+  // @ts-expect-error 故意传非法 effort，验证运行时校验。
+  badEffort.orchestrator = { ...badEffort.orchestrator, effort: "max!" };
+  assert.throws(() => applySettingsPatch(sample(), { roleTeam: badEffort }), /编排模型的 effort/);
+});
+
+test("角色团队：删除被引用的接口后丢弃失效的默认团队", () => {
+  const withTeam = applySettingsPatch(sample(), { roleTeam: roleTeamInput() });
+  const next = applySettingsPatch(withTeam, { providers: [] });
+  assert.equal(next.roleTeam, undefined);
+  assert.equal(next.providers.length, 0);
+});
+
+test("角色团队：保存后重新加载仍保留默认团队", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-settings-role-"));
+  try {
+    const saved = applySettingsPatch(sample(), { roleTeam: roleTeamInput() });
+    saveSettings(dir, saved);
+    const loaded = loadSettings(dir);
+    assert.equal(loaded.roleTeam?.orchestrator.providerId, "p1");
+    assert.equal(loaded.roleTeam?.integrationReviewer.providerName, "官方");
+    assert.equal(publicSettings(loaded).roleTeam?.executor.model, "sonnet");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("角色团队：设置文件里的失效默认团队加载时被忽略", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-settings-role-bad-"));
+  try {
+    const broken = applySettingsPatch(sample(), { roleTeam: roleTeamInput() });
+    saveSettings(dir, broken);
+    // 手工把模型改坏，模拟旧文件或手改。
+    const file = path.join(dir, "secrets.json");
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+    raw.roleTeam = { ...roleTeamInput(), executor: { ...roleTeamInput().executor, model: "gone" } };
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const loaded = loadSettings(dir);
+    assert.equal(loaded.roleTeam, undefined);
+    assert.equal(loaded.providers[0]?.id, "p1");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

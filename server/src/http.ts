@@ -68,6 +68,7 @@ import { PushError, type PushSendResult, type PushService } from "./push.js";
 import { redact, type Approval, type Runtime, type RuntimePrompt } from "./runtime.js";
 import { clip, configureLimits, detectWorkflowSkill } from "./status.js";
 import { MAX_DISCUSSION_PARTICIPANTS } from "./discussion.js";
+import { MAX_ROLE_ROUNDS } from "./prl-role.js";
 import type { ScheduleRunner, ScheduleStore } from "./schedules.js";
 import type { ArchiveSweeper } from "./retention.js";
 import { readSecondaryStatus, startSecondaryAction } from "./secondary.js";
@@ -107,6 +108,7 @@ import {
   findProvider,
   providerKind,
   publicSettings,
+  readRoleTeam,
   resolveSettings,
   saveSettings,
   type StoredSettings,
@@ -1678,6 +1680,53 @@ export function createAppServer(options: {
     if (/^\/api\/sessions\/[^/]+\/discussion(?:\/|$)/.test(url.pathname)) {
       throw new HttpError(404, "没有这个接口");
     }
+    // prl-role 角色团队：保存四角色配置并开始串行运行。
+    const roleStart = url.pathname.match(/^\/api\/sessions\/([^/]+)\/role-run\/start$/);
+    if (roleStart) {
+      const id = roleStart[1] || "";
+      if (!ID_RE.test(id)) throw new HttpError(400, "对话 id 无效");
+      if (method !== "POST") throw new HttpError(405, "方法不被允许");
+      requireWritableSession(store, id);
+      requireNotBusy(id);
+      const body = asRecord(await readJson(req));
+      // 读请求体是异步的，期间归档/删除可能已经拿走会话锁；写入/启动前再同步检查一次。
+      requireNotBusy(id);
+      let team;
+      try {
+        team = readRoleTeam(body.team, ctx.settings.current.providers);
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : "角色团队配置无效");
+      }
+      // 整个异步 startRoleRun（含释放空闲进程）期间占位会话锁，避免启动到一半被归档/删除。
+      if (!tryLockSession(id)) throw new HttpError(409, "对话正在归档或清理，请稍后再试");
+      try {
+        const session = store.require(id);
+        // 只认当前轮显式处于 prl-role 的会话：roleRun 已完成但用户已切到普通/
+        // plan/ser 时不能再启动整支角色团队去改代码。
+        if (session.workflow?.skill !== "prl-role") {
+          throw new HttpError(409, "这个对话不是角色团队模式");
+        }
+        if (
+          runtime.isRoleRunning(id)
+          || session.roleRun?.phase === "running"
+          || session.turnActive
+        ) {
+          throw new HttpError(409, "角色团队已经在进行中");
+        }
+        try {
+          await runtime.startRoleRun(id, team, MAX_ROLE_ROUNDS);
+        } catch (error) {
+          throw new HttpError(409, error instanceof Error ? error.message : "无法开始角色团队");
+        }
+        sendJson(res, 200, { session: withQueue(store.summary(id, true)) });
+      } finally {
+        unlockSession(id);
+      }
+      return;
+    }
+    if (/^\/api\/sessions\/[^/]+\/role-run(?:\/|$)/.test(url.pathname)) {
+      throw new HttpError(404, "没有这个接口");
+    }
     const sessionPath = url.pathname.match(/^\/api\/sessions\/([^/]+)(\/messages|\/answer|\/stop|\/diff)?$/);
     if (sessionPath) {
       const id = sessionPath[1] || "";
@@ -1774,6 +1823,28 @@ export function createAppServer(options: {
               throw new HttpError(409, error instanceof Error ? error.message : "无法开始讨论");
             }
           }
+          sendJson(res, 200, { session: withQueue(store.summary(id, true)) });
+          return;
+        }
+        // prl-role 也不经过 SDK 队列：消息先落库，由用户在前端确认四角色后开始。
+        if (skill === "prl-role") {
+          const current = store.require(id);
+          // 还有排队中的普通消息或运行中的后台任务时不能切到 setup：
+          // 否则前端弹出配置框后点「开始」会被 roleRunBlockedBy 永远 409。
+          if (
+            runtime.isRoleRunning(id)
+            || current.phase === "running"
+            || current.phase === "needs_input"
+            || current.phase === "queued"
+            || current.turnActive
+            || current.queued
+            || current.backgroundTasks?.some((item) => item.status === "running")
+          ) {
+            throw new HttpError(409, "角色团队进行中、有排队消息或后台任务仍在运行，等结束后再发消息");
+          }
+          const images = saveImages(config.dataDir, id, input.images);
+          store.addUserMessage(id, input.text, images);
+          store.prepareRoleRun(id, current.roleRun?.team);
           sendJson(res, 200, { session: withQueue(store.summary(id, true)) });
           return;
         }
@@ -1970,6 +2041,10 @@ export async function createSession(
   if (skill === "discuss" || skill === "dis-prl") {
     return ctx.store.prepareDiscussion(session.id, undefined, skill);
   }
+  // prl-role 同样先停在配置阶段：用户选好四角色并点「开始」后才调用模型。
+  if (skill === "prl-role") {
+    return ctx.store.prepareRoleRun(session.id);
+  }
   ctx.runtime.submit(session.id, toRuntimePrompt(input, sdkUuid, images));
   return session;
 }
@@ -2117,8 +2192,14 @@ function readRewindRequest(body: Record<string, unknown>): RewindRequest {
     throw new HttpError(400, "请填写要做的事或保留图片");
   }
   const rawWorkflow = body.workflow;
-  if (rawWorkflow !== undefined && rawWorkflow !== "prl" && rawWorkflow !== "ser" && rawWorkflow !== "plan") {
-    throw new HttpError(400, "回滚重发只支持 prl、ser、plan 或省略");
+  if (
+    rawWorkflow !== undefined
+    && rawWorkflow !== "prl"
+    && rawWorkflow !== "ser"
+    && rawWorkflow !== "plan"
+    && rawWorkflow !== "prl-role"
+  ) {
+    throw new HttpError(400, "回滚重发只支持 prl、ser、plan、prl-role 或省略");
   }
   return {
     messageId,
@@ -2343,15 +2424,21 @@ async function rewindSession(
 
     if (request.editing) {
       const prompt = request.prompt ?? "";
-      const input: PromptInput = {
-        text: prompt,
-        images: resendImages,
-        ...(request.workflow ? { workflow: request.workflow } : {}),
-      };
+      const skill = request.workflow ?? detectWorkflowSkill(prompt) ?? undefined;
       const sdkUuid = randomUUID();
       ctx.store.addUserMessage(id, prompt, keepImages, sdkUuid);
-      if (!ctx.runtime.isActive(id)) ctx.store.previewWorkflow(id, request.workflow, prompt);
-      ctx.runtime.submit(id, toRuntimePrompt(input, sdkUuid));
+      if (skill === "prl-role") {
+        // 角色团队不经过 SDK 队列：和 /messages 一样进入配置阶段，等用户选好四角色再开始。
+        ctx.store.prepareRoleRun(id);
+      } else {
+        const input: PromptInput = {
+          text: prompt,
+          images: resendImages,
+          ...(request.workflow ? { workflow: request.workflow } : {}),
+        };
+        if (!ctx.runtime.isActive(id)) ctx.store.previewWorkflow(id, request.workflow, prompt);
+        ctx.runtime.submit(id, toRuntimePrompt(input, sdkUuid));
+      }
     }
 
     return { prompt: { text: target.text, images: target.images ?? [] } };
@@ -2652,8 +2739,9 @@ function readWorkflow(value: unknown): WorkflowSkill | undefined {
     && value !== "plan"
     && value !== "discuss"
     && value !== "dis-prl"
+    && value !== "prl-role"
   ) {
-    throw new HttpError(400, "workflow 必须是 prl、ser、plan、discuss、dis-prl 或省略");
+    throw new HttpError(400, "workflow 必须是 prl、ser、plan、discuss、dis-prl、prl-role 或省略");
   }
   return value;
 }
@@ -2857,8 +2945,8 @@ function streamEvents(
       // 只有 reset 帧会刷新客户端的历史起点；增量帧沿用上次的起点。
       if (reset) sentStart = start;
     } else {
-      // 只发元数据时才需要单独构造 summary。
-      frame = { ...enrich(store.summary(sessionId, false)), messageCount: messages.length };
+      // 只发元数据时才需要单独构造 summary；详情帧的 roleRun 保留全文。
+      frame = { ...enrich(store.detailSummary(sessionId)), messageCount: messages.length };
     }
     return frame;
   };

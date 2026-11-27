@@ -6,7 +6,7 @@ import test, { mock } from "node:test";
 import { ROOT_FORK_POINT } from "./session-rewind.js";
 import { PROVISIONAL_TITLE } from "./session-title.js";
 import { Store, type CreateSessionInput, type SessionEvent } from "./store.js";
-import type { BackgroundTask, Effort, SessionCore } from "./types.js";
+import type { BackgroundTask, Effort, RoleTeam, SessionCore } from "./types.js";
 
 /**
  * 只测落盘的离散行为（flush / 删除 / 启动清理），不触碰 1 秒防抖和
@@ -2116,3 +2116,367 @@ test("编辑/删除排队中的用户消息会同步列表摘要", async () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+const roleTeam: RoleTeam = {
+  orchestrator: { providerId: "prov1", providerName: "服务商", model: "model-x", effort: "high" },
+  executor: { providerId: "prov1", providerName: "服务商", model: "model-x", effort: "high" },
+  subReviewer: { providerId: "prov1", providerName: "服务商", model: "model-x", effort: "medium" },
+  integrationReviewer: { providerId: "prov1", providerName: "服务商", model: "model-x", effort: "high" },
+};
+
+test("prl-role：prepare 停在配置阶段并保留上次团队，begin 占用一轮运行", async () => {
+  const dataDir = tempDir();
+  const store = new Store(dataDir);
+  try {
+    store.create(createInput("role", "实现角色团队"));
+    store.beginTurn("role");
+
+    const prepared = store.prepareRoleRun("role", roleTeam);
+    assert.equal(prepared.phase, "setup");
+    assert.equal(prepared.turnActive, false);
+    assert.equal(prepared.workflow?.skill, "prl-role");
+    assert.equal(prepared.roleRun?.phase, "setup");
+    assert.equal(prepared.roleRun?.round, 0);
+    assert.deepEqual(prepared.roleRun?.units, []);
+    assert.ok(prepared.roleRun?.maxRounds && prepared.roleRun.maxRounds >= 1);
+    assert.deepEqual(prepared.roleRun?.team, roleTeam);
+
+    // 再次进入配置阶段时保留上一次的团队。
+    const again = store.prepareRoleRun("role");
+    assert.deepEqual(again.roleRun?.team, roleTeam);
+
+    const begun = store.beginRoleRun("role", roleTeam, 2);
+    assert.equal(begun.roleRun?.phase, "running");
+    assert.equal(begun.roleRun?.round, 1);
+    assert.equal(begun.roleRun?.maxRounds, 2);
+    assert.equal(begun.turnActive, true);
+    assert.equal(begun.phase, "running");
+  } finally {
+    await store.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：单元进度、发言和落定写入 summary/transcript", async () => {
+  const dataDir = tempDir();
+  const store = new Store(dataDir);
+  try {
+    store.create(createInput("role", "实现角色团队"));
+    store.beginRoleRun("role", roleTeam, 2);
+    store.setRoleUnits("role", ["单元一", "单元二"]);
+    assert.deepEqual(
+      store.get("role")?.roleRun?.units.map((item) => [item.index, item.title, item.phase, item.round]),
+      [[1, "单元一", "pending", 0], [2, "单元二", "pending", 0]],
+    );
+
+    store.setRoleRunProgress("role", {
+      round: 1,
+      activeUnit: 1,
+      activeRole: "executor",
+      activeTool: "Edit",
+      integrating: false,
+    });
+    const progress = store.get("role")?.roleRun;
+    assert.equal(progress?.activeRole, "executor");
+    assert.equal(progress?.activeUnit, 1);
+    assert.equal(progress?.activeTool, "Edit");
+    assert.equal(progress?.round, 1);
+
+    store.appendRoleMessage("role", {
+      speaker: "执行 · model-x",
+      text: "完成单元一",
+      role: "executor",
+      round: 1,
+      unit: { index: 1, title: "单元一" },
+    });
+    const message = store.get("role")?.messages.at(-1);
+    assert.equal(message?.role, "assistant");
+    assert.equal(message?.speaker, "执行 · model-x");
+    assert.deepEqual(message?.roleRun, {
+      kind: "executor",
+      round: 1,
+      unit: { index: 1, title: "单元一" },
+    });
+
+    store.settleRoleUnit("role", 1, {
+      phase: "running",
+      round: 1,
+      executorSummary: "完成单元一",
+    });
+    let unit = store.get("role")?.roleRun?.units[0];
+    assert.equal(unit?.phase, "running");
+    assert.equal(unit?.executorSummary, "完成单元一");
+    store.settleRoleUnit("role", 1, { phase: "passed", round: 1, verdict: "pass", issues: "结论：PASS" });
+    unit = store.get("role")?.roleRun?.units[0];
+    assert.equal(unit?.phase, "passed");
+    assert.equal(unit?.verdict, "pass");
+
+    // clearActive 清掉正在调用的角色/单元/工具。
+    store.setRoleRunProgress("role", { clearActive: true });
+    const cleared = store.get("role")?.roleRun;
+    assert.equal(cleared?.activeRole, undefined);
+    assert.equal(cleared?.activeUnit, undefined);
+    assert.equal(cleared?.activeTool, undefined);
+
+    const summary = store.summary("role", true);
+    assert.equal(summary.roleRun?.phase, "running");
+    assert.deepEqual(summary.messages?.at(-1)?.roleRun, {
+      kind: "executor",
+      round: 1,
+      unit: { index: 1, title: "单元一" },
+    });
+
+    const settled = store.settleRoleRun("role", { result: "success", agreed: false });
+    assert.equal(settled?.roleRun?.phase, "completed");
+    assert.equal(settled?.roleRun?.agreed, false);
+    assert.ok(settled?.roleRun?.endedAt);
+    assert.ok(settled?.workflow?.endedAt);
+    assert.equal(settled?.turnActive, false);
+    assert.equal(settled?.lastResult, "success");
+    assert.equal(settled?.lastError, undefined);
+
+    // 幂等：已经落定后再次调用不会覆盖。
+    const again = store.settleRoleRun("role", { result: "error", error: "迟到的错误" });
+    assert.equal(again?.roleRun?.phase, "completed");
+    assert.equal(again?.lastResult, "success");
+
+    await store.flush();
+    const reloaded = new Store(dataDir);
+    assert.equal(reloaded.get("role")?.roleRun?.phase, "completed");
+    assert.equal(reloaded.get("role")?.workflow?.skill, "prl-role");
+    await reloaded.flush();
+  } finally {
+    await store.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：stop 把运行中的角色团队和单元一起收成已停止", async () => {
+  const dataDir = tempDir();
+  const store = new Store(dataDir);
+  try {
+    store.create(createInput("role", "实现角色团队"));
+    store.beginRoleRun("role", roleTeam, 3);
+    store.setRoleUnits("role", ["单元一"]);
+    store.settleRoleUnit("role", 1, { phase: "running", round: 1 });
+
+    store.stop("role", "已停止");
+    const session = store.get("role");
+    assert.equal(session?.roleRun?.phase, "stopped");
+    assert.equal(session?.roleRun?.error, "已停止");
+    assert.equal(session?.roleRun?.units[0]?.phase, "stopped");
+    assert.equal(session?.roleRun?.activeUnit, undefined);
+    assert.ok(session?.roleRun?.endedAt);
+  } finally {
+    await store.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：启动恢复把 running 收成 stopped，并校验团队/单元", async () => {
+  const dataDir = tempDir();
+  try {
+    const session = minimalSession("role");
+    session.phase = "running";
+    session.turnActive = true;
+    session.workflow = { skill: "prl-role", startedAt: "2026-01-01T00:00:00.000Z" };
+    session.roleRun = {
+      phase: "running",
+      team: roleTeam,
+      units: [
+        { index: 1, title: "单元一", phase: "running", round: 1 },
+        { index: 2, title: "单元二", phase: "pending", round: 0 },
+      ],
+      round: 1,
+      maxRounds: 3,
+      activeRole: "executor",
+      activeUnit: 1,
+      activeTool: "Edit",
+      integrating: true,
+      startedAt: "2026-01-01T00:00:00.000Z",
+    };
+    session.updatedAt = "2026-01-01T00:02:00.000Z";
+    writeSessionFile(dataDir, session);
+
+    // 损坏的团队/单元应整段丢弃。
+    const broken = minimalSession("broken");
+    broken.roleRun = {
+      phase: "running",
+      team: { orchestrator: { providerId: "", model: "", effort: "high" } },
+      units: "not-an-array",
+      round: "x",
+      maxRounds: -1,
+    } as unknown as SessionCore["roleRun"];
+    writeSessionFile(dataDir, broken);
+
+    const store = new Store(dataDir);
+    try {
+      const recovered = store.get("role");
+      assert.equal(recovered?.roleRun?.phase, "stopped");
+      assert.equal(recovered?.roleRun?.error, "服务已重启，角色团队运行已中断");
+      assert.ok(recovered?.roleRun?.endedAt);
+      assert.equal(recovered?.roleRun?.activeRole, undefined);
+      assert.equal(recovered?.roleRun?.activeUnit, undefined);
+      assert.equal(recovered?.roleRun?.activeTool, undefined);
+      assert.equal(recovered?.roleRun?.integrating, undefined);
+      assert.equal(recovered?.roleRun?.units[0]?.phase, "stopped");
+      assert.equal(recovered?.roleRun?.units[1]?.phase, "pending");
+      assert.deepEqual(recovered?.roleRun?.team, roleTeam);
+      assert.equal(recovered?.workflow?.skill, "prl-role");
+      assert.equal(store.summary("role", false).roleRun?.phase, "stopped");
+
+      // 团队缺失但其它字段合法：保留运行状态，只是没有 team。
+      assert.equal(store.get("broken")?.roleRun?.phase, "stopped");
+      assert.equal(store.get("broken")?.roleRun?.team, undefined);
+      await store.flush();
+    } finally {
+      await store.flush().catch(() => undefined);
+    }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：列表帧裁剪单元长文本，detail 帧保留全文", async () => {
+  const dataDir = tempDir();
+  const store = new Store(dataDir);
+  try {
+    store.create(createInput("role", "实现角色团队"));
+    store.beginRoleRun("role", roleTeam, 3);
+    store.setRoleUnits("role", ["单元一"]);
+    const issues = "审核原文".repeat(1_500);
+    const executorSummary = "执行自述".repeat(700);
+    store.settleRoleUnit("role", 1, {
+      phase: "running",
+      round: 1,
+      verdict: "changes",
+      issues,
+      executorSummary,
+    });
+
+    const listUnit = store.summary("role", false).roleRun?.units[0];
+    assert.ok((listUnit?.issues?.length ?? 0) <= 200);
+    assert.ok((listUnit?.executorSummary?.length ?? 0) <= 200);
+    // 裁剪不能改写 Store 里的真实状态。
+    assert.equal(store.get("role")?.roleRun?.units[0]?.issues, issues);
+
+    const detailUnit = store.summary("role", true).roleRun?.units[0];
+    assert.equal(detailUnit?.issues, issues);
+    assert.equal(detailUnit?.executorSummary, executorSummary);
+
+    // 详情切片的 summary 和仅元数据帧的 detailSummary 也保留全文。
+    const sliceUnit = store.detailSlice("role", 0)?.summary.roleRun?.units[0];
+    assert.equal(sliceUnit?.issues, issues);
+    assert.equal(store.detailSummary("role").roleRun?.units[0]?.issues, issues);
+    assert.ok((store.summary("role", false).roleRun?.units[0]?.issues?.length ?? 0) <= 200);
+  } finally {
+    await store.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role/discuss 切换时互相清掉对方状态，setup 的 roleRun 可被普通消息清掉", async () => {
+  const dataDir = tempDir();
+  const store = new Store(dataDir);
+  try {
+    store.create(createInput("s1", "切换模式"));
+    store.prepareDiscussion("s1");
+    assert.equal(store.get("s1")?.discussion?.phase, "setup");
+
+    // 切到角色团队：讨论状态被清掉。
+    store.prepareRoleRun("s1", roleTeam);
+    assert.equal(store.get("s1")?.roleRun?.phase, "setup");
+    assert.equal(store.get("s1")?.discussion, undefined);
+
+    // 切回讨论：角色团队状态被清掉。
+    store.prepareDiscussion("s1");
+    assert.equal(store.get("s1")?.discussion?.phase, "setup");
+    assert.equal(store.get("s1")?.roleRun, undefined);
+
+    // setup 状态下改发普通消息（previewWorkflow）：roleRun 清掉，阶段不再是 setup。
+    store.prepareRoleRun("s1", roleTeam);
+    store.previewWorkflow("s1", undefined, "普通消息");
+    assert.equal(store.get("s1")?.roleRun, undefined);
+    assert.notEqual(store.get("s1")?.phase, "setup");
+
+    // prompt 真正被消费时（applyWorkflow）同样清掉 setup 的 roleRun。
+    store.prepareRoleRun("s1", roleTeam);
+    store.setWorkflow("s1", "ser");
+    assert.equal(store.get("s1")?.roleRun, undefined);
+    assert.equal(store.get("s1")?.workflow?.skill, "ser");
+
+    // 改回普通对话（skill 缺省）：setup 的 roleRun 和从未开始的 prl-role workflow 一起清掉。
+    store.resetDeferredWorkflows("s1");
+    store.prepareRoleRun("s1", roleTeam);
+    store.setWorkflow("s1", undefined);
+    assert.equal(store.get("s1")?.roleRun, undefined);
+    assert.equal(store.get("s1")?.workflow, undefined);
+
+    // 已完成的 roleRun 保留展示。
+    store.prepareRoleRun("s1", roleTeam);
+    store.beginRoleRun("s1", roleTeam, 3);
+    store.settleRoleRun("s1", { result: "success", agreed: true });
+    store.previewWorkflow("s1", undefined, "普通消息");
+    assert.equal(store.get("s1")?.roleRun?.phase, "completed");
+  } finally {
+    await store.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("applyRewind 清掉 setup 的 roleRun，保留已完成的", async () => {
+  const dataDir = tempDir();
+  const store = new Store(dataDir);
+  try {
+    store.create(createInput("s1", "回滚角色团队"));
+    store.prepareRoleRun("s1", roleTeam);
+    store.applyRewind("s1", { messages: [], summary: "已回滚" });
+    assert.equal(store.get("s1")?.roleRun, undefined);
+    assert.equal(store.get("s1")?.workflow, undefined);
+
+    // 已完成的 roleRun 回滚后仍保留展示。
+    store.prepareRoleRun("s1", roleTeam);
+    store.beginRoleRun("s1", roleTeam, 3);
+    store.settleRoleRun("s1", { result: "success", agreed: true });
+    store.applyRewind("s1", { messages: [], summary: "已回滚" });
+    assert.equal(store.get("s1")?.roleRun?.phase, "completed");
+  } finally {
+    await store.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("updateRunConfig 切换接口后立即刷新 usageReport 归账", async () => {
+  const dataDir = tempDir();
+  const store = new Store(dataDir);
+  try {
+    store.create(createInput("s1", "切换接口"));
+    store.apply("s1", {
+      type: "assistant",
+      uuid: "a1",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "答复" }],
+        usage: { input_tokens: 1_000_000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    });
+    const providers = [
+      { id: "prov1", name: "服务商", pricing: { input: 2 } },
+      { id: "prov2", name: "服务商二", pricing: { input: 5 } },
+    ];
+    const before = store.usageReport(providers);
+    assert.equal(before.byProvider.find((item) => item.providerId === "prov1")?.totals.calls, 1);
+    assert.equal(before.byProvider.find((item) => item.providerId === "prov2")?.totals.calls, 0);
+
+    // 紧接着同一毫秒内切到 prov2：缓存必须失效，归账立即切到 prov2。
+    store.updateRunConfig("s1", { providerId: "prov2", providerName: "服务商二", model: "m2", effort: "high" });
+    const after = store.usageReport(providers);
+    assert.equal(after.byProvider.find((item) => item.providerId === "prov1")?.totals.calls, 0);
+    assert.equal(after.byProvider.find((item) => item.providerId === "prov2")?.totals.calls, 1);
+    assert.ok(Math.abs(after.cost - 5) < 1e-9);
+  } finally {
+    await store.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+

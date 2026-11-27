@@ -84,6 +84,11 @@ button.chip:disabled {
   border: 1px solid color-mix(in srgb, var(--green) 55%, transparent);
   background: color-mix(in srgb, var(--green) 14%, transparent);
 }
+.chip.wf-mode[data-workflow="prl-role"] {
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
 
 @media (hover: hover) {
   .chip.wf-mode[data-workflow="prl"]:hover:not(:disabled) {
@@ -101,6 +106,9 @@ button.chip:disabled {
   .chip.wf-mode[data-workflow="dis-prl"]:hover:not(:disabled) {
     background: color-mix(in srgb, var(--green) 26%, transparent);
   }
+  .chip.wf-mode[data-workflow="prl-role"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--warn) 26%, transparent);
+  }
 }
 
 .chip.wf-mode[data-workflow="prl"][aria-expanded="true"] {
@@ -117,6 +125,9 @@ button.chip:disabled {
 }
 .chip.wf-mode[data-workflow="dis-prl"][aria-expanded="true"] {
   background: color-mix(in srgb, var(--green) 26%, transparent);
+}
+.chip.wf-mode[data-workflow="prl-role"][aria-expanded="true"] {
+  background: color-mix(in srgb, var(--warn) 26%, transparent);
 }
 
 .chip.wf-mode:focus-visible {
@@ -261,6 +272,7 @@ button.chip:disabled {
 .chip-option[data-tone="plan"] { --accent: var(--warn); }
 .chip-option[data-tone="discuss"] { --accent: var(--violet); }
 .chip-option[data-tone="dis-prl"] { --accent: var(--green); }
+.chip-option[data-tone="prl-role"] { --accent: var(--warn); }
 
 .chip-option-copy {
   flex: 1;

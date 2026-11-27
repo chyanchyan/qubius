@@ -127,3 +127,98 @@
     max-width: 100%;
   }
 }
+
+/* prl-role 默认团队：沿用 .provider 卡片外观，内部是四行固定角色。 */
+.settings-role-team-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8px * var(--control-scale));
+}
+
+.settings-role-team-status {
+  padding: 0 calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+.settings-role-team-status[data-state="saved"] {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.settings-role-team-status[data-state="pending"] {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  color: var(--warn);
+}
+
+.settings-role-team-rows {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--control-scale));
+}
+
+.settings-role-team-row {
+  display: grid;
+  grid-template-columns:
+    minmax(96px, 1.1fr)
+    minmax(120px, 1.6fr)
+    minmax(130px, 1.6fr)
+    minmax(96px, 0.9fr);
+  gap: calc(8px * var(--control-scale));
+  align-items: center;
+}
+
+.settings-role-team-role {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--control-scale));
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.settings-role-team-role-name {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* 选择框沿用 .field select 的外观；这里没有 label 包裹，单独补一份。 */
+.settings-role-team-select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  padding: calc(6px * var(--control-scale)) calc(8px * var(--control-scale));
+}
+
+.settings-role-team-actions {
+  align-items: center;
+}
+
+.settings-role-team-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+/* 未设置默认时改过占位选择：提醒还需要点「设为默认」，否则保存不会写入。 */
+.settings-role-team-hint-active {
+  color: var(--warn);
+}
+
+.settings-role-team-error {
+  margin: 0;
+  color: var(--red);
+  font-size: var(--fs-12);
+}
+
+@media (max-width: 820px) {
+  .settings-role-team-row {
+    grid-template-columns: 1fr;
+  }
+}

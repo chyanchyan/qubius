@@ -95,15 +95,16 @@ const SUBAGENT_TASKS = new Set(["local_agent", "subagent"]);
 /** 消息末尾允许跟随的标点/引号/括号。 */
 const WORKFLOW_TAIL = /[。.!！?？,，;；、：:）)】」』'"”’\s]+$/u;
 /** 末尾的独立 token：前面不能紧邻拉丁字母/数字/下划线（避免 parser、user 这类词内子串）。 */
-const WORKFLOW_TAIL_TOKEN = /(?:^|[^A-Za-z0-9_])(dis-prl|prl|ser|plan|discuss)$/i;
-/** 消息开头的斜杠命令 /prl、/ser、/plan、/discuss、/dis-prl。 */
-const WORKFLOW_SLASH_COMMAND = /^\/(dis-prl|prl|ser|plan|discuss)(?=$|[^A-Za-z0-9_])/i;
+const WORKFLOW_TAIL_TOKEN = /(?:^|[^A-Za-z0-9_])(dis-prl|prl-role|prl|ser|plan|discuss)$/i;
+/** 消息开头的斜杠命令 /prl、/ser、/plan、/discuss、/dis-prl、/prl-role。 */
+const WORKFLOW_SLASH_COMMAND = /^\/(dis-prl|prl-role|prl|ser|plan|discuss)(?=$|[^A-Za-z0-9_])/i;
 
 /**
- * 识别消息里的 prl/ser/plan/discuss/dis-prl 工作流。
+ * 识别消息里的 prl/ser/plan/discuss/dis-prl/prl-role 工作流。
  *
  * 支持末尾独立 token（可带标点、大小写不敏感、中文紧邻也可以，例如「实现prl」）
  * 和消息开头的 `/prl` 斜杠命令；同时出现多个时取位置最靠后的那个。
+ * dis-prl 和 prl-role 必须排在 prl 前面，否则前缀会抢先匹配。
  */
 export function detectWorkflowSkill(text: string): WorkflowSkill | null {
   if (typeof text !== "string") return null;
@@ -337,13 +338,15 @@ export function mainAgentRunning(
  */
 export function derivePhase(state: Pick<
   SessionCore,
-  "pending" | "queued" | "turnActive" | "lastResult" | "subagents" | "agentState" | "discussion"
+  "pending" | "queued" | "turnActive" | "lastResult" | "subagents" | "agentState" | "discussion" | "roleRun"
 >): Phase {
   if (state.pending) return "needs_input";
   const runningAgent = state.subagents.some((item) => item.status === "running");
   if (state.turnActive || isAgentActive(state.agentState) || runningAgent) return "running";
   // 讨论已经创建但还没配置参与模型：这不是排队，也不是完成。
   if (state.discussion?.phase === "setup") return "setup";
+  // 角色团队已经创建但还没选好四角色：同样停在配置阶段。
+  if (state.roleRun?.phase === "setup") return "setup";
   if (state.queued) return "queued";
   const subFailed = state.subagents.some((item) => item.status === "failed");
   if (state.lastResult === "error" || subFailed) return "failed";

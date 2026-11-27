@@ -29,6 +29,15 @@ export interface UsageSessionInput {
    * 提供时不再扫描 messages；报告里会返回独立副本，不会泄露缓存对象。
    */
   totals?: UsageTotals;
+  /** 按接口拆分的缓存汇总（多模型角色团队会话会把不同角色的用量记到各自接口）。 */
+  byProvider?: ProviderUsageBucket[];
+}
+
+/** 单个接口在一场会话里的 token 累计；用于按实际接口统计跨模型会话的用量和成本。 */
+export interface ProviderUsageBucket {
+  providerId: string;
+  providerName: string;
+  totals: UsageTotals;
 }
 
 export interface UsageProviderInput {
@@ -82,6 +91,38 @@ export function summarizeMessages(messages: TranscriptItem[]): UsageTotals {
   return totals;
 }
 
+/**
+ * 按实际调用的接口拆分汇总消息用量：prl-role 的条目在 roleRun 上记着真实
+ * providerId/providerName，其余条目归到会话默认接口。
+ */
+export function summarizeMessagesByProvider(
+  messages: TranscriptItem[],
+  fallbackProviderId: string,
+  fallbackProviderName: string,
+): ProviderUsageBucket[] {
+  const buckets = new Map<string, ProviderUsageBucket>();
+  for (const item of messages) {
+    if (item.role !== "assistant" || !item.usage) continue;
+    const roleProviderId = typeof item.roleRun?.providerId === "string" ? item.roleRun.providerId.trim() : "";
+    const roleProviderName = typeof item.roleRun?.providerName === "string" ? item.roleRun.providerName.trim() : "";
+    const providerId = roleProviderId || fallbackProviderId;
+    const providerName = roleProviderId
+      ? (roleProviderName || roleProviderId)
+      : (fallbackProviderName || fallbackProviderId);
+    let bucket = buckets.get(providerId);
+    if (!bucket) {
+      bucket = { providerId, providerName, totals: emptyTotals() };
+      buckets.set(providerId, bucket);
+    }
+    bucket.totals.calls += 1;
+    bucket.totals.input += tokenCount(item.usage.input);
+    bucket.totals.output += tokenCount(item.usage.output);
+    bucket.totals.cacheRead += tokenCount(item.usage.cacheRead);
+    bucket.totals.cacheWrite += tokenCount(item.usage.cacheWrite);
+  }
+  return [...buckets.values()];
+}
+
 /** 按每百万 token 的美元单价换算成本；没有价格时所有成本为 0。 */
 export function computeCost(totals: UsageTotals, pricing?: Pricing): Cost {
   if (!pricing) {
@@ -121,27 +162,44 @@ export function usageReport(
   }
 
   const bySession = sessions.map((session) => {
-    // 缓存命中时复制一份，避免把调用方缓存里的可变对象直接暴露给报告使用方。
-    const sessionTotals = session.totals
-      ? { ...session.totals }
-      : summarizeMessages(session.messages ?? []);
-    const pricing = providerById.get(session.providerId)?.pricing;
-    const sessionCost = computeCost(sessionTotals, pricing).total;
-    addTotals(totals, sessionTotals);
+    // 优先使用按接口拆分的明细（跨模型角色团队会话）；只有 totals 缓存时按会话接口归账。
+    const buckets: ProviderUsageBucket[] = session.byProvider
+      ? session.byProvider.map((bucket) => ({
+        providerId: bucket.providerId,
+        providerName: bucket.providerName,
+        totals: { ...bucket.totals },
+      }))
+      : session.totals
+        ? [{
+          providerId: session.providerId,
+          providerName: session.providerName || session.providerId,
+          totals: { ...session.totals },
+        }]
+        : summarizeMessagesByProvider(session.messages ?? [], session.providerId, session.providerName);
 
-    let group = byProvider.get(session.providerId);
-    if (!group) {
-      // 配置已经被删掉的旧会话也要有归属，用会话里记录的名字兜底。
-      group = {
-        providerId: session.providerId,
-        providerName: session.providerName || session.providerId,
-        totals: emptyTotals(),
-        cost: 0,
-      };
-      byProvider.set(session.providerId, group);
+    const sessionTotals = emptyTotals();
+    let sessionCost = 0;
+    for (const bucket of buckets) {
+      const pricing = providerById.get(bucket.providerId)?.pricing;
+      const bucketCost = computeCost(bucket.totals, pricing).total;
+      addTotals(sessionTotals, bucket.totals);
+      sessionCost += bucketCost;
+
+      let group = byProvider.get(bucket.providerId);
+      if (!group) {
+        // 配置已经被删掉的旧会话/角色也要有归属，用记录的名字兜底。
+        group = {
+          providerId: bucket.providerId,
+          providerName: bucket.providerName || bucket.providerId,
+          totals: emptyTotals(),
+          cost: 0,
+        };
+        byProvider.set(bucket.providerId, group);
+      }
+      addTotals(group.totals, bucket.totals);
+      group.cost += bucketCost;
     }
-    addTotals(group.totals, sessionTotals);
-    group.cost += sessionCost;
+    addTotals(totals, sessionTotals);
 
     return {
       id: session.id,

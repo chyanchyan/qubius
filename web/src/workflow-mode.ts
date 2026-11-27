@@ -18,14 +18,15 @@ export const WORKFLOW_OPTIONS: WorkflowOption[] = [
   { value: "plan", label: "plan 计划", description: "只输出开发计划，不改代码", tone: "plan" },
   { value: "discuss", label: "discuss 讨论", description: "多个模型依次回答、审阅，最后给出结论", tone: "discuss" },
   { value: "dis-prl", label: "dis-prl 并行讨论", description: "先拆分主题，子任务并行讨论，最后集成结论", tone: "dis-prl" },
+  { value: "prl-role", label: "prl-role 团队", description: "四个模型分别编排、开发、子审核和集成审核", tone: "prl-role" },
 ];
 
 /** 消息末尾允许跟随的标点/引号/括号；与服务端保持一致。 */
 const WORKFLOW_TAIL = /[。.!！?？,，;；、：:）)】」』'"”’\s]+$/u;
-/** 末尾独立 token；前面不能紧邻拉丁字母/数字/下划线。dis-prl 放在 prl 前面优先匹配。 */
-const WORKFLOW_TAIL_TOKEN = /(?:^|[^A-Za-z0-9_])(dis-prl|prl|ser|plan|discuss)$/i;
-/** 消息开头的 /prl、/ser、/plan、/discuss、/dis-prl。 */
-const WORKFLOW_SLASH_COMMAND = /^\/(dis-prl|prl|ser|plan|discuss)(?=$|[^A-Za-z0-9_])/i;
+/** 末尾独立 token；前面不能紧邻拉丁字母/数字/下划线。dis-prl、prl-role 放在 prl 前面优先匹配。 */
+const WORKFLOW_TAIL_TOKEN = /(?:^|[^A-Za-z0-9_])(dis-prl|prl-role|prl|ser|plan|discuss)$/i;
+/** 消息开头的 /prl、/ser、/plan、/discuss、/dis-prl、/prl-role。 */
+const WORKFLOW_SLASH_COMMAND = /^\/(dis-prl|prl-role|prl|ser|plan|discuss)(?=$|[^A-Za-z0-9_])/i;
 
 /**
  * 从用户输入里识别工作流；发送时用它在本地立即切换模式并带上 workflow，

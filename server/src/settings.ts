@@ -12,6 +12,7 @@ import {
   type ProxySettings,
   type PublicProvider,
   type PublicSettings,
+  type RoleTeam,
 } from "./types.js";
 
 /** 每百万 token 的美元价格；缺失表示不计算这一项成本。 */
@@ -71,6 +72,8 @@ export interface StoredSettings {
   archiveRetentionDays?: number;
   /** 全局代理白名单；未配置时全部直连。 */
   proxy?: ProxySettings;
+  /** prl-role 的默认四角色团队；没有配置时缺省，配置弹窗退回会话当前模型。 */
+  roleTeam?: RoleTeam;
 }
 
 /** 补全默认值后的设置：落盘和运行期使用，三个新字段一定存在。 */
@@ -259,6 +262,7 @@ export function saveSettings(dataDir: string, stored: StoredSettings): void {
         domains: [...settings.proxy.domains],
         ...(settings.proxy.url ? { url: settings.proxy.url } : {}),
       },
+      ...(settings.roleTeam ? { roleTeam: settings.roleTeam } : {}),
       providers: settings.providers.map((provider) => {
         const pricing = cleanPricing(provider.pricing);
         return {
@@ -291,6 +295,7 @@ export function publicSettings(stored: StoredSettings): PublicSettingsView {
     limits: { ...settings.limits },
     archiveRetentionDays: settings.archiveRetentionDays,
     proxy: cloneProxySettings(settings.proxy),
+    ...(settings.roleTeam ? { roleTeam: settings.roleTeam } : {}),
     providers: settings.providers.map((provider) => {
       const pricing = cleanPricing(provider.pricing);
       return {
@@ -316,6 +321,7 @@ export interface SettingsPatch {
   limits?: unknown;
   archiveRetentionDays?: unknown;
   proxy?: unknown;
+  roleTeam?: unknown;
 }
 
 export function applySettingsPatch(current: StoredSettings, patch: SettingsPatch): ResolvedSettings {
@@ -327,6 +333,7 @@ export function applySettingsPatch(current: StoredSettings, patch: SettingsPatch
     limits: { ...base.limits },
     archiveRetentionDays: base.archiveRetentionDays,
     proxy: cloneProxySettings(base.proxy),
+    ...(base.roleTeam ? { roleTeam: base.roleTeam } : {}),
     providers: base.providers.map((provider) => ({ ...provider, models: [...provider.models] })),
   };
   if (patch.effort !== undefined) {
@@ -350,6 +357,20 @@ export function applySettingsPatch(current: StoredSettings, patch: SettingsPatch
   }
   if (patch.providers !== undefined) {
     next.providers = readProviderList(patch.providers, current.providers);
+    // 接口或模型被删掉后，已保存的默认团队可能引用失效；重新校验，坏了就丢弃，
+    // 避免用户没碰角色区时把失效配置继续落盘、下次加载又静默消失。
+    if (next.roleTeam) {
+      try {
+        next.roleTeam = readRoleTeam(next.roleTeam, next.providers);
+      } catch {
+        delete next.roleTeam;
+      }
+    }
+  }
+  // 角色团队引用接口和模型：先应用接口改动，再按最新的接口列表校验。
+  if (patch.roleTeam !== undefined) {
+    if (patch.roleTeam === null) delete next.roleTeam;
+    else next.roleTeam = readRoleTeam(patch.roleTeam, next.providers);
   }
   return next;
 }
@@ -378,42 +399,96 @@ function parseStored(
     ? defaults.archiveRetentionDays
     : readArchiveRetentionDays(record.archiveRetentionDays);
   const common = { effort, maxConcurrent, approvalTimeoutMinutes, limits, archiveRetentionDays };
+  let providers: ProviderConfig[];
+  let migrated = false;
+  let proxy: ProxySettings;
   if (Array.isArray(record.providers)) {
-    const providers = record.providers.map(readSavedProvider);
+    providers = record.providers.map(readSavedProvider);
     // 旧版每套接口各有一个「走系统代理」勾选；升级后合并成全局域名白名单，
     // 保持这些接口的实际路由不变，随后把旧字段从设置文件里清掉。
     const legacyDomains = record.proxy === undefined
       ? legacyProxyDomains(record.providers, providers)
       : [];
-    const proxy = record.proxy === undefined
+    proxy = record.proxy === undefined
       ? (legacyDomains.length > 0 ? { domains: legacyDomains } : cloneProxySettings(defaults.proxy))
       : readProxySettings(record.proxy, defaults.proxy);
-    return {
-      migrated: legacyDomains.length > 0,
-      settings: { ...common, proxy, providers },
-    };
-  }
-  const proxy = cloneProxySettings(defaults.proxy);
-  const apiKey = typeof record.apiKey === "string" ? record.apiKey : "";
-  const model = typeof record.model === "string" ? record.model.trim() : "";
-  if (!apiKey.trim() && !model) {
-    return { migrated: false, settings: { ...common, proxy, providers: [] } };
-  }
-  return {
-    migrated: true,
-    settings: {
-      ...common,
-      proxy,
-      providers: [{
+    migrated = legacyDomains.length > 0;
+  } else {
+    proxy = cloneProxySettings(defaults.proxy);
+    const apiKey = typeof record.apiKey === "string" ? record.apiKey : "";
+    const model = typeof record.model === "string" ? record.model.trim() : "";
+    if (!apiKey.trim() && !model) {
+      providers = [];
+    } else {
+      migrated = true;
+      providers = [{
         id: randomUUID(),
         name: "默认",
         kind: "anthropic",
         baseUrl: "https://api.anthropic.com",
         apiKey: apiKey.trim(),
         models: [model || "sonnet"],
-      }],
-    },
+      }];
+    }
+  }
+  // 角色团队引用接口和模型：手改或旧数据里失效时整段丢弃，不影响设置加载。
+  const roleTeam = readRoleTeamOrUndefined(record.roleTeam, providers);
+  return {
+    migrated,
+    settings: { ...common, proxy, ...(roleTeam ? { roleTeam } : {}), providers },
   };
+}
+
+/** 技能角色团队字段的展示名与顺序；与 prl-role 的四个角色一一对应。 */
+const ROLE_TEAM_FIELDS: Array<{ key: keyof RoleTeam; label: string }> = [
+  { key: "orchestrator", label: "编排模型" },
+  { key: "executor", label: "执行模型" },
+  { key: "subReviewer", label: "子审核模型" },
+  { key: "integrationReviewer", label: "集成审核模型" },
+];
+
+/** 加载时容错：字段缺失或引用失效都返回 undefined，不让整份设置失败。 */
+function readRoleTeamOrUndefined(value: unknown, providers: ProviderConfig[]): RoleTeam | undefined {
+  if (value === undefined || value === null) return undefined;
+  try {
+    return readRoleTeam(value, providers);
+  } catch {
+    return undefined;
+  }
+}
+
+/** 校验设置页保存的四角色团队：接口必须存在、模型必须属于该接口、effort 合法。 */
+export function readRoleTeam(value: unknown, providers: ProviderConfig[]): RoleTeam {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("roleTeam 必须是对象");
+  }
+  const record = value as Record<string, unknown>;
+  const team: Partial<RoleTeam> = {};
+  for (const field of ROLE_TEAM_FIELDS) {
+    const raw = record[field.key];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`${field.label}配置无效`);
+    }
+    const binding = raw as Record<string, unknown>;
+    const providerId = typeof binding.providerId === "string" ? binding.providerId.trim() : "";
+    if (!providerId) throw new Error(`${field.label}缺少接口`);
+    const provider = providers.find((item) => item.id === providerId);
+    if (!provider) throw new Error(`${field.label}的接口不存在：${providerId}`);
+    const model = typeof binding.model === "string" ? binding.model.trim() : "";
+    if (!model || !provider.models.includes(model)) {
+      throw new Error(`${field.label}的模型不在「${provider.name}」里`);
+    }
+    if (!isEffort(binding.effort)) {
+      throw new Error(`${field.label}的 effort 必须是 low、medium、high、xhigh 或 max`);
+    }
+    team[field.key] = {
+      providerId: provider.id,
+      providerName: provider.name,
+      model,
+      effort: binding.effort,
+    };
+  }
+  return team as RoleTeam;
 }
 
 /** 并发对话上限必须落在 1..256，与 config.yaml 的 maxConcurrent 保持一致。 */

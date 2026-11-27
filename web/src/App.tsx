@@ -48,6 +48,7 @@ import { DiscussionPanel } from "./components/DiscussionPanel";
 import { GitPanel } from "./components/GitPanel";
 import { MultiModelRun } from "./components/MultiModelRun";
 import { ProjectsPage } from "./components/ProjectsPage";
+import { RoleTeamPanel } from "./components/RoleTeamPanel";
 import { SchedulesPanel } from "./components/SchedulesPanel";
 import { QueuePanel, SessionActionsMenu, sendContinue, useSessionActions } from "./components/SessionTools";
 import { DiffDock, HISTORY_PAGE, Thread } from "./components/Thread";
@@ -132,6 +133,7 @@ import {
   sendMessage,
   SETTINGS_SAVED_EVENT,
   startArchiveSweep,
+  startRoleRun,
   stopSession,
   UNAUTHORIZED_EVENT,
   writeApiToken,
@@ -142,6 +144,7 @@ import {
   type PermissionLevel,
   type Phase,
   type Project,
+  type RoleTeam,
   type Session,
   type Settings,
   type Transcript,
@@ -1987,6 +1990,10 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
       /* 本地刚创建的会话与 GET 期间新增的会话同理：记录时间戳，避免在途的旧列表快照把它丢掉。 */
       sseTouchedAt.current.set(created.session.id, Date.now());
       setSessions((current) => upsertSession(current, created.session));
+      /* prl-role / discuss 等需要先在详情页配置参与模型的会话，创建后直接进入详情页弹窗/面板。 */
+      if (created.session.phase === "setup") {
+        go(`/sessions/${created.session.id}`);
+      }
     } catch (reason) {
       if (pending) {
         setPendingSessions((current) => current.filter((item) => item.id !== pending!.id));
@@ -1999,7 +2006,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     } finally {
       setBusy(false);
     }
-  }, [attachments, draft.clearDraft, effort, model, projectId, prompt, providerId, reportActionError, setPrompt, workflowMode]);
+  }, [attachments, draft.clearDraft, effort, go, model, projectId, prompt, providerId, reportActionError, setPrompt, workflowMode]);
 
   /* 多模型对比：同一个 prompt/附件，按用户选的模型各建一个独立会话。
      这里只负责“建一个”，选择、逐个调用和汇总由 MultiModelRun 负责。 */
@@ -2607,6 +2614,12 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
   useEffect(() => {
     if (discussionSkill) setWorkflowMode(discussionSkill);
   }, [sessionId, discussionSkill]);
+  /* prl-role 会话重新打开时，发送区默认留在 prl-role 模式；
+     以当前工作流为准，跑完后再切到 discuss/普通模式不会被拉回。 */
+  const roleSkill: WorkflowSkill | undefined = session?.workflow?.skill === "prl-role" ? "prl-role" : undefined;
+  useEffect(() => {
+    if (roleSkill) setWorkflowMode(roleSkill);
+  }, [sessionId, roleSkill]);
   const threadRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
@@ -2773,9 +2786,23 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
   }, [session?.projectId]);
 
   useEffect(() => {
-    getSettings().then(setSettings).catch(() => {
-      // 设置只用于切换接口/模型；加载失败不阻断对话。
-    });
+    let cancelled = false;
+    function reloadSettings() {
+      getSettings()
+        .then((data) => {
+          if (!cancelled) setSettings(data);
+        })
+        .catch(() => {
+          // 设置只用于切换接口/模型；加载失败不阻断对话。
+        });
+    }
+    reloadSettings();
+    /* 设置页保存（含默认 prl-role 团队）后回到会话页时刷新，不必重新挂载页面。 */
+    window.addEventListener(SETTINGS_SAVED_EVENT, reloadSettings);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(SETTINGS_SAVED_EVENT, reloadSettings);
+    };
   }, []);
 
   // 只订阅当前会话的事件；服务端只推这个会话的帧，其他会话的流量不会进来。
@@ -3199,6 +3226,12 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
     setSession(data.session);
   }, [sessionId]);
 
+  /* prl-role：提交四角色团队并开始运行；进度仍通过 SSE 推送。 */
+  const onStartRoleRun = useCallback(async (team: RoleTeam) => {
+    const data = await startRoleRun(sessionId, team);
+    setSession(data.session);
+  }, [sessionId]);
+
   async function onAnswer(
     behavior: "allow" | "deny",
     answers?: Record<string, string>,
@@ -3417,6 +3450,8 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
   const backgroundBusy = hasRunningBackgroundTasks(session.backgroundTasks);
   /* 讨论运行中不能在会话里再发消息：服务端会拒绝，输入框先禁用。 */
   const discussionRunning = session.discussion?.phase === "running";
+  /* prl-role 运行中同样会收到 409，先禁用发送。 */
+  const roleRunning = session.roleRun?.phase === "running";
   const canSend = Boolean(
     (prompt.trim() || attachments.images.length > 0 || attachments.texts.length > 0)
       && !attachments.busy
@@ -3424,7 +3459,8 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
       /* 回滚/编辑重发/分叉/继续上次进行中不能并发发送。 */
       && !messageBusy
       && !continueBusy
-      && !discussionRunning,
+      && !discussionRunning
+      && !roleRunning,
   );
 
   return (
@@ -3535,6 +3571,16 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
           session={session}
           providers={settings?.providers ?? []}
           onStart={onStartDiscussion}
+          onError={setError}
+        />
+      )}
+      {session.roleRun && session.workflow?.skill === "prl-role" && (
+        <RoleTeamPanel
+          key={session.id + ":" + (session.roleRun.startedAt ?? "")}
+          session={session}
+          providers={settings?.providers ?? []}
+          defaultTeam={settings?.roleTeam}
+          onStart={onStartRoleRun}
           onError={setError}
         />
       )}

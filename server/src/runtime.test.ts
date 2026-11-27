@@ -17,6 +17,7 @@ import {
   Runtime,
   sdkStartMode,
   sessionDirProblem,
+  workflowInstruction,
   type Approval,
   type RunConfig,
 } from "./runtime.js";
@@ -33,7 +34,7 @@ function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rc-runtime-"));
 }
 
-function createInput(id: string): CreateSessionInput {
+function createInput(id: string, prompt = "你好"): CreateSessionInput {
   return {
     id,
     projectId: "p1",
@@ -45,7 +46,7 @@ function createInput(id: string): CreateSessionInput {
     effort: "high",
     cwd: "/tmp/project",
     git: false,
-    prompt: "你好",
+    prompt,
   };
 }
 
@@ -1451,3 +1452,594 @@ test("PromptQueue 背靠背取走两条 prompt 时，第二条 forkPoint 指向�
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+const roleTeam = {
+  orchestrator: { providerId: "prov1", providerName: "服务商", model: "m-orch", effort: "high" as const },
+  executor: { providerId: "prov1", providerName: "服务商", model: "m-exec", effort: "high" as const },
+  subReviewer: { providerId: "prov1", providerName: "服务商", model: "m-sub", effort: "medium" as const },
+  integrationReviewer: { providerId: "prov1", providerName: "服务商", model: "m-int", effort: "high" as const },
+};
+
+function makeRoleRuntime(
+  store: Store,
+  roleAgent: import("./role-agent.js").RoleAgent,
+): Runtime {
+  return new Runtime(store, {
+    maxConcurrent: 2,
+    fake: true,
+    credential: () => ({ apiKey: "test-key", baseUrl: "http://localhost" }),
+    permission: () => "default",
+    secrets: () => [],
+    roleAgent,
+  });
+}
+
+test("prl-role：编排拆分、逐单元开发-审核、最后集成审核", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "实现两个小改动"));
+    const calls: string[] = [];
+    const runtime = makeRoleRuntime(store, async (request) => {
+      calls.push(`${request.role}:${request.preset ? "preset" : "custom"}`);
+      if (request.role === "orchestrator") return { text: '["单元一","单元二"]', tools: [] };
+      if (request.role === "executor") return { text: "完成本单元", tools: ["Edit"] };
+      return { text: "没有阻塞性问题。\n\n结论：PASS", tools: [] };
+    });
+
+    store.prepareRoleRun("s1", roleTeam);
+    runtime.startRoleRun("s1", roleTeam);
+    await waitUntil(() => store!.require("s1").roleRun?.phase === "completed");
+
+    const session = store.require("s1");
+    assert.deepEqual(session.roleRun?.units.map((item) => [item.title, item.phase]), [
+      ["单元一", "passed"],
+      ["单元二", "passed"],
+    ]);
+    assert.equal(session.roleRun?.agreed, true);
+    assert.equal(session.phase, "completed");
+    assert.equal(session.lastResult, "success");
+    assert.ok(session.workflow?.endedAt);
+    assert.deepEqual(calls, [
+      "orchestrator:custom",
+      "executor:preset",
+      "sub-reviewer:custom",
+      "executor:preset",
+      "sub-reviewer:custom",
+      "integration-reviewer:custom",
+    ]);
+    const messages = session.messages.filter((item) => item.roleRun);
+    assert.deepEqual(
+      messages.map((item) => item.roleRun?.kind),
+      ["orchestrator", "executor", "sub-reviewer", "executor", "sub-reviewer", "integration-reviewer"],
+    );
+    assert.deepEqual(messages[1]?.roleRun?.unit, { index: 1, title: "单元一" });
+    assert.equal(messages.at(-1)?.roleRun?.integrating, true);
+    assert.match(messages[0]?.speaker ?? "", /编排/);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：审核先 CHANGES 后 PASS，修复轮带上问题原文", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "改一处校验"));
+    const executorPrompts: string[] = [];
+    let reviews = 0;
+    let devRound = 0;
+    const runtime = makeRoleRuntime(store, async (request) => {
+      if (request.role === "orchestrator") return { text: '["单元一"]', tools: [] };
+      if (request.role === "executor") {
+        devRound += 1;
+        executorPrompts.push(request.prompt);
+        return { text: `第 ${devRound} 轮完成`, tools: [] };
+      }
+      if (request.role === "sub-reviewer") {
+        reviews += 1;
+        return reviews === 1
+          ? { text: "- [阻塞] a.ts:10 缺少空值判断\n\n结论：CHANGES", tools: [] }
+          : { text: "已修复。\n\n结论：PASS", tools: [] };
+      }
+      return { text: "结论：PASS", tools: [] };
+    });
+
+    store.prepareRoleRun("s1", roleTeam);
+    runtime.startRoleRun("s1", roleTeam, 3);
+    await waitUntil(() => store!.require("s1").roleRun?.phase === "completed");
+
+    const unit = store.require("s1").roleRun?.units[0];
+    assert.equal(unit?.phase, "passed");
+    assert.equal(unit?.round, 2);
+    assert.equal(devRound, 2);
+    assert.equal(reviews, 2);
+    assert.match(executorPrompts[1] ?? "", /a\.ts:10/);
+    assert.match(executorPrompts[1] ?? "", /上一轮审核/);
+    assert.equal(store.require("s1").roleRun?.agreed, true);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：审核一直不通过时达到上限标为需要关注", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "改一处校验"));
+    let devCalls = 0;
+    const runtime = makeRoleRuntime(store, async (request) => {
+      if (request.role === "orchestrator") return { text: '["单元一"]', tools: [] };
+      if (request.role === "executor") {
+        devCalls += 1;
+        return { text: "又改了一版", tools: [] };
+      }
+      if (request.role === "sub-reviewer") {
+        return { text: "- [阻塞] 还有问题\n\n结论：CHANGES", tools: [] };
+      }
+      return { text: "整体仍有问题。\n\n结论：CHANGES", tools: [] };
+    });
+
+    store.prepareRoleRun("s1", roleTeam);
+    runtime.startRoleRun("s1", roleTeam, 2);
+    await waitUntil(() => store!.require("s1").roleRun?.phase === "completed");
+
+    const session = store.require("s1");
+    assert.equal(devCalls, 2);
+    assert.equal(session.roleRun?.units[0]?.phase, "needs_attention");
+    assert.equal(session.roleRun?.units[0]?.verdict, "changes");
+    assert.equal(session.roleRun?.agreed, false);
+    assert.equal(session.roleRun?.phase, "completed");
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：stop 中止正在执行的角色调用", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "改一处校验"));
+    const runtime = makeRoleRuntime(store, async (request) => {
+      if (request.role === "orchestrator") return { text: '["单元一"]', tools: [] };
+      if (request.role === "executor") {
+        request.onProgress?.({ toolName: "Edit" });
+        await new Promise<void>((_, reject) => {
+          if (request.signal.aborted) {
+            reject(new Error("aborted"));
+            return;
+          }
+          request.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      }
+      return { text: "结论：PASS", tools: [] };
+    });
+
+    store.prepareRoleRun("s1", roleTeam);
+    runtime.startRoleRun("s1", roleTeam);
+    await waitUntil(() => {
+      const run = store!.require("s1").roleRun;
+      return run?.activeRole === "executor" && run.activeUnit === 1 && run.activeTool === "Edit";
+    });
+    await within(runtime.stop("s1"), 3000);
+
+    const session = store.require("s1");
+    assert.equal(session.roleRun?.phase, "stopped");
+    assert.equal(session.roleRun?.error, "已停止");
+    assert.equal(session.roleRun?.activeRole, undefined);
+    assert.equal(session.roleRun?.activeUnit, undefined);
+    assert.equal(session.roleRun?.activeTool, undefined);
+    assert.equal(session.roleRun?.integrating, undefined);
+    assert.ok(session.workflow?.endedAt);
+    assert.equal(session.lastResult, "stopped");
+    assert.ok(session.roleRun?.endedAt);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：角色调用抛错时整场运行标为失败", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "改一处校验"));
+    const runtime = makeRoleRuntime(store, async (request) => {
+      if (request.role === "orchestrator") return { text: '["单元一"]', tools: [] };
+      throw new Error("接口连接失败");
+    });
+
+    store.prepareRoleRun("s1", roleTeam);
+    runtime.startRoleRun("s1", roleTeam);
+    await waitUntil(() => {
+      const phase = store!.require("s1").roleRun?.phase;
+      return phase === "failed" || phase === "completed";
+    });
+
+    const session = store.require("s1");
+    assert.equal(session.roleRun?.phase, "failed");
+    assert.match(session.roleRun?.error ?? "", /接口连接失败/);
+    assert.equal(session.lastResult, "error");
+    assert.ok(session.workflow?.endedAt);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：审核没有裁定行时按未通过进入下一轮", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "改一处校验"));
+    const executorPrompts: string[] = [];
+    let reviews = 0;
+    const runtime = makeRoleRuntime(store, async (request) => {
+      if (request.role === "orchestrator") return { text: '["单元一"]', tools: [] };
+      if (request.role === "executor") {
+        executorPrompts.push(request.prompt);
+        return { text: "改了一版", tools: [] };
+      }
+      if (request.role === "sub-reviewer") {
+        reviews += 1;
+        // 第一轮不写裁定行：按未通过处理，宁可多修一轮。
+        return reviews === 1
+          ? { text: "看起来没写结论，只是泛泛检查了一下。", tools: [] }
+          : { text: "已确认。\n\n结论：PASS", tools: [] };
+      }
+      return { text: "结论：PASS", tools: [] };
+    });
+
+    store.prepareRoleRun("s1", roleTeam);
+    runtime.startRoleRun("s1", roleTeam, 3);
+    await waitUntil(() => store!.require("s1").roleRun?.phase === "completed");
+
+    const unit = store.require("s1").roleRun?.units[0];
+    assert.equal(reviews, 2);
+    assert.equal(executorPrompts.length, 2);
+    assert.match(executorPrompts[1] ?? "", /看起来没写结论/);
+    assert.equal(unit?.phase, "passed");
+    assert.equal(unit?.round, 2);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：编排/集成进度字段与每轮清理 activeTool", async () => {
+  const dataDir = tempDir();
+  let store: Store | undefined;
+  try {
+    store = new Store(dataDir);
+    store.create(createInput("s1", "观察角色进度"));
+    let orchestratorActive: string | undefined;
+    const toolAtExecutorEntry: Array<string | undefined> = [];
+    let reviews = 0;
+    let integration: import("./types.js").RoleRunState | undefined;
+    const runtime = makeRoleRuntime(store, async (request) => {
+      if (request.role === "orchestrator") {
+        orchestratorActive = store!.require("s1").roleRun?.activeRole;
+        return { text: '["单元一","单元二"]', tools: [] };
+      }
+      if (request.role === "executor") {
+        toolAtExecutorEntry.push(store!.require("s1").roleRun?.activeTool);
+        request.onProgress?.({ toolName: "Edit" });
+        return { text: "完成一轮", tools: ["Edit"] };
+      }
+      if (request.role === "sub-reviewer") {
+        reviews += 1;
+        // 每个单元都是先 CHANGES 再 PASS，最后一个单元实际跑满 2 轮。
+        return reviews % 2 === 1
+          ? { text: "- [阻塞] 还要改\n\n结论：CHANGES", tools: [] }
+          : { text: "已修复。\n\n结论：PASS", tools: [] };
+      }
+      const current = store!.require("s1").roleRun;
+      integration = current ? { ...current } : undefined;
+      return { text: "整体通过。\n\n结论：PASS", tools: [] };
+    });
+
+    store.prepareRoleRun("s1", roleTeam);
+    runtime.startRoleRun("s1", roleTeam, 3);
+    await waitUntil(() => store!.require("s1").roleRun?.phase === "completed");
+
+    assert.equal(orchestratorActive, "orchestrator");
+    // 每次进入新一轮执行时，上一轮的 activeTool 都已被清掉。
+    assert.deepEqual(toolAtExecutorEntry, [undefined, undefined, undefined, undefined]);
+    assert.equal(integration?.activeRole, "integration-reviewer");
+    assert.equal(integration?.integrating, true);
+    assert.equal(integration?.activeUnit, undefined);
+    assert.equal(integration?.activeTool, undefined);
+    // 最后一个单元实际跑了两轮，集成阶段沿用这个轮次而不是固定 1。
+    assert.equal(integration?.round, 2);
+  } finally {
+    await store?.flush().catch(() => undefined);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：普通轮次结束后空闲 query 仍占用时也能开始", async () => {
+  const dataDir = tempDir();
+  try {
+    const { store, runtime } = makeRuntime(dataDir);
+    store.create(createInput("s1", "普通请求"));
+    runtime.submit("s1", { text: "普通请求", images: [] });
+    // 一轮跑完后 streaming-input query 仍开着：active 为 true。
+    await waitUntil(
+      () => store.require("s1").phase === "completed" && runtime.isActive("s1"),
+      3000,
+    );
+
+    store.prepareRoleRun("s1", roleTeam);
+    await runtime.startRoleRun("s1", roleTeam);
+    await waitUntil(() => store.require("s1").roleRun?.phase === "completed");
+
+    const session = store.require("s1");
+    assert.equal(session.roleRun?.phase, "completed");
+    assert.equal(session.lastResult, "success");
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("workflowInstruction：prl-role 给出角色团队说明而不是 plan", () => {
+  const text = workflowInstruction("prl-role");
+  assert.match(text, /角色团队/);
+  assert.match(text, /prl-role/);
+  assert.doesNotMatch(text, /plan 工作流/);
+});
+
+test("prl-role：后台任务运行中不能开始角色团队", async () => {
+  const dataDir = tempDir();
+  try {
+    const { store, runtime } = makeRuntime(dataDir);
+    store.create(createInput("s1", "后台任务"));
+    store.prepareRoleRun("s1", roleTeam);
+    store.apply("s1", {
+      type: "system",
+      subtype: "task_started",
+      uuid: "bg-1",
+      task_id: "shell-1",
+      task_type: "local_bash",
+      description: "下载模型",
+      timestamp: new Date().toISOString(),
+    });
+    assert.equal(store.require("s1").backgroundTasks?.[0]?.status, "running");
+
+    await assert.rejects(
+      () => runtime.startRoleRun("s1", roleTeam),
+      /对话正在运行/,
+    );
+    // 拒绝启动时不能把仍在跑的后台任务收成 stopped。
+    assert.equal(store.require("s1").backgroundTasks?.[0]?.status, "running");
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：各角色 usage 按实际接口落进消息并计入用量报告", async () => {
+  const dataDir = tempDir();
+  try {
+    const store = new Store(dataDir);
+    const runtime = new Runtime(store, {
+      maxConcurrent: 2,
+      fake: true,
+      credential: () => ({ apiKey: "k", baseUrl: "https://example.test" }),
+      permission: () => "acceptEdits",
+      secrets: () => [],
+      roleAgent: async (request) => {
+        if (request.role === "orchestrator") {
+          return {
+            text: `["单任务"]`,
+            tools: [],
+            usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+          };
+        }
+        if (request.role === "executor") {
+          return {
+            text: "已改完",
+            tools: ["Edit"],
+            usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 },
+          };
+        }
+        return {
+          text: "检查通过\n\n结论：PASS",
+          tools: ["Read"],
+          usage: { input: 500_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+        };
+      },
+    });
+    store.create(createInput("s1", "记账测试"));
+    const crossTeam = {
+      orchestrator: { providerId: "prov-a", providerName: "接口 A", model: "m-a", effort: "high" as const },
+      executor: { providerId: "prov-b", providerName: "接口 B", model: "m-b", effort: "high" as const },
+      subReviewer: { providerId: "prov-c", providerName: "接口 C", model: "m-c", effort: "high" as const },
+      integrationReviewer: { providerId: "prov-c", providerName: "接口 C", model: "m-c", effort: "high" as const },
+    };
+    store.prepareRoleRun("s1", crossTeam);
+    await runtime.startRoleRun("s1", crossTeam);
+    await waitUntil(() => store.require("s1").roleRun?.phase === "completed");
+
+    const report = store.usageReport([
+      { id: "prov-a", name: "接口 A", pricing: { input: 2 } },
+      { id: "prov-b", name: "接口 B", pricing: { output: 5 } },
+      { id: "prov-c", name: "接口 C", pricing: { input: 4 } },
+    ]);
+    // A: 1M*2=2; B: 1M*5=5; C: (0.5M+0.5M)*4=4 => total 11
+    assert.equal(report.totals.calls, 4);
+    assert.ok(Math.abs(report.cost - 11) < 1e-9);
+    const byId = new Map(report.byProvider.map((item) => [item.providerId, item]));
+    assert.equal(byId.get("prov-a")?.totals.calls, 1);
+    assert.equal(byId.get("prov-b")?.totals.calls, 1);
+    assert.equal(byId.get("prov-c")?.totals.calls, 2);
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：并发已满时会先释放其它会话的空闲 query 再启动", async () => {
+  const dataDir = tempDir();
+  try {
+    const store = new Store(dataDir);
+    const runtime = new Runtime(store, {
+      maxConcurrent: 1,
+      fake: true,
+      credential: () => ({ apiKey: "k", baseUrl: "https://example.test" }),
+      permission: () => "acceptEdits",
+      secrets: () => [],
+    });
+    store.create(createInput("idle-s", "先跑一轮普通对话"));
+    runtime.submit("idle-s", { text: "先跑一轮普通对话", images: [] });
+    await waitUntil(() => store.require("idle-s").phase === "completed");
+    assert.equal(runtime.isActive("idle-s"), true);
+
+    store.create(createInput("role-s", "再跑角色团队"));
+    store.prepareRoleRun("role-s", roleTeam);
+    await runtime.startRoleRun("role-s", roleTeam);
+    await waitUntil(() => store.require("role-s").roleRun?.phase === "completed");
+
+    assert.equal(store.require("role-s").roleRun?.phase, "completed");
+    assert.equal(runtime.isActive("idle-s"), false);
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：真实模式下工作目录不存在时直接拒绝启动", async () => {
+  const dataDir = tempDir();
+  try {
+    const store = new Store(dataDir);
+    const runtime = new Runtime(store, {
+      maxConcurrent: 2,
+      fake: false,
+      credential: () => ({ apiKey: "k", baseUrl: "https://example.test" }),
+      permission: () => "acceptEdits",
+      secrets: () => [],
+      roleAgent: async () => ({ text: "不应被调用", tools: [] }),
+    });
+    const missingDir = path.join(dataDir, "deleted-worktree");
+    store.create({
+      ...createInput("s-missing", "目录被删了"),
+      cwd: missingDir,
+      projectPath: missingDir,
+    });
+    store.prepareRoleRun("s-missing", roleTeam);
+
+    await assert.rejects(
+      () => runtime.startRoleRun("s-missing", roleTeam),
+      /对话工作目录不存在或不可访问/,
+    );
+    assert.equal(store.require("s-missing").roleRun?.phase, "setup");
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：成功后触发标题总结", async () => {
+  const dataDir = tempDir();
+  try {
+    const store = new Store(dataDir);
+    let summarized = false;
+    const runtime = new Runtime(store, {
+      maxConcurrent: 2,
+      fake: true,
+      credential: () => ({ apiKey: "k", baseUrl: "https://example.test" }),
+      permission: () => "acceptEdits",
+      secrets: () => [],
+      titleSummarizer: async () => {
+        summarized = true;
+        return "总结后的标题";
+      },
+    });
+    store.create({ ...createInput("s-title", "帮我做个功能"), titlePending: true });
+    store.prepareRoleRun("s-title", roleTeam);
+    await runtime.startRoleRun("s-title", roleTeam);
+    await waitUntil(() => store.require("s-title").title === "总结后的标题");
+    assert.equal(summarized, true);
+    assert.equal(store.require("s-title").titlePending, undefined);
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：并发释放空闲槽期间同会话第二次 start 被启动锁拒绝", async () => {
+  const dataDir = tempDir();
+  try {
+    const store = new Store(dataDir);
+    const runtime = new Runtime(store, {
+      maxConcurrent: 1,
+      fake: true,
+      credential: () => ({ apiKey: "k", baseUrl: "https://example.test" }),
+      permission: () => "acceptEdits",
+      secrets: () => [],
+    });
+    store.create(createInput("idle-s", "先占一个空闲槽"));
+    runtime.submit("idle-s", { text: "先占一个空闲槽", images: [] });
+    await waitUntil(() => store.require("idle-s").phase === "completed");
+    assert.equal(runtime.isActive("idle-s"), true);
+
+    store.create(createInput("role-s", "并发启动测试"));
+    store.prepareRoleRun("role-s", roleTeam);
+    // 同一 tick 连发两次 start：第一个进入 await stop(idle-s)，第二个必须被启动锁挡住。
+    const first = runtime.startRoleRun("role-s", roleTeam);
+    const second = runtime.startRoleRun("role-s", roleTeam);
+    const results = await Promise.allSettled([first, second]);
+    assert.equal(results[0]?.status, "fulfilled");
+    assert.equal(results[1]?.status, "rejected");
+    assert.match(String(results[1]?.status === "rejected" ? results[1].reason : ""), /正在启动/);
+    await waitUntil(() => store.require("role-s").roleRun?.phase === "completed");
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("prl-role：目录不存在时不会先踢掉其它会话的空闲 query", async () => {
+  const dataDir = tempDir();
+  try {
+    const store = new Store(dataDir);
+    const runtime = new Runtime(store, {
+      maxConcurrent: 1,
+      fake: false,
+      credential: () => ({ apiKey: "k", baseUrl: "https://example.test" }),
+      permission: () => "acceptEdits",
+      secrets: () => [],
+      roleAgent: async () => ({ text: "不应被调用", tools: [] }),
+    });
+    // 构造一个已占槽的空闲会话（用真实目录的 fake 风格不方便直接跑 SDK，直接测同会话前移校验）。
+    const missingDir = path.join(dataDir, "deleted-dir");
+    store.create({
+      ...createInput("s-missing", "目录不存在"),
+      cwd: missingDir,
+      projectPath: missingDir,
+    });
+    store.prepareRoleRun("s-missing", roleTeam);
+    let stopCalled = false;
+    const origStop = runtime.stop.bind(runtime);
+    runtime.stop = async (id: string) => {
+      stopCalled = true;
+      return origStop(id);
+    };
+    await assert.rejects(() => runtime.startRoleRun("s-missing", roleTeam), /对话工作目录不存在或不可访问/);
+    assert.equal(stopCalled, false);
+    await store.flush();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+

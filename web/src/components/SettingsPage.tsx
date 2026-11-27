@@ -22,6 +22,8 @@ import {
   type Limits,
   type ProviderDraft,
   type ProviderKind,
+  type RoleBinding,
+  type RoleTeam,
   type Settings,
 } from "../api";
 import {
@@ -30,6 +32,7 @@ import {
   type ProviderBalanceResult,
   type ProviderPricing,
 } from "../api-usage";
+import { effortOptionLabel } from "../format";
 import { Notice, SecretInput, useDialogs } from "../ui";
 import { PushSettings } from "./PushSettings";
 import "./SettingsPage.css";
@@ -164,6 +167,118 @@ function formatBalance(result: ProviderBalanceResult): string {
   return `余额：${parts.join("；")}${suffix}`;
 }
 
+/** prl-role 的四个固定角色；顺序与 RoleTeam 字段一致，不可增删。 */
+const ROLE_TEAM_FIELDS: Array<{ key: keyof RoleTeam; label: string; hint: string }> = [
+  { key: "orchestrator", label: "编排模型", hint: "拆分单元并分派" },
+  { key: "executor", label: "执行模型", hint: "开发每个单元" },
+  { key: "subReviewer", label: "子审核模型", hint: "逐单元评审" },
+  { key: "integrationReviewer", label: "集成审核模型", hint: "全部单元结束后终审" },
+];
+
+interface RoleProviderOption {
+  id: string;
+  label: string;
+  models: string[];
+}
+
+/**
+ * 角色可选接口：只用已经保存、有服务端 id 的接口，新加的接口要保存后才能被引用。
+ * 已保存的接口被删除时补一个占位项，让界面能显示旧值并提示重新选择。
+ */
+function roleProviderOptions(
+  providers: EditableProvider[],
+  current: RoleBinding | undefined,
+): RoleProviderOption[] {
+  const options: RoleProviderOption[] = providers
+    .filter((provider): provider is EditableProvider & { id: string } => Boolean(provider.id))
+    .map((provider) => ({
+      id: provider.id,
+      label: provider.name.trim() || "未命名配置",
+      models: provider.models.map((model) => model.trim()).filter(Boolean),
+    }));
+  if (current?.providerId && !options.some((option) => option.id === current.providerId)) {
+    options.unshift({
+      id: current.providerId,
+      label: `${current.providerName.trim() || "已删除的接口"}（不可用）`,
+      models: current.model ? [current.model] : [],
+    });
+  }
+  return options;
+}
+
+/** 把四行草稿整理成待保存的 RoleTeam；providerName 按当前接口名刷新。 */
+function roleTeamFromRows(rows: RoleBinding[], providers: EditableProvider[]): RoleTeam {
+  const resolve = (index: number): RoleBinding => {
+    const row = rows[index] ?? { providerId: "", providerName: "", model: "", effort: "high" };
+    const provider = providers.find((item) => item.id === row.providerId);
+    return {
+      providerId: row.providerId,
+      providerName: provider?.name.trim() || row.providerName,
+      model: row.model.trim(),
+      effort: row.effort,
+    };
+  };
+  return {
+    orchestrator: resolve(0),
+    executor: resolve(1),
+    subReviewer: resolve(2),
+    integrationReviewer: resolve(3),
+  };
+}
+
+/** 没有默认团队时，四行仍显示占位值（第一个已保存接口的第一个模型）。 */
+function roleRowsFromTeam(
+  team: RoleTeam | undefined,
+  providers: EditableProvider[],
+  defaultEffort: Effort,
+): RoleBinding[] {
+  const first = providers.find((provider) => Boolean(provider.id));
+  const placeholder: RoleBinding = {
+    providerId: first?.id ?? "",
+    providerName: first?.name.trim() ?? "",
+    model: first ? (first.models.map((item) => item.trim()).find(Boolean) ?? "") : "",
+    effort: defaultEffort,
+  };
+  return ROLE_TEAM_FIELDS.map((field) => {
+    const binding = team?.[field.key];
+    return binding ? { ...binding } : { ...placeholder };
+  });
+}
+
+/** 逐角色校验：接口必须已保存且存在，模型必须属于该接口，effort 合法。 */
+function validateRoleTeam(team: RoleTeam, providers: EditableProvider[]): string {
+  for (const field of ROLE_TEAM_FIELDS) {
+    const binding = team[field.key];
+    const provider = providers.find((item) => item.id === binding.providerId);
+    if (!provider) {
+      return `${field.label}的接口为空或已不存在，请重新选择。`;
+    }
+    const models = provider.models.map((item) => item.trim()).filter(Boolean);
+    const model = binding.model.trim();
+    if (!model) {
+      return `${field.label}没有可用的模型，请重新选择。`;
+    }
+    if (!models.includes(model)) {
+      return `${field.label}的模型「${model}」不在「${provider.name.trim() || "未命名配置"}」里，请重新选择。`;
+    }
+    if (!EFFORTS.includes(binding.effort)) {
+      return `${field.label}的 effort 无效，请重新选择。`;
+    }
+  }
+  return "";
+}
+
+/** 忽略接口显示名，只比较真正落盘的三项，用来判断草稿是否与已保存值一致。 */
+function roleTeamSignature(team: RoleTeam | null): string {
+  if (!team) return "";
+  return ROLE_TEAM_FIELDS
+    .map((field) => {
+      const binding = team[field.key];
+      return `${binding.providerId}|${binding.model}|${binding.effort}`;
+    })
+    .join(";");
+}
+
 export function SettingsPage() {
   const dialogs = useDialogs();
   const [providers, setProviders] = useState<EditableProvider[]>([]);
@@ -192,6 +307,18 @@ export function SettingsPage() {
   const [balanceResults, setBalanceResults] = useState<Record<string, ProviderBalanceResult>>({});
   /** 每套配置的 API key 是否显示明文；默认隐藏，眼睛按钮切换。 */
   const [revealedKeys, setRevealedKeys] = useState<Record<string, boolean>>({});
+  /** prl-role 默认团队：四行编辑值常驻（未设置时是占位值）。 */
+  const [roleRows, setRoleRows] = useState<RoleBinding[]>([]);
+  /** 真正会写进保存请求的默认团队；null 表示清除，弹窗退回会话当前模型。 */
+  const [roleTeamDraft, setRoleTeamDraft] = useState<RoleTeam | null>(null);
+  /** 服务端当前已保存的默认团队，用来区分「待保存」和「已保存」。 */
+  const [savedRoleTeam, setSavedRoleTeam] = useState<RoleTeam | null>(null);
+  /** 用户本次是否动过默认团队（设为/清除/编辑已设置的默认）；没动过就不带 roleTeam 保存。 */
+  const [roleTouched, setRoleTouched] = useState(false);
+  /** 未设置默认时改过占位行，用来提示还需点「设为默认」。 */
+  const [roleEdited, setRoleEdited] = useState(false);
+  /** 角色团队的内联校验错误。 */
+  const [roleError, setRoleError] = useState("");
 
   const mounted = useRef(true);
 
@@ -205,13 +332,20 @@ export function SettingsPage() {
   useEffect(() => {
     getSettings().then((data) => {
       if (!mounted.current) return;
-      setProviders(fromSettings(data));
+      const editableProviders = fromSettings(data);
+      setProviders(editableProviders);
       setEffort(data.effort);
       setMaxConcurrent(clampMaxConcurrent(data.maxConcurrent));
       // 旧服务端还没有这些字段时退回内置默认值，页面照常可用。
       setApprovalTimeoutMinutes(data.approvalTimeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES);
       setLimits({ ...DEFAULT_LIMITS, ...(data.limits ?? {}) });
       setArchiveRetentionDays(data.archiveRetentionDays ?? DEFAULT_ARCHIVE_RETENTION_DAYS);
+      setRoleRows(roleRowsFromTeam(data.roleTeam, editableProviders, data.effort));
+      setRoleTeamDraft(data.roleTeam ? { ...data.roleTeam } : null);
+      setSavedRoleTeam(data.roleTeam ? { ...data.roleTeam } : null);
+      setRoleTouched(false);
+      setRoleEdited(false);
+      setRoleError("");
       setDirty(false);
     }).catch((reason: unknown) => {
       if (mounted.current) setError(readableError(reason, "读取设置失败"));
@@ -231,8 +365,56 @@ export function SettingsPage() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
+  /* 接口名/模型被修改后，角色区原来的「模型不在接口里」之类提示可能已经过时，
+     统一清掉，等用户再次保存或设为默认时重新校验。 */
+  useEffect(() => {
+    setRoleError("");
+  }, [providers]);
+
   function update(key: string, patch: Partial<EditableProvider>) {
     setProviders((current) => current.map((item) => item.key === key ? { ...item, ...patch } : item));
+    setDirty(true);
+  }
+
+  /**
+   * 修改某一角色：未设置默认团队时只改占位行、不写入草稿（避免加载页面就产生默认值）；
+   * 已经设为默认时同步刷新草稿，避免用户改完选择还要再点一次「设为默认」。
+   */
+  function updateRoleRow(index: number, patch: Partial<RoleBinding>) {
+    const nextRows = roleRows.map((row, item) => item === index ? { ...row, ...patch } : row);
+    setRoleRows(nextRows);
+    setRoleError("");
+    if (roleTeamDraft !== null) {
+      setRoleTeamDraft(roleTeamFromRows(nextRows, providers));
+      setRoleTouched(true);
+      setDirty(true);
+    } else {
+      // 占位行改动不会写入保存，但要让用户知道还需要点「设为默认」。
+      setRoleEdited(true);
+    }
+  }
+
+  /** 校验四行后写进保存草稿；真正落盘仍要点页面底部的「保存」。 */
+  function onSetRoleTeamDefault() {
+    const team = roleTeamFromRows(roleRows, providers);
+    const invalid = validateRoleTeam(team, providers);
+    if (invalid) {
+      setRoleError(invalid);
+      return;
+    }
+    setRoleTeamDraft(team);
+    setRoleTouched(true);
+    setRoleEdited(false);
+    setRoleError("");
+    setDirty(true);
+  }
+
+  /** 清除草稿里的默认团队，保存后弹窗退回会话当前模型。 */
+  function onClearRoleTeamDefault() {
+    setRoleTeamDraft(null);
+    setRoleTouched(true);
+    setRoleEdited(false);
+    setRoleError("");
     setDirty(true);
   }
 
@@ -296,6 +478,18 @@ export function SettingsPage() {
         return;
       }
     }
+    // 只有用户本次动过默认团队时才校验并发送 roleTeam；没动过就省略该字段，
+    // 避免把其它标签页刚保存的默认团队用旧值覆盖掉。
+    let roleTeamBody: RoleTeam | null = null;
+    if (roleTouched && roleTeamDraft !== null) {
+      roleTeamBody = roleTeamFromRows(roleRows, providers);
+      const roleInvalid = validateRoleTeam(roleTeamBody, providers);
+      if (roleInvalid) {
+        setRoleError(roleInvalid);
+        setError("「prl-role 默认团队」配置不完整，请修正后再保存。");
+        return;
+      }
+    }
     try {
       const previousProviders = providers;
       const body: ProviderDraftWithPricing[] = providers.map((provider) => {
@@ -311,14 +505,17 @@ export function SettingsPage() {
         if (pricing) draft.pricing = pricing;
         return draft;
       });
-      const saved = await saveSettings({
+      const payload: Parameters<typeof saveSettings>[0] = {
         providers: body,
         effort,
         maxConcurrent,
         approvalTimeoutMinutes,
         limits,
         archiveRetentionDays,
-      }) as SettingsWithPricing;
+      };
+      // roleTouched 时才写 roleTeam：null 表示清除默认团队。
+      if (roleTouched) payload.roleTeam = roleTeamBody;
+      const saved = await saveSettings(payload) as SettingsWithPricing;
       const nextProviders = fromSettings(saved);
       setProviders(nextProviders);
       setEffort(saved.effort);
@@ -326,6 +523,18 @@ export function SettingsPage() {
       setApprovalTimeoutMinutes(saved.approvalTimeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES);
       setLimits({ ...DEFAULT_LIMITS, ...(saved.limits ?? {}) });
       setArchiveRetentionDays(saved.archiveRetentionDays ?? DEFAULT_ARCHIVE_RETENTION_DAYS);
+      const savedTeam = saved.roleTeam ? { ...saved.roleTeam } : null;
+      setRoleTeamDraft(savedTeam);
+      setSavedRoleTeam(savedTeam);
+      setRoleTouched(false);
+      setRoleError("");
+      // 未设为默认的占位编辑不写盘，但保存成功后也不能被占位值悄悄重置。
+      if (savedTeam === null && roleEdited) {
+        setRoleEdited(true);
+      } else {
+        setRoleRows(roleRowsFromTeam(saved.roleTeam, nextProviders, saved.effort));
+        setRoleEdited(false);
+      }
       setDirty(false);
       // 顶栏的「运行中 / 上限」跟着立即更新，不必等下次加载。
       window.dispatchEvent(new CustomEvent(SETTINGS_SAVED_EVENT, { detail: saved }));
@@ -485,6 +694,15 @@ export function SettingsPage() {
     setApiToken("");
     setTokenMessage("已清除访问令牌，请刷新页面。");
   }
+
+  /* 草稿与已保存值都为空才是「未设置」；有草稿但和已保存值不一致（含清除）是「待保存」。 */
+  const roleStatus: "none" | "saved" | "pending" =
+    roleTeamDraft === null && savedRoleTeam === null
+      ? "none"
+      : roleTeamSignature(roleTeamDraft) === roleTeamSignature(savedRoleTeam)
+        ? "saved"
+        : "pending";
+  const roleStatusLabel = roleStatus === "none" ? "未设置" : roleStatus === "saved" ? "已保存" : "待保存";
 
   return (
     <section className="page settings-page">
@@ -824,6 +1042,119 @@ export function SettingsPage() {
           会话/请求上限保存后立即生效：新请求按新请求体上限处理，旧会话在下次加载或保存时按新条数/字节上限收敛。
           部署环境里的 limits 只作为初始默认值。
         </p>
+        <article className="provider settings-role-team" aria-label="prl-role 默认团队">
+          <div className="settings-role-team-head">
+            <strong>prl-role 默认团队</strong>
+            <span className="settings-role-team-status" data-state={roleStatus}>
+              {roleStatusLabel}
+            </span>
+          </div>
+          <p className="muted">
+            这些默认值只影响新建 prl-role 运行时配置弹窗的初始值，运行中仍可修改；
+            没有设置默认时，弹窗会使用会话当前的模型。
+          </p>
+          <div className="settings-role-team-rows">
+            {ROLE_TEAM_FIELDS.map((field, index) => {
+              const row = roleRows[index];
+              if (!row) return null;
+              const options = roleProviderOptions(providers, row);
+              const providerValid = options.some((option) => option.id === row.providerId);
+              const models = options.find((option) => option.id === row.providerId)?.models ?? [];
+              const modelValid = models.includes(row.model);
+              return (
+                <div className="settings-role-team-row" key={field.key}>
+                  <div className="settings-role-team-role">
+                    <span className="settings-role-team-role-name">{field.label}</span>
+                    <span className="muted">{field.hint}</span>
+                  </div>
+                  <select
+                    className="settings-role-team-select"
+                    aria-label={`${field.label}的接口`}
+                    value={row.providerId}
+                    onChange={(event) => {
+                      const providerId = event.target.value;
+                      const provider = options.find((option) => option.id === providerId);
+                      updateRoleRow(index, {
+                        providerId,
+                        providerName: provider?.label ?? "",
+                        model: provider?.models[0] ?? "",
+                      });
+                    }}
+                  >
+                    {!providerValid && (
+                      <option value={row.providerId}>
+                        {options.length === 0 ? "没有可用接口" : "请选择接口"}
+                      </option>
+                    )}
+                    {options.map((option) => (
+                      <option key={option.id} value={option.id}>{option.label}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="settings-role-team-select"
+                    aria-label={`${field.label}的模型`}
+                    value={row.model}
+                    onChange={(event) => updateRoleRow(index, { model: event.target.value })}
+                  >
+                    {!modelValid && (
+                      <option value={row.model}>
+                        {row.model
+                          ? `${row.model}（不可用）`
+                          : (models.length === 0 ? "没有模型" : "请选择模型")}
+                      </option>
+                    )}
+                    {models.map((model, modelIndex) => (
+                      <option key={`${model}-${modelIndex}`} value={model}>{model}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="settings-role-team-select"
+                    aria-label={`${field.label}的思考强度`}
+                    value={row.effort}
+                    onChange={(event) => updateRoleRow(index, { effort: event.target.value as Effort })}
+                  >
+                    {EFFORTS.map((item) => (
+                      <option key={item} value={item}>{effortOptionLabel(item)}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+          {roleTeamDraft === null && (
+            <p
+              className={
+                roleEdited
+                  ? "settings-role-team-hint settings-role-team-hint-active"
+                  : "settings-role-team-hint"
+              }
+            >
+              {roleEdited
+                ? (savedRoleTeam === null
+                  ? "已修改下面的选择但还没有设为默认，直接保存不会写入；请点「设为默认」。"
+                  : "已请求清除默认团队（保存后生效）；下面的修改需要再点「设为默认」才会保留。")
+                : (savedRoleTeam === null
+                  ? "当前未设置默认团队；修改下面四行后需点「设为默认」才会写入保存。"
+                  : "已请求清除默认团队，保存后生效；如需保留请重新点「设为默认」。")}
+            </p>
+          )}
+          <div className="actions settings-role-team-actions">
+            <button type="button" className="btn" onClick={onSetRoleTeamDefault}>
+              设为默认
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={roleTeamDraft === null}
+              onClick={onClearRoleTeamDefault}
+            >
+              清除默认
+            </button>
+          </div>
+          {roleError && (
+            <p className="settings-role-team-error" role="alert">{roleError}</p>
+          )}
+        </article>
       </form>
       <article className="provider" aria-label="访问令牌">
         <strong>访问令牌</strong>
@@ -880,7 +1211,11 @@ export function SettingsPage() {
         )}
         <div className="settings-savebar-row">
           <span className="settings-savebar-status">
-            {dirty ? "有未保存的修改" : "没有未保存的修改"}
+            {dirty
+              ? "有未保存的修改"
+              : roleEdited
+                ? "角色团队已修改，需点「设为默认」才会保存"
+                : "没有未保存的修改"}
           </span>
           <button type="submit" form="settings-form" className="btn-primary">保存</button>
         </div>

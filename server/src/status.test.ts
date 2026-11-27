@@ -7,6 +7,7 @@ import {
   configureLimits,
   currentLimits,
   derivePhase,
+  detectWorkflowSkill,
   limitTranscript,
   mainAgentRunning,
   MAX_MESSAGE_TEXT,
@@ -2447,4 +2448,29 @@ test("连续两个 user 回显（中间没有 assistant）时第二条 forkPoint
   });
   assert.equal(state.messages[1]?.forkPoint, "sdk-u1");
   assert.equal(state.lastSdkUuid, "sdk-u2");
+});
+
+test("derivePhase：角色团队配置阶段返回 setup", () => {
+  const state = blank();
+  state.turnActive = false;
+  state.lastResult = undefined;
+  state.roleRun = {
+    phase: "setup",
+    units: [],
+    round: 0,
+    maxRounds: 3,
+  };
+  assert.equal(derivePhase(state), "setup");
+  // 运行中的角色团队按 turnActive 判定，不依赖 roleRun 的阶段。
+  state.turnActive = true;
+  state.roleRun.phase = "running";
+  assert.equal(derivePhase(state), "running");
+});
+
+test("detectWorkflowSkill：识别 prl-role，且优先于 prl", () => {
+  assert.equal(detectWorkflowSkill("用角色团队 prl-role"), "prl-role");
+  assert.equal(detectWorkflowSkill("用角色团队 PRL-ROLE。"), "prl-role");
+  assert.equal(detectWorkflowSkill("/prl-role 实现这个"), "prl-role");
+  assert.equal(detectWorkflowSkill("实现这个 prl"), "prl");
+  assert.equal(detectWorkflowSkill("拆开并行讨论 dis-prl"), "dis-prl");
 });

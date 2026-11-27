@@ -30,6 +30,20 @@ import {
 import { claudeConnection, claudeEnv } from "./endpoint.js";
 import { decideTool, denyMessage, type PermissionLevel } from "./permissions.js";
 import {
+  formatRoleDiff,
+  MAX_ROLE_ROUNDS,
+  MAX_ROLE_UNITS,
+  parseRoleVerdict,
+  roleBindingFor,
+  roleDecomposePrompt,
+  roleDevelopPrompt,
+  roleIntegrationPrompt,
+  roleReviewPrompt,
+  roleSpeaker,
+  roleSystemPrompt,
+} from "./prl-role.js";
+import type { RoleAgent } from "./role-agent.js";
+import {
   cleanGeneratedTitle,
   titleInput,
   type TitleSummarizer,
@@ -46,9 +60,11 @@ import type {
   PendingQuestion,
   PendingRequest,
   QueueEntry,
+  RoleTeam,
   SessionCore,
   WorkflowSkill,
 } from "./types.js";
+import { diffSummary } from "./worktree.js";
 
 const APPEND_PROMPT = [
   "你在远程开发控制台中工作。",
@@ -150,6 +166,20 @@ function discussionTopic(session: SessionCore): string | undefined {
   return last.text.trim() || "（用户只发送了图片，请结合上下文讨论）";
 }
 
+/**
+ * 假运行模式下的角色调用：不调用模型，按角色产出可识别的文本。
+ * 编排拆成两个单元，执行者自述完成，审核和集成一律给出 PASS。
+ */
+const fakeRoleAgent: RoleAgent = async (request) => {
+  if (request.role === "orchestrator") {
+    return { text: `["单元一","单元二"]`, tools: [] };
+  }
+  if (request.role === "executor") {
+    return { text: "已完成本单元的改动，并运行了相关测试。", tools: [] };
+  }
+  return { text: "检查完毕，没有发现阻塞性问题。\n\n结论：PASS", tools: [] };
+};
+
 export type SubmitCheck =
   | { ok: true }
   | { ok: false; status: number; error: string };
@@ -188,6 +218,9 @@ export function workflowInstruction(skill: WorkflowSkill): string {
   }
   if (skill === "dis-prl") {
     return "本消息选择了 dis-prl 工作流（拆分 + 并行子讨论 + 集成）。请先给出你的回答。";
+  }
+  if (skill === "prl-role") {
+    return "本消息选择了 prl-role 工作流（角色团队：编排拆分 + 执行开发 + 子审核 + 集成审核）。请先调用 prl-role skill；执行者会真正修改工作区。";
   }
   return "本消息选择了 plan 工作流（开发计划 + 独立评审）。请先调用 plan skill；只做计划，不改代码。";
 }
@@ -399,6 +432,10 @@ export class Runtime {
   private queries = new Map<string, Query>();
   /** 正在跑的多模型讨论；和 runs 一样用于 stop() 等待收尾。 */
   private discussions = new Map<string, Promise<void>>();
+  /** 正在跑的角色团队；和 runs 一样用于 stop() 等待收尾。 */
+  private roleRuns = new Map<string, Promise<void>>();
+  /** 正在释放空闲槽并准备启动角色团队的会话：挡住并发重入与交错提交。 */
+  private startingRoleRuns = new Set<string>();
   /** 启动时已开启 enableFileCheckpointing 的会话；只有这些会话能回滚文件。 */
   private checkpointed = new Set<string>();
   private waiters = new Map<string, Waiter>();
@@ -451,6 +488,8 @@ export class Runtime {
       titleSummarizer?: TitleSummarizer;
       /** 多模型讨论的单次模型调用；缺省时使用假实现（测试/假运行）。 */
       discussant?: Discussant;
+      /** prl-role 的单次角色调用；缺省时使用假实现（测试/假运行）。 */
+      roleAgent?: RoleAgent;
     },
   ) {
     const minutes = deps.approvalTimeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES;
@@ -496,7 +535,7 @@ export class Runtime {
     if (this.zombies.has(id)) throw new Error("对话进程卡住，正在清理");
     if (this.stopping.has(id)) throw new Error("对话正在停止");
     const session = this.store.require(id);
-    if (this.discussions.has(id) || this.active.has(id)) {
+    if (this.discussions.has(id) || this.roleRuns.has(id) || this.startingRoleRuns.has(id) || this.active.has(id)) {
       throw new Error("对话正在运行，等这一轮结束再开始讨论");
     }
     if (participants.length === 0) throw new Error("请先添加参与讨论的模型");
@@ -516,6 +555,394 @@ export class Runtime {
     });
     this.discussions.set(id, run);
     this.runs.set(id, run);
+  }
+
+  /** 这个会话是否正在跑（或正在准备启动）一支 prl-role 角色团队。 */
+  isRoleRunning(id: string): boolean {
+    return this.roleRuns.has(id) || this.startingRoleRuns.has(id);
+  }
+
+  /**
+   * 开始一支 prl-role 角色团队。校验通过后占住并发槽，返回后模型调用在
+   * 后台串行进行；进度通过 Store 的 SSE 帧推给前端。停止仍然走 stop()。
+   *
+   * 普通 SDK 轮次结束后 streaming-input query 仍开着（active 为 true），这里
+   * 会先释放空闲进程再开始，避免「已完成」的会话点开始总是 409。
+   * 整个异步准备过程由 startingRoleRuns 串行守卫，防止同会话并发双跑。
+   */
+  async startRoleRun(id: string, team: RoleTeam, maxRounds = MAX_ROLE_ROUNDS): Promise<void> {
+    if (this.shuttingDown) throw new Error("服务正在退出");
+    if (this.zombies.has(id)) throw new Error("对话进程卡住，正在清理");
+    if (this.stopping.has(id)) throw new Error("对话正在停止");
+    if (this.startingRoleRuns.has(id)) {
+      throw new Error("角色团队正在启动，请稍候");
+    }
+    const initial = this.store.require(id);
+    if (this.roleRuns.has(id) || this.discussions.has(id) || this.roleRunBlockedBy(id)) {
+      throw new Error("对话正在运行，等这一轮结束再开始角色团队");
+    }
+    // 前置校验目录和用户消息：放在释放空闲 query 之前，避免目录已删或无消息时
+    // 先把其它（或本会话）正常的空闲进程踢掉再报错。
+    const initialDirProblem = this.deps.fake ? undefined : sessionDirProblem(initial);
+    if (initialDirProblem) throw new Error(initialDirProblem);
+    if (!discussionTopic(initial)) throw new Error("还没有可以运行的用户消息");
+
+    this.startingRoleRuns.add(id);
+    try {
+      const recheckAfterAwait = (): SessionCore => {
+        if (this.shuttingDown) throw new Error("服务正在退出");
+        if (this.zombies.has(id)) throw new Error("对话进程卡住，正在清理");
+        if (this.stopping.has(id)) throw new Error("对话正在停止");
+        const latest = this.store.require(id);
+        if (
+          this.roleRuns.has(id)
+          || this.discussions.has(id)
+          || this.active.has(id)
+          || this.releasing.has(id)
+          || this.roleRunBlockedBy(id)
+        ) {
+          throw new Error("对话正在运行，等这一轮结束再开始角色团队");
+        }
+        // /messages 的 prl-role/discuss 分支不走 canSubmit，等待期间用户可能已经
+        // 切到别的模式；此时不能再按角色团队开始。
+        if (latest.workflow?.skill !== "prl-role" || latest.discussion) {
+          throw new Error("模式已切换，请重新开始角色团队");
+        }
+        return latest;
+      };
+
+      if (this.active.has(id)) {
+        // 空闲 query 占着并发槽但已没有进行中的工作：先释放再重新校验。
+        await this.stop(id);
+        recheckAfterAwait();
+      }
+      // 并发满时，如果其它会话里还有已完成但占着并发槽的空闲 SDK 进程，
+      // 先释放一个空闲槽，避免没有任何任务在跑却提示「并发已满」。
+      if (this.active.size >= this.maxConcurrent) {
+        const idleId = this.findIdleSession(id);
+        if (idleId) {
+          await this.stop(idleId);
+          recheckAfterAwait();
+        }
+      }
+      if (this.active.size >= this.maxConcurrent) throw new Error("并发已满，请稍后再开始角色团队");
+      const starting = this.store.require(id);
+      const dirProblem = this.deps.fake ? undefined : sessionDirProblem(starting);
+      if (dirProblem) throw new Error(dirProblem);
+      const topic = discussionTopic(starting);
+      if (!topic) throw new Error("还没有可以运行的用户消息");
+      this.store.beginRoleRun(id, team, maxRounds);
+      const abort = new AbortController();
+      this.aborters.set(id, abort);
+      this.active.add(id);
+      const run = this.runRoleRun(id, topic, team, maxRounds, abort.signal).finally(() => {
+        this.roleRuns.delete(id);
+        this.active.delete(id);
+        if (this.aborters.get(id) === abort) this.aborters.delete(id);
+        if (this.runs.get(id) === run) this.runs.delete(id);
+        this.schedule();
+      });
+      this.roleRuns.set(id, run);
+      this.runs.set(id, run);
+    } finally {
+      this.startingRoleRuns.delete(id);
+    }
+  }
+
+  /** 找一个可以安全释放并发槽的空闲 SDK 会话；与 releaseIdle 使用同一组安全条件。 */
+  private findIdleSession(excludeId?: string): string | undefined {
+    for (const candidate of this.active) {
+      if (candidate === excludeId) continue;
+      if (this.releasing.has(candidate) || this.stopping.has(candidate)) continue;
+      const session = this.store.get(candidate);
+      const queue = this.queues.get(candidate);
+      if (!session || !queue || queue.closed) continue;
+      if (session.turnActive || isAgentActive(session.agentState) || session.pending || queue.size > 0) continue;
+      if (session.subagents.some((item) => item.status === "running")) continue;
+      if (session.backgroundTasks?.some((item) => item.status === "running")) continue;
+      return candidate;
+    }
+    return undefined;
+  }
+
+  /** 会话是否还有进行中的工作（不含空闲的 SDK query 进程）。 */
+  private roleRunBlockedBy(id: string): boolean {
+    const session = this.store.get(id);
+    if (!session) return true;
+    if (
+      session.turnActive
+      || session.pending
+      || session.queued
+      || isAgentActive(session.agentState)
+      || session.subagents.some((item) => item.status === "running")
+      // 后台 shell 任务靠空闲 query 接收通知；stop() 会把它们收成 stopped。
+      || session.backgroundTasks?.some((item) => item.status === "running")
+    ) return true;
+    const live = this.queues.get(id);
+    const pending = live && !live.closed ? live.size : (this.buffered.get(id)?.length ?? 0);
+    return pending > 0;
+  }
+
+  /**
+   * prl-role 状态机：编排拆分 → 每个单元串行「执行开发 → 子审核」若干轮 →
+   * 全部单元结束后做一次集成审核。任何一个阶段抛错都会把整场运行落定。
+   */
+  private async runRoleRun(
+    id: string,
+    topic: string,
+    team: RoleTeam,
+    maxRounds: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const agent = this.deps.roleAgent ?? fakeRoleAgent;
+    const session = this.store.require(id);
+    const projectConfigRoot = session.projectPath !== session.cwd ? session.projectPath : undefined;
+    try {
+      // 1. 编排：一次不带工具的调用，拆分工作单元。
+      this.store.setRoleRunProgress(id, {
+        clearActive: true,
+        activeRole: "orchestrator",
+        round: 1,
+        integrating: false,
+      });
+      const orchestratorBinding = roleBindingFor(team, "orchestrator");
+      const decomposed = await agent({
+        role: "orchestrator",
+        binding: orchestratorBinding,
+        cwd: session.cwd,
+        projectConfigRoot,
+        prompt: roleDecomposePrompt(topic),
+        systemPrompt: roleSystemPrompt("orchestrator"),
+        preset: false,
+        tools: [],
+        maxTurns: 1,
+        permissionMode: "default",
+        signal,
+      });
+      if (signal.aborted) throw new Error("已停止");
+      const decomposedText = decomposed.text.trim();
+      if (!decomposedText) throw new Error("编排模型没有返回拆分结果");
+      this.store.appendRoleMessage(id, {
+        speaker: roleSpeaker(team, "orchestrator"),
+        text: decomposedText,
+        role: "orchestrator",
+        round: 1,
+        usage: decomposed.usage,
+        providerId: orchestratorBinding.providerId,
+        providerName: orchestratorBinding.providerName,
+        model: orchestratorBinding.model,
+      });
+      let titles = parseSubtasks(decomposedText)
+        .map((title) => title.trim())
+        .filter(Boolean)
+        .slice(0, MAX_ROLE_UNITS);
+      if (titles.length === 0) titles = [clip(topic, 200)];
+      this.store.setRoleUnits(id, titles);
+
+      // 2. 逐单元串行执行：每一轮都是「执行者开发 → 子审核只读审查」。
+      let lastRound = 1;
+      for (let position = 0; position < titles.length; position += 1) {
+        const unit = { index: position + 1, title: titles[position]! };
+        let issues: string | undefined;
+        let previousSummary: string | undefined;
+        for (let round = 1; round <= maxRounds; round += 1) {
+          if (signal.aborted) throw new Error("已停止");
+          // 新一轮开始时清掉上一轮残留的 activeTool（以及上一个单元的进度）。
+          this.store.setRoleRunProgress(id, {
+            clearActive: true,
+            activeUnit: unit.index,
+            round,
+            integrating: false,
+            activeRole: "executor",
+          });
+          lastRound = round;
+
+          // 执行者：完整工具，走现有授权流程。
+          const permission = this.deps.permission(session.projectId);
+          const executorBinding = roleBindingFor(team, "executor");
+          const developed = await agent({
+            role: "executor",
+            binding: executorBinding,
+            cwd: session.cwd,
+            projectConfigRoot,
+            prompt: roleDevelopPrompt({
+              topic,
+              unit,
+              round,
+              issues,
+              previousSummary,
+            }),
+            systemPrompt: roleSystemPrompt("executor"),
+            preset: true,
+            maxTurns: 40,
+            permissionMode: permission,
+            ...(permission === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
+            canUseTool: (toolName, input, options) => this.allowTool(id, toolName, input, options),
+            onProgress: (progress) => {
+              this.store.setRoleRunProgress(id, { activeTool: progress.toolName });
+            },
+            signal,
+          });
+          if (signal.aborted) throw new Error("已停止");
+          const developedText = developed.text.trim();
+          if (!developedText) throw new Error("执行模型没有返回内容");
+          this.store.appendRoleMessage(id, {
+            speaker: roleSpeaker(team, "executor"),
+            text: developedText,
+            role: "executor",
+            round,
+            unit,
+            usage: developed.usage,
+            providerId: executorBinding.providerId,
+            providerName: executorBinding.providerName,
+            model: executorBinding.model,
+          });
+          this.store.settleRoleUnit(id, unit.index, {
+            phase: "running",
+            round,
+            executorSummary: clip(developedText, 2_000),
+          });
+          previousSummary = clip(developedText, 2_000);
+
+          // 子审核：只读工具，审核当前工作区的改动。
+          const diff = formatRoleDiff(await diffSummary(session.cwd, session.git));
+          this.store.setRoleRunProgress(id, {
+            clearActive: true,
+            activeRole: "sub-reviewer",
+            activeUnit: unit.index,
+            round,
+          });
+          const subReviewerBinding = roleBindingFor(team, "sub-reviewer");
+          const reviewed = await agent({
+            role: "sub-reviewer",
+            binding: subReviewerBinding,
+            cwd: session.cwd,
+            projectConfigRoot,
+            prompt: roleReviewPrompt({ topic, unit, round, diff, issues }),
+            systemPrompt: roleSystemPrompt("sub-reviewer"),
+            preset: false,
+            tools: ["Read", "Grep", "Glob", "LS"],
+            maxTurns: 8,
+            permissionMode: "default",
+            canUseTool: async (toolName, input, options) => {
+              const decision = decideTool({
+                toolName,
+                input,
+                cwd: session.cwd,
+                blockedPath: options.blockedPath,
+                permission: "plan",
+              });
+              return decision === "allow"
+                ? { behavior: "allow" as const }
+                : { behavior: "deny" as const, message: denyMessage("plan") };
+            },
+            signal,
+          });
+          if (signal.aborted) throw new Error("已停止");
+          const reviewedText = reviewed.text.trim();
+          if (!reviewedText) throw new Error("子审核模型没有返回内容");
+          this.store.appendRoleMessage(id, {
+            speaker: roleSpeaker(team, "sub-reviewer"),
+            text: reviewedText,
+            role: "sub-reviewer",
+            round,
+            unit,
+            usage: reviewed.usage,
+            providerId: subReviewerBinding.providerId,
+            providerName: subReviewerBinding.providerName,
+            model: subReviewerBinding.model,
+          });
+          const verdict = parseRoleVerdict(reviewedText);
+          if (verdict.pass) {
+            this.store.settleRoleUnit(id, unit.index, {
+              phase: "passed",
+              round,
+              verdict: "pass",
+              issues: verdict.issues,
+            });
+            break;
+          }
+          const reachedLimit = round >= maxRounds;
+          this.store.settleRoleUnit(id, unit.index, {
+            phase: reachedLimit ? "needs_attention" : "running",
+            round,
+            verdict: verdict.unknown ? "unknown" : "changes",
+            issues: verdict.issues,
+          });
+          issues = verdict.issues;
+          if (reachedLimit) break;
+        }
+      }
+
+      // 3. 集成审核：审查全部单元合并后的整体改动。
+      // 清掉上一个单元的 activeUnit/activeTool，轮次保留最后一个单元的实际轮次，
+      // 面板不会显示成「集成审核 · 第 N 单元 · 第 M 轮」。
+      if (signal.aborted) throw new Error("已停止");
+      this.store.setRoleRunProgress(id, {
+        clearActive: true,
+        integrating: true,
+        activeRole: "integration-reviewer",
+        round: lastRound,
+      });
+      const finalSession = this.store.require(id);
+      const units = (finalSession.roleRun?.units ?? []).map((item) => ({
+        index: item.index,
+        title: item.title,
+        phase: item.phase,
+        verdict: item.verdict,
+      }));
+      const integrationDiff = formatRoleDiff(await diffSummary(session.cwd, session.git));
+      const integrationBinding = roleBindingFor(team, "integration-reviewer");
+      const integrated = await agent({
+        role: "integration-reviewer",
+        binding: integrationBinding,
+        cwd: session.cwd,
+        projectConfigRoot,
+        prompt: roleIntegrationPrompt({ topic, units, diff: integrationDiff }),
+        systemPrompt: roleSystemPrompt("integration-reviewer"),
+        preset: false,
+        tools: ["Read", "Grep", "Glob", "LS"],
+        maxTurns: 8,
+        permissionMode: "default",
+        canUseTool: async (toolName, input, options) => {
+          const decision = decideTool({
+            toolName,
+            input,
+            cwd: session.cwd,
+            blockedPath: options.blockedPath,
+            permission: "plan",
+          });
+          return decision === "allow"
+            ? { behavior: "allow" as const }
+            : { behavior: "deny" as const, message: denyMessage("plan") };
+        },
+        signal,
+      });
+      if (signal.aborted) throw new Error("已停止");
+      const integratedText = integrated.text.trim();
+      if (!integratedText) throw new Error("集成审核模型没有返回内容");
+      this.store.appendRoleMessage(id, {
+        speaker: roleSpeaker(team, "integration-reviewer"),
+        text: integratedText,
+        role: "integration-reviewer",
+        round: 1,
+        integrating: true,
+        usage: integrated.usage,
+        providerId: integrationBinding.providerId,
+        providerName: integrationBinding.providerName,
+        model: integrationBinding.model,
+      });
+      const verdict = parseRoleVerdict(integratedText);
+      this.store.settleRoleRun(id, { result: "success", agreed: verdict.pass });
+      this.maybeSummarizeTitle(id);
+    } catch (error) {
+      if (signal.aborted) {
+        this.store.settleRoleRun(id, { result: "stopped", error: "已停止" });
+      } else {
+        const detail = clip(redact(errorText(error), this.deps.secrets()), 300);
+        this.store.settleRoleRun(id, { result: "error", error: detail || "角色团队运行失败" });
+      }
+    }
   }
 
   /**
@@ -707,6 +1134,11 @@ export class Runtime {
     if (this.zombies.has(id)) return { ok: false, status: 409, error: "对话进程卡住，正在清理" };
     if (this.stopping.has(id)) return { ok: false, status: 409, error: "对话正在停止" };
     if (!this.store.get(id)) return { ok: false, status: 404, error: "找不到对话" };
+    // 角色团队运行（或准备启动）期间不能再往同一会话提交普通消息：
+    // 那会另起一个 SDK run，和角色团队的执行者同时改同一个工作区。
+    if (this.roleRuns.has(id) || this.startingRoleRuns.has(id)) {
+      return { ok: false, status: 409, error: "角色团队正在运行，等它结束后再发消息" };
+    }
     const live = this.queues.get(id);
     const pending = live && !live.closed
       ? live.size
@@ -1064,6 +1496,7 @@ export class Runtime {
           // 防止它在自己的 finally 之前被再次启动。僵尸的 finally 会清除两者。
           this.zombies.add(id);
           if (this.runs.get(id) === run) this.runs.delete(id);
+          this.roleRuns.delete(id);
           this.active.delete(id);
           this.aborters.delete(id);
           this.queues.delete(id);

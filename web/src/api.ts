@@ -28,7 +28,7 @@ export interface Project {
   removable: boolean;
 }
 
-export type WorkflowSkill = "prl" | "ser" | "plan" | "discuss" | "dis-prl";
+export type WorkflowSkill = "prl" | "ser" | "plan" | "discuss" | "dis-prl" | "prl-role";
 
 /** 一轮 prl/ser/plan/discuss/dis-prl 工作流；由发送区选择或消息末尾 token 触发。 */
 export interface WorkflowRun {
@@ -93,6 +93,70 @@ export interface DiscussionState {
   error?: string;
   startedAt?: string;
   endedAt?: string;
+}
+
+/** prl-role 的四个角色。 */
+export type RoleKind =
+  | "orchestrator"
+  | "executor"
+  | "sub-reviewer"
+  | "integration-reviewer";
+
+export interface RoleBinding {
+  providerId: string;
+  providerName: string;
+  model: string;
+  effort: Effort;
+}
+
+/** prl-role 的四角色团队。 */
+export interface RoleTeam {
+  orchestrator: RoleBinding;
+  executor: RoleBinding;
+  subReviewer: RoleBinding;
+  integrationReviewer: RoleBinding;
+}
+
+export type RoleRunPhase = "setup" | "running" | "completed" | "failed" | "stopped";
+
+export type RoleUnitPhase = "pending" | "running" | "passed" | "needs_attention" | "stopped";
+
+export interface RoleUnitState {
+  index: number;
+  title: string;
+  phase: RoleUnitPhase;
+  round: number;
+  verdict?: "pass" | "changes" | "unknown";
+  issues?: string;
+  executorSummary?: string;
+}
+
+/** 当前会话的 prl-role 运行状态。 */
+export interface RoleRunState {
+  phase: RoleRunPhase;
+  team?: RoleTeam;
+  units: RoleUnitState[];
+  round: number;
+  maxRounds: number;
+  activeRole?: RoleKind;
+  activeUnit?: number;
+  activeTool?: string;
+  integrating?: boolean;
+  agreed?: boolean;
+  error?: string;
+  startedAt?: string;
+  endedAt?: string;
+}
+
+/** 一条 prl-role 发言的归属。 */
+export interface RoleMessageMeta {
+  kind: RoleKind;
+  round: number;
+  unit?: { index: number; title: string };
+  integrating?: boolean;
+  providerId?: string;
+  providerName?: string;
+  model?: string;
 }
 
 export interface Subagent {
@@ -262,6 +326,8 @@ export interface Transcript {
   speaker?: string;
   /** 多模型讨论发言的阶段和轮次；普通对话省略。 */
   discussion?: DiscussionMessageMeta;
+  /** prl-role 发言的角色、轮次和单元；普通对话省略。 */
+  roleRun?: RoleMessageMeta;
   /** 这条内容产生的时间，ISO 8601 字符串。 */
   at?: string;
   /** 产生这条 assistant 正文的那次模型调用消耗的 token。 */
@@ -310,6 +376,8 @@ export interface Session {
   workflow?: WorkflowRun;
   /** 多模型讨论的参与者和进度；普通对话为 undefined。 */
   discussion?: DiscussionState;
+  /** prl-role 角色团队的运行状态；普通对话为 undefined。 */
+  roleRun?: RoleRunState;
   /**
    * 当前是否能同时回滚代码改动（服务端按存活进程和检查点计算）；
    * 旧服务端/假运行没有该字段，视为不能。
@@ -477,6 +545,8 @@ export interface Settings {
   limits: Limits;
   /** 会话在本机保留多少天后归档；只有配置了归档目录时生效。 */
   archiveRetentionDays: number;
+  /** 设置页保存的 prl-role 默认四角色团队；没有配置时缺省。 */
+  roleTeam?: RoleTeam;
 }
 
 /** 与服务端 settings.ts 的 MAX_CONCURRENT_MIN / MAX_CONCURRENT_MAX / DEFAULT_MAX_CONCURRENT 保持一致。 */
@@ -911,6 +981,8 @@ export function saveSettings(body: {
   limits?: Limits;
   archiveRetentionDays?: number;
   proxy?: ProxyDraft;
+  /** null 表示清除默认团队，弹窗退回会话当前模型。 */
+  roleTeam?: RoleTeam | null;
 }, signal?: AbortSignal): Promise<Settings> {
   return request("/api/settings", { method: "PUT", body: JSON.stringify(body) }, signal);
 }
@@ -1003,6 +1075,18 @@ export function sendMessage(
     method: "POST",
     body: JSON.stringify(body),
   }, signal, UPLOAD_TIMEOUT_MS);
+}
+
+/** prl-role：提交四角色团队并开始运行。 */
+export function startRoleRun(
+  id: string,
+  team: RoleTeam,
+  signal?: AbortSignal,
+): Promise<{ session: Session }> {
+  return request(`/api/sessions/${id}/role-run/start`, {
+    method: "POST",
+    body: JSON.stringify({ team }),
+  }, signal);
 }
 
 export function imageUrl(sessionId: string, image: ImageRef): string {

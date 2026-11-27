@@ -87,6 +87,10 @@ test("deriveWorkflow：讨论和并行讨论走自己的面板，不返回轨道
   assert.equal(deriveWorkflow(session({
     workflow: { skill: "dis-prl", startedAt: STARTED },
   }), 0), null);
+  // prl-role 有自己的角色团队面板，也不显示 prl/ser 轨道。
+  assert.equal(deriveWorkflow(session({
+    workflow: { skill: "prl-role", startedAt: STARTED },
+  }), 0), null);
 });
 
 test("deriveWorkflow：只统计当前 workflowAt 的子任务", () => {

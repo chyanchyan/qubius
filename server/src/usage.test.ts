@@ -144,3 +144,51 @@ test("没有消息或会话时报告为零", () => {
   assert.equal(report.byProvider.length, 1);
   assert.equal(report.bySession.length, 0);
 });
+
+test("prl-role 跨接口发言按条目里的实际 providerId 归账与计费", () => {
+  const report = usageReport(
+    [
+      {
+        id: "s-role",
+        title: "角色团队会话",
+        projectId: "p1",
+        providerId: "a",
+        providerName: "接口 A",
+        messages: [
+          {
+            id: "m1",
+            role: "assistant",
+            text: "编排",
+            usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+            roleRun: { kind: "orchestrator", round: 1, providerId: "a", providerName: "接口 A", model: "m-a" },
+          },
+          {
+            id: "m2",
+            role: "assistant",
+            text: "执行",
+            usage: { input: 1_000_000, output: 1_000_000, cacheRead: 0, cacheWrite: 0 },
+            roleRun: { kind: "executor", round: 1, providerId: "b", providerName: "接口 B", model: "m-b" },
+          },
+        ],
+      },
+    ],
+    [
+      { id: "a", name: "接口 A", pricing: { input: 3, output: 15 } },
+      { id: "b", name: "接口 B", pricing: { input: 1, output: 2 } },
+    ],
+  );
+
+  // 接口 A：3 美元；接口 B：1 + 2 = 3 美元；会话总计 6 美元。
+  assert.equal(report.totals.calls, 2);
+  assert.ok(Math.abs(report.cost - 6) < 1e-9);
+  assert.deepEqual(
+    report.byProvider.map((group) => [group.providerId, group.totals.calls, group.cost]),
+    [
+      ["a", 1, 3],
+      ["b", 1, 3],
+    ],
+  );
+  assert.equal(report.bySession[0]?.totals.calls, 2);
+  assert.ok(Math.abs((report.bySession[0]?.cost ?? 0) - 6) < 1e-9);
+});
+
