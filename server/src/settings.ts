@@ -3,11 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "./atomic-file.js";
 import { DEFAULT_LIMITS, LIMIT_RULES, type LimitsConfig } from "./config.js";
+import { normalizeProxyUrl } from "./system-proxy.js";
 import {
   isEffort,
   isProviderKind,
   type Effort,
   type ProviderKind,
+  type ProxySettings,
   type PublicProvider,
   type PublicSettings,
 } from "./types.js";
@@ -29,8 +31,6 @@ export interface ProviderConfig {
   apiKey: string;
   models: string[];
   pricing?: ProviderPricing;
-  /** 这套配置访问上游时是否走系统代理；缺省 false（直连）。 */
-  systemProxy?: boolean;
 }
 
 /** 读取接口类型；老设置文件没有 kind 字段时按 anthropic 处理。 */
@@ -69,6 +69,8 @@ export interface StoredSettings {
   limits?: Partial<LimitsConfig>;
   /** 会话在本机保留多少天后归档；只有配置了归档目录时生效。 */
   archiveRetentionDays?: number;
+  /** 全局代理白名单；未配置时全部直连。 */
+  proxy?: ProxySettings;
 }
 
 /** 补全默认值后的设置：落盘和运行期使用，三个新字段一定存在。 */
@@ -76,6 +78,7 @@ export type ResolvedSettings = StoredSettings & {
   approvalTimeoutMinutes: number;
   limits: LimitsConfig;
   archiveRetentionDays: number;
+  proxy: ProxySettings;
 };
 
 export function resolveSettings(settings: StoredSettings): ResolvedSettings {
@@ -84,7 +87,33 @@ export function resolveSettings(settings: StoredSettings): ResolvedSettings {
     approvalTimeoutMinutes: settings.approvalTimeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES,
     limits: { ...DEFAULT_LIMITS, ...(settings.limits ?? {}) },
     archiveRetentionDays: settings.archiveRetentionDays ?? DEFAULT_ARCHIVE_RETENTION_DAYS,
+    proxy: cloneProxySettings(settings.proxy),
   };
+}
+
+function cloneProxySettings(proxy: ProxySettings | undefined): ProxySettings {
+  return {
+    domains: [...(proxy?.domains ?? [])],
+    ...(proxy?.url ? { url: proxy.url } : {}),
+  };
+}
+
+/** 把旧版「走系统代理」勾选合并成全局白名单：取接口地址的主机名。 */
+function legacyProxyDomains(rawProviders: unknown[], providers: ProviderConfig[]): string[] {
+  const domains: string[] = [];
+  rawProviders.forEach((item, index) => {
+    if (!item || typeof item !== "object") return;
+    if ((item as Record<string, unknown>).systemProxy !== true) return;
+    const baseUrl = providers[index]?.baseUrl;
+    if (!baseUrl) return;
+    try {
+      const host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      if (host) domains.push(host);
+    } catch {
+      // 地址无效时忽略这一条，不影响整份设置加载。
+    }
+  });
+  return [...new Set(domains)];
 }
 
 /** 同时进行的对话数范围；与 config.yaml 的 maxConcurrent 校验保持一致。 */
@@ -118,6 +147,7 @@ function defaultSettings(defaults?: SettingsDefaults): ResolvedSettings {
     approvalTimeoutMinutes: defaults?.approvalTimeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES,
     limits: { ...DEFAULT_LIMITS, ...(defaults?.limits ?? {}) },
     archiveRetentionDays: defaults?.archiveRetentionDays ?? DEFAULT_ARCHIVE_RETENTION_DAYS,
+    proxy: { domains: [] },
   };
 }
 
@@ -225,6 +255,10 @@ export function saveSettings(dataDir: string, stored: StoredSettings): void {
       approvalTimeoutMinutes: settings.approvalTimeoutMinutes,
       limits: { ...settings.limits },
       archiveRetentionDays: settings.archiveRetentionDays,
+      proxy: {
+        domains: [...settings.proxy.domains],
+        ...(settings.proxy.url ? { url: settings.proxy.url } : {}),
+      },
       providers: settings.providers.map((provider) => {
         const pricing = cleanPricing(provider.pricing);
         return {
@@ -234,7 +268,6 @@ export function saveSettings(dataDir: string, stored: StoredSettings): void {
           baseUrl: provider.baseUrl,
           apiKey: provider.apiKey,
           models: provider.models,
-          systemProxy: provider.systemProxy === true,
           ...(pricing ? { pricing } : {}),
         };
       }),
@@ -257,6 +290,7 @@ export function publicSettings(stored: StoredSettings): PublicSettingsView {
     approvalTimeoutMinutes: settings.approvalTimeoutMinutes,
     limits: { ...settings.limits },
     archiveRetentionDays: settings.archiveRetentionDays,
+    proxy: cloneProxySettings(settings.proxy),
     providers: settings.providers.map((provider) => {
       const pricing = cleanPricing(provider.pricing);
       return {
@@ -268,7 +302,6 @@ export function publicSettings(stored: StoredSettings): PublicSettingsView {
         apiKey: provider.apiKey,
         hasApiKey: provider.apiKey.trim().length > 0,
         models: [...provider.models],
-        systemProxy: provider.systemProxy === true,
         ...(pricing ? { pricing } : {}),
       };
     }),
@@ -282,6 +315,7 @@ export interface SettingsPatch {
   approvalTimeoutMinutes?: unknown;
   limits?: unknown;
   archiveRetentionDays?: unknown;
+  proxy?: unknown;
 }
 
 export function applySettingsPatch(current: StoredSettings, patch: SettingsPatch): ResolvedSettings {
@@ -292,6 +326,7 @@ export function applySettingsPatch(current: StoredSettings, patch: SettingsPatch
     approvalTimeoutMinutes: base.approvalTimeoutMinutes,
     limits: { ...base.limits },
     archiveRetentionDays: base.archiveRetentionDays,
+    proxy: cloneProxySettings(base.proxy),
     providers: base.providers.map((provider) => ({ ...provider, models: [...provider.models] })),
   };
   if (patch.effort !== undefined) {
@@ -309,6 +344,9 @@ export function applySettingsPatch(current: StoredSettings, patch: SettingsPatch
   }
   if (patch.archiveRetentionDays !== undefined) {
     next.archiveRetentionDays = readArchiveRetentionDays(patch.archiveRetentionDays);
+  }
+  if (patch.proxy !== undefined) {
+    next.proxy = readProxySettings(patch.proxy, base.proxy);
   }
   if (patch.providers !== undefined) {
     next.providers = readProviderList(patch.providers, current.providers);
@@ -341,20 +379,31 @@ function parseStored(
     : readArchiveRetentionDays(record.archiveRetentionDays);
   const common = { effort, maxConcurrent, approvalTimeoutMinutes, limits, archiveRetentionDays };
   if (Array.isArray(record.providers)) {
+    const providers = record.providers.map(readSavedProvider);
+    // 旧版每套接口各有一个「走系统代理」勾选；升级后合并成全局域名白名单，
+    // 保持这些接口的实际路由不变，随后把旧字段从设置文件里清掉。
+    const legacyDomains = record.proxy === undefined
+      ? legacyProxyDomains(record.providers, providers)
+      : [];
+    const proxy = record.proxy === undefined
+      ? (legacyDomains.length > 0 ? { domains: legacyDomains } : cloneProxySettings(defaults.proxy))
+      : readProxySettings(record.proxy, defaults.proxy);
     return {
-      migrated: false,
-      settings: { ...common, providers: record.providers.map(readSavedProvider) },
+      migrated: legacyDomains.length > 0,
+      settings: { ...common, proxy, providers },
     };
   }
+  const proxy = cloneProxySettings(defaults.proxy);
   const apiKey = typeof record.apiKey === "string" ? record.apiKey : "";
   const model = typeof record.model === "string" ? record.model.trim() : "";
   if (!apiKey.trim() && !model) {
-    return { migrated: false, settings: { ...common, providers: [] } };
+    return { migrated: false, settings: { ...common, proxy, providers: [] } };
   }
   return {
     migrated: true,
     settings: {
       ...common,
+      proxy,
       providers: [{
         id: randomUUID(),
         name: "默认",
@@ -448,16 +497,77 @@ function readSavedProvider(value: unknown): ProviderConfig {
     baseUrl: record.baseUrl.trim(),
     apiKey: record.apiKey,
     models,
-    systemProxy: readSystemProxy(record.systemProxy),
     ...(pricing ? { pricing } : {}),
   };
 }
 
-/** 「走系统代理」缺省 false；只在显式给出时要求是布尔值。 */
-function readSystemProxy(value: unknown): boolean {
-  if (value === undefined) return false;
-  if (typeof value !== "boolean") throw new Error("走系统代理选项无效");
-  return value;
+/** 代理白名单最多多少条，避免误粘贴几千行拖慢每次请求匹配。 */
+export const PROXY_DOMAIN_MAX = 200;
+
+/**
+ * 合并式读取代理设置：只校验出现的字段，其余沿用当前值。
+ * `url` 显式传空串表示清除自定义地址、回到系统代理。
+ */
+function readProxySettings(value: unknown, base: ProxySettings): ProxySettings {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("代理设置必须是对象");
+  }
+  const record = value as Record<string, unknown>;
+  const domains = record.domains === undefined
+    ? [...base.domains]
+    : readProxyDomains(record.domains);
+  const url = record.url === undefined ? base.url : readProxyUrl(record.url);
+  return { domains, ...(url ? { url } : {}) };
+}
+
+function readProxyDomains(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error("代理域名白名单必须是列表");
+  if (value.length > PROXY_DOMAIN_MAX) {
+    throw new Error(`代理域名最多 ${PROXY_DOMAIN_MAX} 条`);
+  }
+  const domains: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") throw new Error("代理域名必须是字符串");
+    const domain = normalizeProxyDomain(item);
+    if (seen.has(domain)) continue;
+    seen.add(domain);
+    domains.push(domain);
+  }
+  return domains;
+}
+
+/** 白名单只接受域名（可带 `*.` 前缀）；不接受协议、端口和路径。 */
+export function normalizeProxyDomain(value: string): string {
+  const raw = value.trim().toLowerCase();
+  if (!raw) throw new Error("代理域名不能为空");
+  if (raw === "*") return raw;
+  // 去掉域名末尾的点（`example.com.` 等价于 `example.com`）；单独的 `*.`
+  // 会在这里变成 `*`，随后按非法标签被拒绝。
+  const domain = raw.replace(/\.$/, "");
+  if (!domain) throw new Error(`代理域名无效：${raw}`);
+  if (domain.length > 253) throw new Error("代理域名过长");
+  const body = domain.startsWith("*.") ? domain.slice(2) : domain;
+  if (!body) throw new Error(`代理域名无效：${domain}`);
+  for (const label of body.split(".")) {
+    if (
+      !label
+      || label.length > 63
+      || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
+    ) {
+      throw new Error(`代理域名无效：${domain}`);
+    }
+  }
+  return domain;
+}
+
+/** 代理地址只支持 http/https；留空表示使用系统代理。 */
+function readProxyUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") throw new Error("代理地址必须是字符串");
+  if (!value.trim()) return undefined;
+  const url = normalizeProxyUrl(value);
+  if (!url) throw new Error("代理地址必须是 http 或 https 地址，例如 http://127.0.0.1:7890");
+  return url;
 }
 
 /** 缺省按 anthropic 兼容接口读取；写入时始终落盘明确的类型。 */
@@ -497,7 +607,6 @@ function readProviderList(value: unknown, current: ProviderConfig[]): ProviderCo
       baseUrl,
       apiKey,
       models,
-      systemProxy: readSystemProxy(record.systemProxy),
       ...(pricing ? { pricing } : {}),
     };
   });

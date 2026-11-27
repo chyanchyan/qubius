@@ -101,6 +101,7 @@ import {
   writeSkill,
 } from "./skills.js";
 import { isSessionBusy, tryLockSession, unlockSession } from "./session-lock.js";
+import { resolveProxy } from "./proxy.js";
 import {
   applySettingsPatch,
   findProvider,
@@ -416,6 +417,15 @@ function memoryMb(): {
     external: mb(usage.external),
     arrayBuffers: mb(usage.arrayBuffers),
   };
+}
+
+/** 设置页视图：在保存的代理配置上附带当前检测到的系统代理，便于页面提示。 */
+function settingsView(current: StoredSettings) {
+  const view = publicSettings(current);
+  const detected = resolveProxy(current.proxy)?.url;
+  return detected
+    ? { ...view, proxy: { ...view.proxy, detected } }
+    : view;
 }
 
 export function createAppServer(options: {
@@ -835,7 +845,7 @@ export function createAppServer(options: {
       return;
     }
     if (url.pathname === "/api/settings" && method === "GET") {
-      sendJson(res, 200, publicSettings(ctx.settings.current));
+      sendJson(res, 200, settingsView(ctx.settings.current));
       return;
     }
     if (url.pathname === "/api/settings" && method === "PUT") {
@@ -854,7 +864,7 @@ export function createAppServer(options: {
       ctx.runtime.setApprovalTimeoutMinutes(next.approvalTimeoutMinutes);
       configureLimits(next.limits);
       ctx.sweeper?.setRetentionDays(next.archiveRetentionDays);
-      sendJson(res, 200, publicSettings(ctx.settings.current));
+      sendJson(res, 200, settingsView(ctx.settings.current));
       return;
     }
     if (url.pathname === "/api/settings/test" && method === "POST") {
@@ -877,7 +887,7 @@ export function createAppServer(options: {
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         model,
-        systemProxy: provider.systemProxy === true,
+        proxy: ctx.settings.current.proxy,
       }));
       return;
     }
@@ -900,6 +910,7 @@ export function createAppServer(options: {
         kind,
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
+        proxy: ctx.settings.current.proxy,
       }));
       return;
     }

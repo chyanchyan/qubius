@@ -221,7 +221,7 @@ curl -H "X-Qubius-Token: $(cat .qubius/data/auth-token)" http://127.0.0.1:8787/a
 - **Anthropic 兼容**：地址会作为 `ANTHROPIC_BASE_URL` 传给 Agent SDK，所以兼容 Anthropic API 的代理或网关也能使用。
 - **Gemini**：直接填 Gemini API key 和模型名（例如 `gemini-2.5-pro`、`gemini-2.5-flash`）。qubius 在本机把 Anthropic Messages 请求翻译成 Gemini 原生 `generateContent`，不需要额外的兼容网关；地址一般保持默认的 `https://generativelanguage.googleapis.com` 即可，会自动补 `/v1beta`。
 
-每套配置还可以勾选「走系统代理」：Windows 上自动读取「Internet 选项」里的系统代理，其它平台使用 `HTTPS_PROXY` 等环境变量，回环和内网地址仍直连，代理开关或端口变化后无需重启服务。Gemini 和「测试」按钮由服务端直接发请求，确定生效；Anthropic 兼容接口的对话由 Agent SDK 子进程发出，勾选后会把代理环境变量传给子进程，是否识别取决于 CLI。
+上游请求是否走代理由「代理」页的域名白名单决定：只有名单里的域名走代理，其余直连。白名单支持 `api.deepseek.com` 和 `*.anthropic.com` 这类写法；代理地址留空时自动读取系统代理（Windows 的「Internet 选项」，其它平台的 `QUBIUS_PROXY` / `HTTPS_PROXY` 等环境变量），也可以直接填 `http://127.0.0.1:7890`。回环和内网地址始终直连，保存后立即生效，无需重启服务。Gemini 和「测试」「查询余额」由服务端按同一份白名单发请求；Anthropic 兼容接口的对话由 Agent SDK 子进程发出，命中白名单时会把代理环境变量显式传给子进程。
 
 每套接口都可以点「测试」验证配置。修改接口类型或地址后必须重新填写 API key，防止旧 key 被发到新地址或另一家服务。
 

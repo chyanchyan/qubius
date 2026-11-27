@@ -138,8 +138,8 @@ test("validateSelections enforces count, completeness and uniqueness", () => {
 
 test("nextSelection skips combinations already used", () => {
   const providers: Provider[] = [
-    { id: "p1", name: "接口一", kind: "anthropic", baseUrl: "", hasApiKey: true, models: ["m1", "m2"], systemProxy: false },
-    { id: "p2", name: "接口二", kind: "anthropic", baseUrl: "", hasApiKey: true, models: ["m3"], systemProxy: false },
+    { id: "p1", name: "接口一", kind: "anthropic", baseUrl: "", hasApiKey: true, models: ["m1", "m2"] },
+    { id: "p2", name: "接口二", kind: "anthropic", baseUrl: "", hasApiKey: true, models: ["m3"] },
   ];
   const fallback = selection();
   const next = nextSelection(providers, [fallback, selection({ model: "m2" })], fallback);

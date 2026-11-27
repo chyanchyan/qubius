@@ -348,12 +348,25 @@ export interface PublicProvider {
   apiKey: string;
   hasApiKey: boolean;
   models: string[];
-  /** 这套配置访问上游时是否走系统代理。 */
-  systemProxy: boolean;
+}
+
+/** 全局代理设置：只有白名单里的域名走代理，其余直连。 */
+export interface ProxySettings {
+  /** 域名白名单，支持 `example.com` 和 `*.example.com`；空数组表示全部直连。 */
+  domains: string[];
+  /** 自定义代理地址；留空时自动读取系统代理（Windows Internet 选项 / 代理环境变量）。 */
+  url?: string;
+}
+
+export interface PublicProxySettings extends ProxySettings {
+  /** 当前实际生效的代理地址（配置的或系统检测到的）；没有时省略。 */
+  detected?: string;
 }
 
 export interface PublicSettings {
   providers: PublicProvider[];
+  /** 全局代理白名单；设置页「代理」页读写。 */
+  proxy: PublicProxySettings;
   effort: Effort;
   /**
    * 同时进行的对话数上限；超出的对话排队，修改后立即生效。

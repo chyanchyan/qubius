@@ -15,9 +15,20 @@ export function claudeConnection(baseUrl: string, model: string): ClaudeConnecti
   };
 }
 
+/** 传给 SDK 子进程的代理变量；命中白名单时统一改写成配置的代理地址。 */
+const PROXY_ENV_NAMES = [
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+] as const;
+
 /**
  * 这些是 git/Node/运维脚本正常运行需要的基础变量，即使名字碰巧像密钥也保留。
- * 代理与 CA 变量也在这里，避免内网或自签证书环境被误伤。
+ * CA 变量也在这里，避免内网或自签证书环境被误伤；代理变量由 claudeEnv 按
+ * 域名白名单单独处理，不直接继承。
  */
 const BASE_ENV_NAMES = new Set([
   "PATH",
@@ -47,10 +58,7 @@ const BASE_ENV_NAMES = new Set([
   "REQUESTS_CA_BUNDLE",
   "GIT_SSL_CAINFO",
   "GIT_SSL_NO_VERIFY",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
   "NO_PROXY",
-  "ALL_PROXY",
   // Windows 上运行 git/Node 需要的基础变量。
   "SYSTEMROOT",
   "SYSTEMDRIVE",
@@ -103,20 +111,21 @@ export function claudeEnv(
     if (isSecretEnv(name, value)) continue;
     filtered[name] = value;
   }
-  // 勾选了「走系统代理」的 Anthropic 兼容接口：把代理显式传给 SDK 子进程。
+  // 代理路由只由设置页的域名白名单决定：先清掉继承来的代理变量，避免服务级
+  // API 设置 / 环境变量把未列入白名单的接口也送进代理；命中白名单时再显式注入。
   // 本机回环（Gemini 适配层等）始终直连，避免代理客户端把本地请求也拦走。
-  const proxyEnv: NodeJS.ProcessEnv = {};
+  for (const name of PROXY_ENV_NAMES) delete filtered[name];
+  delete filtered.NODE_USE_ENV_PROXY;
   if (proxyUrl) {
-    for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]) {
-      proxyEnv[name] = proxyUrl;
-    }
+    for (const name of PROXY_ENV_NAMES) filtered[name] = proxyUrl;
+    // Node 的 fetch 默认不读代理环境变量；打开这个开关后才会走 HTTPS_PROXY。
+    filtered.NODE_USE_ENV_PROXY = "1";
     const noProxy = withLoopbackBypass(filtered.NO_PROXY ?? filtered.no_proxy);
-    proxyEnv.NO_PROXY = noProxy;
-    proxyEnv.no_proxy = noProxy;
+    filtered.NO_PROXY = noProxy;
+    filtered.no_proxy = noProxy;
   }
   return {
     ...filtered,
-    ...proxyEnv,
     // 函数显式构造的 ANTHROPIC_* 放在最后，确保不被 base 里的同名变量覆盖。
     ANTHROPIC_API_KEY: apiKey,
     ANTHROPIC_AUTH_TOKEN: apiKey,

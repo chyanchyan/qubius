@@ -10,7 +10,9 @@ import {
   toAnthropicResponse,
   type GeminiResponse,
 } from "./gemini.js";
-import { upstreamFetch, type UpstreamFetch } from "./upstream-fetch.js";
+import { proxyUrlForTarget } from "./proxy.js";
+import type { ProxySettings } from "./types.js";
+import { fetchUpstream, type UpstreamFetch } from "./upstream-fetch.js";
 
 /**
  * 本地 Gemini 适配服务。
@@ -32,14 +34,14 @@ const PATH_PATTERN = /^\/gemini\/([^/]+)\/v1\/messages(\/count_tokens)?\/?$/;
 export interface GeminiBridgeProvider {
   baseUrl: string;
   apiKey: string;
-  /** 勾选「走系统代理」时为 true；每次请求时实时读取。 */
-  systemProxy?: boolean;
+  /** 全局代理白名单；每次请求时实时读取。 */
+  proxy?: ProxySettings;
 }
 
 export interface GeminiBridgeDeps {
   /** 按接口配置 id 读取实时配置；不是 Gemini 类型时返回 undefined。 */
   provider: (providerId: string) => GeminiBridgeProvider | undefined;
-  /** 测试注入用；默认按配置选择直连或走系统代理。 */
+  /** 测试注入用；默认按代理白名单选择直连或代理。 */
   fetch?: UpstreamFetch;
 }
 
@@ -325,8 +327,8 @@ export class GeminiBridge {
     url: string,
     init: RequestInit,
   ): Promise<Response> {
-    const doFetch = this.deps.fetch ?? (provider.systemProxy ? upstreamFetch : fetch);
-    return doFetch(url, init);
+    const doFetch = this.deps.fetch ?? fetchUpstream;
+    return doFetch(url, init, proxyUrlForTarget(url, provider.proxy));
   }
 }
 

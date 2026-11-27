@@ -73,7 +73,6 @@ interface EditableProvider {
   hasApiKey: boolean;
   models: string[];
   pricing: EditablePricing;
-  systemProxy: boolean;
 }
 
 /** 切换类型时只替换仍是当前类型默认值的地址，用户自己填过的保持不动。 */
@@ -120,7 +119,6 @@ function blankProvider(): EditableProvider {
     hasApiKey: false,
     models: [""],
     pricing: emptyPricing(),
-    systemProxy: false,
   };
 }
 
@@ -136,7 +134,6 @@ function fromSettings(data: SettingsWithPricing): EditableProvider[] {
     hasApiKey: provider.hasApiKey,
     models: provider.models.length > 0 ? [...provider.models] : [""],
     pricing: pricingToDraft(provider.pricing),
-    systemProxy: provider.systemProxy ?? false,
   }));
 }
 
@@ -308,7 +305,6 @@ export function SettingsPage() {
           kind: provider.kind,
           baseUrl: provider.baseUrl.trim(),
           models: provider.models.map((model) => model.trim()).filter(Boolean),
-          systemProxy: provider.systemProxy,
         };
         if (provider.apiKey.trim()) draft.apiKey = provider.apiKey.trim();
         const pricing = pricingFromDraft(provider.pricing);
@@ -493,7 +489,7 @@ export function SettingsPage() {
   return (
     <section className="page settings-page">
       <h1 tabIndex={-1}>设置</h1>
-      <p className="lead">每套配置选择协议类型（Anthropic 兼容或 Gemini），填地址、密钥和多个模型名。密钥只保存在这台开发机上，输入框默认隐藏，点右侧眼睛可以查看明文。</p>
+      <p className="lead">每套配置选择协议类型（Anthropic 兼容或 Gemini），填地址、密钥和多个模型名。密钥只保存在这台开发机上，输入框默认隐藏，点右侧眼睛可以查看明文。上游请求走不走代理在「代理」页按域名白名单配置。</p>
       <form id="settings-form" className="stack settings-form" onSubmit={onSave} noValidate>
         {providers.map((provider, index) => {
           const result = testResults[provider.key];
@@ -519,19 +515,6 @@ export function SettingsPage() {
               <span className="settings-provider-key" data-on={hasKey}>
                 {hasKey ? "已配置密钥" : "未配置密钥"}
               </span>
-              <label
-                className="settings-provider-proxy"
-                onClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => event.stopPropagation()}
-                title="勾选后，这套配置访问模型接口时通过本机系统代理发出；不勾选则直连。"
-              >
-                <input
-                  type="checkbox"
-                  checked={provider.systemProxy}
-                  onChange={(event) => update(provider.key, { systemProxy: event.target.checked })}
-                />
-                走系统代理
-              </label>
             </summary>
             <div className="settings-provider-body">
             <label className="field">

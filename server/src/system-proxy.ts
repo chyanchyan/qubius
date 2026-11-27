@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 /**
  * 读取系统代理设置。
  *
- * Node 内置 fetch 不会读取 Windows「Internet 设置」里的系统代理，所以勾选了
- * 「走系统代理」的配置需要自己读出来交给 undici 的 ProxyAgent。代理客户端
+ * Node 内置 fetch 不会读取 Windows「Internet 设置」里的系统代理，所以命中
+ * 「代理」页白名单的请求需要自己读出来交给 undici 的 ProxyAgent。代理客户端
  * （Veee 等）随时可能开关或换端口，注册表结果只缓存一小段时间，不重启也能跟上。
  */
 

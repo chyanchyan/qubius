@@ -609,58 +609,121 @@ test("接口类型缺省按 anthropic 处理，Gemini 类型会保存并对外�
   assert.equal(publicSettings(legacy).providers[0]?.kind, "anthropic");
 });
 
-test("走系统代理缺省为 false，保存后对外返回勾选状态", () => {
-  // 老配置没有该字段：对外返回明确的 false。
-  assert.equal(publicSettings(sample()).providers[0]?.systemProxy, false);
+test("代理白名单缺省为空，保存后规范化并对外返回", () => {
+  assert.deepEqual(publicSettings(sample()).proxy, { domains: [] });
 
   const withProxy = applySettingsPatch(sample(), {
-    providers: [{
-      id: "p1",
-      name: "官方",
-      baseUrl: "https://api.anthropic.com",
-      models: ["sonnet"],
-      systemProxy: true,
-    }],
+    proxy: {
+      domains: ["API.DeepSeek.com", "*.anthropic.com", "*.anthropic.com", " api.deepseek.com "],
+      url: "127.0.0.1:7890",
+    },
   });
-  assert.equal(withProxy.providers[0]?.systemProxy, true);
-  assert.equal(publicSettings(withProxy).providers[0]?.systemProxy, true);
+  assert.deepEqual(withProxy.proxy, {
+    domains: ["api.deepseek.com", "*.anthropic.com"],
+    url: "http://127.0.0.1:7890",
+  });
+  assert.deepEqual(publicSettings(withProxy).proxy, {
+    domains: ["api.deepseek.com", "*.anthropic.com"],
+    url: "http://127.0.0.1:7890",
+  });
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-provider-proxy-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-proxy-settings-"));
   saveSettings(dir, withProxy);
   const raw = JSON.parse(fs.readFileSync(path.join(dir, "secrets.json"), "utf8")) as {
-    providers: Array<Record<string, unknown>>;
+    proxy?: unknown;
   };
-  assert.equal(raw.providers[0]?.systemProxy, true);
-  const loaded = loadSettings(dir);
-  assert.equal(loaded.providers[0]?.systemProxy, true);
-  assert.equal(publicSettings(loaded).providers[0]?.systemProxy, true);
-
-  // 取消勾选后同样落盘为 false，重新加载仍然是直连。
-  const withoutProxy = applySettingsPatch(loaded, {
-    providers: [{
-      id: "p1",
-      name: "官方",
-      baseUrl: "https://api.anthropic.com",
-      models: ["sonnet"],
-      systemProxy: false,
-    }],
+  assert.deepEqual(raw.proxy, {
+    domains: ["api.deepseek.com", "*.anthropic.com"],
+    url: "http://127.0.0.1:7890",
   });
-  assert.equal(withoutProxy.providers[0]?.systemProxy, false);
-  assert.equal(publicSettings(withoutProxy).providers[0]?.systemProxy, false);
+  const loaded = loadSettings(dir);
+  assert.deepEqual(loaded.proxy, {
+    domains: ["api.deepseek.com", "*.anthropic.com"],
+    url: "http://127.0.0.1:7890",
+  });
+
+  // 只改白名单时保留代理地址；url 传空串清除地址、回到系统代理。
+  const domainsOnly = applySettingsPatch(loaded, { proxy: { domains: ["example.com"] } });
+  assert.deepEqual(domainsOnly.proxy, {
+    domains: ["example.com"],
+    url: "http://127.0.0.1:7890",
+  });
+  const cleared = applySettingsPatch(loaded, { proxy: { url: "" } });
+  assert.deepEqual(cleared.proxy, { domains: ["api.deepseek.com", "*.anthropic.com"] });
 });
 
-test("走系统代理只接受布尔值", () => {
-  for (const systemProxy of ["true", 1, null, {}]) {
-    assert.throws(() => applySettingsPatch(sample(), {
-      providers: [{
-        id: "p1",
-        name: "官方",
-        baseUrl: "https://api.anthropic.com",
-        models: ["sonnet"],
-        systemProxy,
-      }],
-    }), /走系统代理选项无效/);
+test("代理白名单校验域名和代理地址", () => {
+  for (const bad of [
+    "http://example.com",
+    "example.com:8080",
+    "example.com/path",
+    "bad_domain",
+    ".example.com",
+    "*.",
+    "",
+  ]) {
+    assert.throws(
+      () => applySettingsPatch(sample(), { proxy: { domains: [bad] } }),
+      /代理域名/,
+      bad,
+    );
   }
+  assert.throws(
+    () => applySettingsPatch(sample(), { proxy: { domains: "example.com" } }),
+    /代理域名/,
+  );
+  assert.throws(
+    () => applySettingsPatch(sample(), { proxy: { url: "socks5://127.0.0.1:1080" } }),
+    /代理地址/,
+  );
+  assert.throws(
+    () => applySettingsPatch(sample(), { proxy: "example.com" }),
+    /代理设置/,
+  );
+  // 通配和 IP 都合法；空列表表示全部直连。
+  const wildcard = applySettingsPatch(sample(), {
+    proxy: { domains: ["*", "192.168.1.10", "localhost"] },
+  });
+  assert.deepEqual(wildcard.proxy.domains, ["*", "192.168.1.10", "localhost"]);
+  const empty = applySettingsPatch(wildcard, { proxy: { domains: [] } });
+  assert.deepEqual(empty.proxy.domains, []);
+});
+
+test("旧版按接口勾选的代理迁移成全局域名白名单", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-proxy-migrate-"));
+  fs.writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({
+    effort: "high",
+    maxConcurrent: 4,
+    providers: [
+      {
+        id: "p1",
+        name: "DS",
+        baseUrl: "https://api.deepseek.com/anthropic",
+        apiKey: secret,
+        models: ["deepseek-flash"],
+        systemProxy: false,
+      },
+      {
+        id: "p2",
+        name: "Gemini",
+        kind: "gemini",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        apiKey: "gemini-key",
+        models: ["gemini-4-neon"],
+        systemProxy: true,
+      },
+    ],
+  }));
+
+  const loaded = loadSettings(dir);
+  assert.deepEqual(loaded.proxy, { domains: ["generativelanguage.googleapis.com"] });
+  // 迁移结果写回磁盘，旧的 systemProxy 字段被清掉。
+  const raw = JSON.parse(fs.readFileSync(path.join(dir, "secrets.json"), "utf8")) as {
+    proxy?: unknown;
+    providers: Array<Record<string, unknown>>;
+  };
+  assert.deepEqual(raw.proxy, { domains: ["generativelanguage.googleapis.com"] });
+  assert.equal("systemProxy" in (raw.providers[0] ?? {}), false);
 });
 
 test("改接口类型且留空密钥时沿用旧密钥", () => {

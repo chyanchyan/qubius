@@ -535,6 +535,39 @@ test("PUT /api/settings 保存并发上限，非法值返回 400", async () => {
   }
 });
 
+test("PUT /api/settings 保存代理白名单，GET 返回当前生效地址", async () => {
+  const harness = await startHarness();
+  try {
+    const saved = await call<{
+      proxy: { domains: string[]; url?: string; detected?: string };
+    }>(harness, "PUT", "/api/settings", {
+      proxy: { domains: ["API.DeepSeek.com", "*.anthropic.com"], url: "127.0.0.1:7890" },
+    });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(saved.data.proxy.domains, ["api.deepseek.com", "*.anthropic.com"]);
+    assert.equal(saved.data.proxy.url, "http://127.0.0.1:7890");
+    assert.equal(saved.data.proxy.detected, "http://127.0.0.1:7890");
+    assert.deepEqual(harness.settings.current.proxy, {
+      domains: ["api.deepseek.com", "*.anthropic.com"],
+      url: "http://127.0.0.1:7890",
+    });
+
+    const got = await call<{ proxy: { domains: string[] } }>(harness, "GET", "/api/settings");
+    assert.equal(got.status, 200);
+    assert.deepEqual(got.data.proxy.domains, ["api.deepseek.com", "*.anthropic.com"]);
+
+    // 非法域名不能改掉已保存的白名单。
+    const invalid = await call(harness, "PUT", "/api/settings", {
+      proxy: { domains: ["http://example.com"] },
+    });
+    assert.equal(invalid.status, 400);
+    assert.match(String(invalid.data.error), /代理域名/);
+    assert.deepEqual(harness.settings.current.proxy?.domains, ["api.deepseek.com", "*.anthropic.com"]);
+  } finally {
+    await harness.close();
+  }
+});
+
 test("PUT /api/settings 保存确认超时、限制和归档保留天数，非法值返回 400", async () => {
   const harness = await startHarness();
   try {

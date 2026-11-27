@@ -1,4 +1,6 @@
-import type { ProviderKind } from "./types.js";
+import { proxyUrlForTarget } from "./proxy.js";
+import type { ProviderKind, ProxySettings } from "./types.js";
+import { fetchUpstream, type UpstreamFetch } from "./upstream-fetch.js";
 
 /**
  * 接口配置的余额查询。
@@ -31,6 +33,8 @@ export interface ProviderBalanceInput {
   kind?: ProviderKind;
   baseUrl: string;
   apiKey: string;
+  /** 全局代理设置；余额接口域名在白名单里时才走代理。 */
+  proxy?: ProxySettings;
 }
 
 /** 连接余额接口的超时；避免设置页在失效地址上卡住。 */
@@ -80,13 +84,14 @@ function unsupportedDetail(kind: ProviderKind): string {
  */
 export async function queryProviderBalance(
   input: ProviderBalanceInput,
-  deps?: { fetch?: typeof fetch; endpoint?: string },
+  deps?: { fetch?: UpstreamFetch; endpoint?: string },
 ): Promise<ProviderBalanceResult> {
   const kind = input.kind ?? "anthropic";
   const endpoint = deps?.endpoint ?? balanceEndpoint(kind, input.baseUrl);
   if (!endpoint) return { ok: false, supported: false, detail: unsupportedDetail(kind) };
 
-  const doFetch = deps?.fetch ?? fetch;
+  const proxyUrl = proxyUrlForTarget(endpoint, input.proxy);
+  const doFetch = deps?.fetch ?? fetchUpstream;
   const timeout = timeoutSignal(TIMEOUT_MS);
 
   try {
@@ -101,7 +106,7 @@ export async function queryProviderBalance(
         // 不跟随重定向：登录页/网关跳转后的 200 页面并不代表接口可用。
         redirect: "manual",
         signal: timeout.signal,
-      });
+      }, proxyUrl);
     } catch (reason) {
       const name = reason instanceof Error ? reason.name : "";
       if (timeout.signal.aborted || name === "TimeoutError" || name === "AbortError") {
