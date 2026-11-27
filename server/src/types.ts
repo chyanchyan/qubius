@@ -508,11 +508,6 @@ export interface SessionSummary {
   runStartedAt?: string;
   /** 最近一轮结束运行的时间；运行中或从未运行则缺失。 */
   runEndedAt?: string;
-  /**
-   * 当前这一轮开始前是否已经有过 agent 答复。首轮答复中为 false，
-   * 列表用灰灯区分「还在首轮、还没有任何结果」的会话。
-   */
-  hasEarlierReply: boolean;
   createdAt: string;
   updatedAt: string;
   messages?: TranscriptItem[];

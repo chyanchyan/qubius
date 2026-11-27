@@ -393,11 +393,6 @@ export interface Session {
   runStartedAt?: string;
   /** 最近一轮结束运行的时间；运行中或从未运行则缺失。 */
   runEndedAt?: string;
-  /**
-   * 当前这一轮开始前是否已经有过 agent 答复。首轮答复中为 false，
-   * 分支标签据此显示灰灯；旧版服务端没有该字段，按已有答复处理。
-   */
-  hasEarlierReply?: boolean;
   createdAt: string;
   updatedAt: string;
   messages?: Transcript[];

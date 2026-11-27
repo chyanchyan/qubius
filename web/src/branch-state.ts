@@ -4,7 +4,7 @@ import { isActivePhase } from "./project-activity";
 /**
  * 会话分支灯的状态。分支标签用底色区分会话走到哪一步：
  *
- * - starting：已发言，当前正在首轮答复，还没有任何改动（灰）。
+ * - starting：已发言，当前这一轮还在进行，还没有未提交改动（灰）。
  * - dirty：有改动但还没有提交（橙）。
  * - unmerged：分支有提交，但还没合入基准分支（黄）。
  * - merged：分支已经合入基准分支（绿）。
@@ -23,18 +23,15 @@ export interface BranchLampInput {
   dirty?: boolean;
   /** 当前这一轮还在进行（queued / running / needs_input）。 */
   active?: boolean;
-  /** 当前这一轮之前已经有过 agent 答复。 */
-  earlierReply?: boolean;
 }
 
 export function branchLampState(input: BranchLampInput): BranchLamp | undefined {
-  // 未提交的改动会随归档一起删除，优先级高于合入状态和蓝灯。
+  // 未提交的改动会随归档一起删除，优先级高于其它状态。
   if (input.dirty) return "dirty";
-  if (input.untouched) {
-    // 首轮答复中还没有任何结果，用灰灯；做过一轮答复再来判断蓝灯。
-    // 旧服务端不返回 earlierReply，按已有答复处理，保持原来的蓝灯。
-    return input.active && input.earlierReply === false ? "starting" : "untouched";
-  }
+  // 消息刚发出去、这一轮还在推进：先显示灰灯，表明 agent 正在处理，
+  // 还没有可判断的结果。合入状态是否加载都不影响这个反馈。
+  if (input.active) return "starting";
+  if (input.untouched) return "untouched";
   // 合入状态还没加载时不着色。
   if (input.merged === undefined) return undefined;
   return input.merged ? "merged" : "unmerged";
@@ -49,11 +46,10 @@ const PROJECT_LAMP_ORDER: readonly BranchLamp[] = [
   "starting",
 ];
 
-/** 项目里一个会话的灯相关信息；只关心分支、当前 phase 和是否已有答复。 */
+/** 项目里一个会话的灯相关信息；只关心分支和当前 phase。 */
 export interface ProjectLampSession {
   branch?: string;
   phase: Phase;
-  hasEarlierReply?: boolean;
 }
 
 /** 项目分支状态；找不到基准分支时 mergedKnown 为 false。 */
@@ -81,7 +77,6 @@ export function projectLampState(
       untouched: status.untouched.has(session.branch),
       dirty: status.dirty.has(session.branch),
       active: isActivePhase(session.phase),
-      earlierReply: session.hasEarlierReply,
     });
     if (state) present.add(state);
   }

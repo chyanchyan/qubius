@@ -15,7 +15,7 @@ export function shortBranch(branch: string | undefined): string {
 function badgeTitle(branch: string, state: BranchLamp | undefined, base?: string): string {
   switch (state) {
     case "starting":
-      return `${branch} · 首轮答复中，还没有改动`;
+      return `${branch} · 本轮还在进行`;
     case "dirty":
       return `${branch} · 有未提交的改动`;
     case "untouched":
@@ -30,7 +30,7 @@ function badgeTitle(branch: string, state: BranchLamp | undefined, base?: string
 }
 
 /**
- * 分支标签。底色由调用方传入的 state 决定：灰=首轮答复中且没有改动，
+ * 分支标签。底色由调用方传入的 state 决定：灰=本轮进行中且没有未提交改动，
  * 橙=有未提交改动，黄=有提交但没合入，绿=已合入，蓝=做过答复且没有改动。
  * 不传 state（详情页、总览页、状态未加载）时样式不变。
  */

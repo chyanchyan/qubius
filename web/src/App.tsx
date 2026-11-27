@@ -1200,7 +1200,7 @@ const BoardSessionRow = memo(function BoardSessionRow({
   continuing: boolean;
   selectMode: boolean;
   selected: boolean;
-  /** 分支灯状态：灰=首轮答复中，橙=有未提交改动，黄=未合入，绿=已合入，蓝=做过答复且无改动。 */
+  /** 分支灯状态：灰=本轮进行中，橙=有未提交改动，黄=未合入，绿=已合入，蓝=做过答复且无改动。 */
   lamp?: BranchLamp;
   mergeBase?: string;
   onToggleOpen: (id: string, open: boolean) => void;
@@ -1425,12 +1425,12 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   const [clearing, setClearing] = useState(false);
   const clearingRef = useRef(false);
   /* 分支合入 / 改动状态：列表里用分支标签底色展示（绿=已合入，黄=未合入，
-     橙=有未提交改动，蓝=做过答复且无改动，灰=首轮答复中），「全部归档」跳过
+     橙=有未提交改动，蓝=做过答复且无改动，灰=本轮进行中），「全部归档」跳过
      运行中的会话，默认只归档已合入的。 */
   const [mergeStatus, setMergeStatus] = useState<MergeStatus | null>(null);
   const mergeSeq = useRef(0);
   const mergedBranches = useMemo(() => new Set(mergeStatus?.merged ?? []), [mergeStatus]);
-  /* 分支创建后从未提交过代码；用来区分灰灯和蓝灯，归档按已合入处理。 */
+  /* 分支创建后从未提交过代码；本轮结束后据此显示蓝灯，归档按已合入处理。 */
   const untouchedBranches = useMemo(() => new Set(mergeStatus?.untouched ?? []), [mergeStatus]);
   /* 有未提交改动的分支：橙灯，归档会连同这些文件一起删掉。 */
   const dirtyBranches = useMemo(() => new Set(mergeStatus?.dirty ?? []), [mergeStatus]);
@@ -2464,7 +2464,6 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
                     untouched: untouchedBranches.has(entry.session.branch),
                     dirty: dirtyBranches.has(entry.session.branch),
                     active: isActivePhase(entry.session.phase),
-                    earlierReply: entry.session.hasEarlierReply,
                   }) : undefined}
                   mergeBase={mergeBase}
                   onToggleOpen={onToggleSwipe}

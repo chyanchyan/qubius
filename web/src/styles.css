@@ -685,7 +685,7 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
   color: var(--blue);
 }
 
-/* 已发言、当前还在首轮答复，且没有任何改动：灰灯，表示暂时没有结果可看。 */
+/* 已发言、当前这一轮还在进行，且没有未提交改动：灰灯，表示结果还没落定。 */
 .branch-badge[data-state="starting"] {
   border-color: color-mix(in srgb, var(--muted) 35%, var(--line));
   background: color-mix(in srgb, var(--muted) 12%, transparent);
