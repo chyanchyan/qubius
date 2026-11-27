@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { readAccessEntries } from "./access-entries.js";
 import { ArchiveError, type ArchiveStore } from "./archive.js";
 import { tokenFromRequest, tokenMatches } from "./auth.js";
+import { queryProviderBalance, supportsBalance } from "./balance.js";
 import { resolveBuildInfo } from "./build-info.js";
 import {
   CHAT_PROJECT_ID,
@@ -877,6 +878,28 @@ export function createAppServer(options: {
         apiKey: provider.apiKey,
         model,
         systemProxy: provider.systemProxy === true,
+      }));
+      return;
+    }
+    if (url.pathname === "/api/settings/balance" && method === "POST") {
+      const body = asRecord(await readJson(req));
+      const providerId = typeof body.providerId === "string" ? body.providerId.trim() : "";
+      const provider = findProvider(ctx.settings.current, providerId);
+      if (!provider) throw new HttpError(404, "接口配置不存在");
+      const kind = providerKind(provider);
+      if (!provider.apiKey.trim()) {
+        sendJson(res, 200, {
+          ok: false,
+          supported: supportsBalance(kind, provider.baseUrl),
+          detail: "这套配置还没有 API key",
+        });
+        return;
+      }
+      // 查询结果即使失败也按 200 返回，前端直接展示分类文案。
+      sendJson(res, 200, await queryProviderBalance({
+        kind,
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
       }));
       return;
     }

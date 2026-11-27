@@ -463,6 +463,59 @@ test("接口测试失败时不回显密钥", async () => {
   }
 });
 
+test("余额接口区分不支持、缺少密钥和配置不存在", async () => {
+  const harness = await startHarness();
+  try {
+    harness.settings.current = {
+      effort: "high",
+      maxConcurrent: 4,
+      providers: [
+        {
+          id: "gemini",
+          name: "Gemini",
+          kind: "gemini",
+          baseUrl: "https://generativelanguage.googleapis.com",
+          apiKey: "gemini-key",
+          models: ["gemini-2.5-pro"],
+        },
+        {
+          id: "deepseek",
+          name: "DeepSeek",
+          baseUrl: "https://api.deepseek.com/anthropic",
+          apiKey: "",
+          models: ["deepseek-flash"],
+        },
+      ],
+    };
+    const gemini = await call<{ ok: boolean; supported: boolean; detail: string }>(
+      harness,
+      "POST",
+      "/api/settings/balance",
+      { providerId: "gemini" },
+    );
+    assert.equal(gemini.status, 200);
+    assert.equal(gemini.data.ok, false);
+    assert.equal(gemini.data.supported, false);
+    assert.match(gemini.data.detail, /Gemini/);
+
+    const noKey = await call<{ ok: boolean; supported: boolean; detail: string }>(
+      harness,
+      "POST",
+      "/api/settings/balance",
+      { providerId: "deepseek" },
+    );
+    assert.equal(noKey.status, 200);
+    assert.equal(noKey.data.ok, false);
+    assert.equal(noKey.data.supported, true);
+    assert.match(noKey.data.detail, /API key/);
+
+    const missing = await call(harness, "POST", "/api/settings/balance", { providerId: "nope" });
+    assert.equal(missing.status, 404);
+  } finally {
+    await harness.close();
+  }
+});
+
 test("PUT /api/settings 保存并发上限，非法值返回 400", async () => {
   const harness = await startHarness();
   try {

@@ -24,7 +24,12 @@ import {
   type ProviderKind,
   type Settings,
 } from "../api";
-import { testSettingsProvider, type ProviderPricing } from "../api-usage";
+import {
+  getProviderBalance,
+  testSettingsProvider,
+  type ProviderBalanceResult,
+  type ProviderPricing,
+} from "../api-usage";
 import { Notice, SecretInput, useDialogs } from "../ui";
 import { PushSettings } from "./PushSettings";
 import "./SettingsPage.css";
@@ -147,6 +152,21 @@ function readableError(reason: unknown, fallback: string): string {
   return message;
 }
 
+/** 把余额结果拼成一行提示；服务商可能返回多个币种。 */
+function formatBalance(result: ProviderBalanceResult): string {
+  if (!result.balances || result.balances.length === 0) return result.detail;
+  const parts = result.balances.map((balance) => {
+    const extras: string[] = [];
+    if (balance.toppedUp) extras.push(`充值 ${balance.toppedUp}`);
+    if (balance.granted) extras.push(`赠送 ${balance.granted}`);
+    return extras.length > 0
+      ? `${balance.currency} ${balance.total}（${extras.join("，")}）`
+      : `${balance.currency} ${balance.total}`;
+  });
+  const suffix = result.detail && result.detail !== "账户可用" ? `；${result.detail}` : "";
+  return `余额：${parts.join("；")}${suffix}`;
+}
+
 export function SettingsPage() {
   const dialogs = useDialogs();
   const [providers, setProviders] = useState<EditableProvider[]>([]);
@@ -171,6 +191,8 @@ export function SettingsPage() {
   const [dirty, setDirty] = useState(false);
   const [testingKey, setTestingKey] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; detail: string }>>({});
+  const [balanceKey, setBalanceKey] = useState<string | null>(null);
+  const [balanceResults, setBalanceResults] = useState<Record<string, ProviderBalanceResult>>({});
   /** 每套配置的 API key 是否显示明文；默认隐藏，眼睛按钮切换。 */
   const [revealedKeys, setRevealedKeys] = useState<Record<string, boolean>>({});
 
@@ -398,6 +420,63 @@ export function SettingsPage() {
     }
   }
 
+  function setBalanceResult(key: string, result: ProviderBalanceResult) {
+    setBalanceResults((current) => ({ ...current, [key]: result }));
+  }
+
+  function dismissBalanceResult(key: string) {
+    setBalanceResults((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  /**
+   * 查询已保存配置的剩余余额。和测试连接一样，有未保存修改时不发请求，
+   * 避免查询结果和屏幕上看到的配置对不上。
+   */
+  async function onQueryBalance(provider: EditableProvider) {
+    if (balanceKey !== null) return;
+    if (!provider.id) {
+      setBalanceResult(provider.key, {
+        ok: false,
+        supported: false,
+        detail: "先保存再查询（新配置还没有保存到服务端）。",
+      });
+      return;
+    }
+    if (dirty) {
+      setBalanceResult(provider.key, {
+        ok: false,
+        supported: false,
+        detail: "有未保存的修改，请先保存再查询；查询使用的是已保存的配置。",
+      });
+      return;
+    }
+    setBalanceKey(provider.key);
+    setBalanceResults((current) => {
+      const next = { ...current };
+      delete next[provider.key];
+      return next;
+    });
+    try {
+      const result = await getProviderBalance(provider.id);
+      if (mounted.current) setBalanceResult(provider.key, result);
+    } catch (reason) {
+      if (mounted.current) {
+        setBalanceResult(provider.key, {
+          ok: false,
+          supported: false,
+          detail: readableError(reason, "查询余额失败"),
+        });
+      }
+    } finally {
+      if (mounted.current) setBalanceKey(null);
+    }
+  }
+
   /* 只写本机 localStorage/cookie，不参与 PUT /api/settings。 */
   function onSaveToken() {
     writeApiToken(apiToken);
@@ -418,6 +497,7 @@ export function SettingsPage() {
       <form id="settings-form" className="stack settings-form" onSubmit={onSave} noValidate>
         {providers.map((provider, index) => {
           const result = testResults[provider.key];
+          const balanceResult = balanceResults[provider.key];
           const hasKey = provider.hasApiKey || provider.apiKey.trim().length > 0;
           return (
           <details
@@ -606,18 +686,37 @@ export function SettingsPage() {
               </button>
               <button
                 type="button"
+                className="btn"
+                disabled={balanceKey !== null}
+                onClick={() => void onQueryBalance(provider)}
+              >
+                {balanceKey === provider.key ? "查询中…" : "查询余额"}
+              </button>
+              <button
+                type="button"
                 className="text-btn danger settings-provider-remove"
                 onClick={() => void onDeleteProvider(provider, index)}
               >
                 删除
               </button>
             </div>
+            <p className="muted">
+              「查询余额」目前支持 DeepSeek，使用的是已保存的密钥；Gemini 没有余额查询接口，账单请到 Google AI Studio 或 Google Cloud 控制台查看。
+            </p>
             {result && (
               <Notice
                 tone={result.ok ? "success" : "error"}
                 onDismiss={() => dismissTestResult(provider.key)}
               >
                 {result.ok ? "连接正常" : result.detail}
+              </Notice>
+            )}
+            {balanceResult && (
+              <Notice
+                tone={balanceResult.ok ? "success" : balanceResult.supported ? "error" : "info"}
+                onDismiss={() => dismissBalanceResult(provider.key)}
+              >
+                {formatBalance(balanceResult)}
               </Notice>
             )}
             </div>

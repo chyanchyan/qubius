@@ -131,7 +131,7 @@ agent 用 Bash 的 `run_in_background` 启动下载、安装等耗时命令后�
 - `POST /api/deploy/lan-credentials/reset`：body `{ user? }`，立即生成新密码并写 `<configDir>/lan-proxy.credentials`；如果当前实例的局域网入口在运行，响应发出后会自动重启它（systemd unit 或 pidfile 进程）。返回 `{ ok, lan: { user, password, urls, restart: "scheduled"|"none", restartMethod, restartNote } }`，`restartNote` 会说明是否已重启、是否需要重新登录。
 - `POST /api/deploy/auth-token/reset`：立即生成 64 位十六进制令牌并切换到运行中的服务端；旧令牌保留 60 秒宽限，避免在途请求 401。新令牌持久化到 env（`QUBIUS_AUTH=1`、`QUBIUS_AUTH_TOKEN`），当前来源是 auth-token 文件或 config.yaml 时同步更新；返回 `{ ok, token, source, file?, restartNeeded: false, note }`，`note` 明确写“无需重启”。
 - `GET /api/config/token`：当前访问令牌，未启用时 404；启用时调用方本身已通过令牌校验。`GET /api/health` 额外返回 `authRequired` 和 `authTokenFile`（只含路径）。
-- `POST /api/settings/test`：测试接口配置；`GET /api/usage`：用量与成本。
+- `POST /api/settings/test`：测试接口配置；`POST /api/settings/balance`：查询一套已保存配置的剩余余额（目前支持 DeepSeek；Gemini 等没有余额接口时返回 `supported: false` 和说明）；`GET /api/usage`：用量与成本。
 
 会话变更防抖写入 `dataDir`；单条正文最多 200k 字符，每会话保留最多 5000 条、序列化后 8MB，超限先丢最旧的非用户消息。SIGTERM 时把未落盘的会话 flush 到磁盘（有界重试）。
 
@@ -217,6 +217,8 @@ git 项目的每个对话是独立分支（新会话 `qubius/<对话 id>`，旧�
 - 归属按会话**当前**的接口计算；中途换过接口时，之前的 token 也归到新接口和新价格。
 
 价格只是按所填单价的算术，不含订阅额度、折扣或汇率。
+
+设置页每套配置的「查询余额」会用已保存的密钥调用服务商的余额接口：DeepSeek 调用 `GET https://api.deepseek.com/user/balance`，显示总余额、充值和赠送金额；Gemini 和 Anthropic 官方接口没有余额查询，按钮只提示到各自控制台查看。查询不需要重启，结果只在页面里显示，不落盘。
 
 页面是 PWA，对话每轮结束（完成或失败）以及停下来「等待确认」时可给手机发系统推送；用户主动停止不推送。推送只跟「本轮结束」走，后台子 agent 稍后完成不会再单独推送。等待确认的标题是「项目名 · 等待确认」，正文是问题首行或需要授权的工具名和路径；默认 10 分钟不回会自动拒绝（可在「设置 → 确认超时」调大，设为 0 则不自动拒绝、不显示倒计时）。
 
