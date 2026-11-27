@@ -229,7 +229,7 @@ summary:focus-visible {
   border-radius: 999px;
   color: var(--green);
   background: color-mix(in srgb, var(--green) 12%, transparent);
-  cursor: help;
+  cursor: default;
 }
 
 /* 当前入口在主图标里；其余已启用入口用与对应图标同色的小圆点标出。 */
