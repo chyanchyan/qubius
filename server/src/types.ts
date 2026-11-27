@@ -5,6 +5,18 @@ export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export type Effort = (typeof EFFORTS)[number];
 
+/**
+ * 接口配置的协议类型：anthropic 是兼容 Anthropic Messages 的地址，
+ * gemini 走服务内置的 Gemini 适配层。老设置文件没有这个字段，按 anthropic 处理。
+ */
+export const PROVIDER_KINDS = ["anthropic", "gemini"] as const;
+
+export type ProviderKind = (typeof PROVIDER_KINDS)[number];
+
+export function isProviderKind(value: unknown): value is ProviderKind {
+  return typeof value === "string" && (PROVIDER_KINDS as readonly string[]).includes(value);
+}
+
 /** setup：多模型讨论已经创建，正在等用户配置参与模型。 */
 export type Phase = "queued" | "running" | "completed" | "failed" | "needs_input" | "stopped" | "setup";
 
@@ -330,6 +342,7 @@ export interface ProjectInfo {
 export interface PublicProvider {
   id: string;
   name: string;
+  kind: ProviderKind;
   baseUrl: string;
   hasApiKey: boolean;
   models: string[];

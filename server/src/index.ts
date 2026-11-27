@@ -19,7 +19,8 @@ import { ScheduleRunner, ScheduleStore } from "./schedules.js";
 import { defaultSdkConfigDir } from "./sdk-files.js";
 import { createSdkTitleSummarizer } from "./session-title.js";
 import { createSdkDiscussant } from "./discussion.js";
-import { findProvider, loadSettings } from "./settings.js";
+import { GeminiBridge } from "./gemini-bridge.js";
+import { findProvider, loadSettings, providerKind } from "./settings.js";
 import { enabledSkillFilter, SkillSettings } from "./skills.js";
 import { configureLimits } from "./status.js";
 import { Store } from "./store.js";
@@ -220,12 +221,27 @@ if (fake) {
 // 技能开关与来源域发现共用同一个 store；HTTP 改开关，运行时在下一轮 query 里读过滤列表。
 const skillStore = new SkillSettings(config.dataDir);
 const claudeConfigDir = defaultSdkConfigDir();
+// Gemini 接口不能让 SDK 直连（协议不同），统一指向本机适配服务。
+// 启动失败只影响 Gemini 配置；Anthropic 兼容配置照常可用。
+const geminiBridge = new GeminiBridge({
+  provider: (providerId) => {
+    const provider = findProvider(settings.current, providerId);
+    if (!provider || providerKind(provider) !== "gemini") return undefined;
+    return { baseUrl: provider.baseUrl, apiKey: provider.apiKey.trim() };
+  },
+});
+void geminiBridge.start().catch((error) => {
+  console.error("[gemini] 本地适配服务启动失败，Gemini 接口配置将不可用:", error);
+});
 const credential = (providerId: string) => {
   const provider = findProvider(settings.current, providerId);
   if (!provider) throw new Error("这个对话的接口配置已删除，请新开一个对话");
   const apiKey = provider.apiKey.trim();
   if (!apiKey) throw new Error("这个接口配置还没有 API key");
-  return { apiKey, baseUrl: provider.baseUrl };
+  const baseUrl = providerKind(provider) === "gemini"
+    ? geminiBridge.baseUrl(provider.id)
+    : provider.baseUrl;
+  return { apiKey, baseUrl };
 };
 const runtime = new Runtime(store, {
   maxConcurrent: settings.current.maxConcurrent,

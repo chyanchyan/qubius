@@ -102,6 +102,7 @@ import { isSessionBusy, tryLockSession, unlockSession } from "./session-lock.js"
 import {
   applySettingsPatch,
   findProvider,
+  providerKind,
   publicSettings,
   resolveSettings,
   saveSettings,
@@ -858,6 +859,7 @@ export function createAppServer(options: {
       }
       // 测试结果即使用户的 key/地址有问题也按 200 返回，前端直接展示分类文案。
       sendJson(res, 200, await testProvider({
+        kind: providerKind(provider),
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         model,

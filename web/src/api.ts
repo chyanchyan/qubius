@@ -428,9 +428,13 @@ export interface ArchiveStatus {
   lastSweepError?: string;
 }
 
+/** anthropic：兼容 Anthropic Messages 的地址；gemini：走服务端内置适配层。 */
+export type ProviderKind = "anthropic" | "gemini";
+
 export interface Provider {
   id: string;
   name: string;
+  kind: ProviderKind;
   baseUrl: string;
   hasApiKey: boolean;
   models: string[];
@@ -573,6 +577,7 @@ export interface InstanceInfo {
 export interface ProviderDraft {
   id?: string;
   name: string;
+  kind?: ProviderKind;
   baseUrl: string;
   apiKey?: string;
   models: string[];

@@ -208,3 +208,57 @@ test("DeepSeek 地址和模型会先规范化再请求", async () => {
   assert.equal(seen?.url, "https://api.deepseek.com/anthropic/v1/messages");
   assert.equal((JSON.parse(seen?.body ?? "{}") as { model: string }).model, "deepseek-flash[1m]");
 });
+
+test("Gemini 连接测试走 generateContent 并带 x-goog-api-key", async () => {
+  let captured: { url?: string; key?: string | string[]; body: string } = { body: "" };
+  const result = await testProvider(
+    {
+      kind: "gemini",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      apiKey: "AIza-test-secret",
+      model: "models/gemini-2.5-pro",
+    },
+    {
+      fetch: async (input, init) => {
+        captured = {
+          url: typeof input === "string" ? input : input.url,
+          key: new Headers(init?.headers).get("x-goog-api-key") ?? undefined,
+          body: String(init?.body ?? ""),
+        };
+        return new Response("{}", { status: 200 });
+      },
+    },
+  );
+  assert.deepEqual(result, { ok: true, status: 200, detail: "连接正常" });
+  assert.equal(
+    captured.url,
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+  );
+  assert.equal(captured.key, "AIza-test-secret");
+  const body = JSON.parse(captured.body) as {
+    contents: Array<{ role: string; parts: Array<{ text: string }> }>;
+    generationConfig?: unknown;
+  };
+  assert.deepEqual(body.contents, [{ role: "user", parts: [{ text: "ping" }] }]);
+  assert.equal(body.generationConfig, undefined);
+});
+
+test("Gemini 的 400 API key 错误会归类为密钥无效且不回显密钥", async () => {
+  const key = "AIza-bad-secret";
+  const result = await testProvider(
+    {
+      kind: "gemini",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      apiKey: key,
+      model: "gemini-2.5-pro",
+    },
+    {
+      fetch: async () => new Response(JSON.stringify({
+        error: { message: `API key not valid: ${key}`, status: "INVALID_ARGUMENT" },
+      }), { status: 400 }),
+    },
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.detail, /API key 无效/);
+  assert.equal(result.detail.includes(key), false);
+});

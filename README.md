@@ -18,7 +18,7 @@ qubius 是一个自托管的 Claude Agent 网页控制台。它运行在你自�
 - **CLI 与 MCP**：`node tools/qubius.mjs` 可以在脚本里创建对话、发消息、等待结果；`node tools/qubius-mcp.mjs` 把 qubius 作为 MCP server 暴露给其他 agent。
 - **消息回滚与分叉**：每条用户消息的「⋯」菜单可以回滚到它之前（可同时按检查点恢复 agent 用编辑工具改过的文件）、编辑后重新发送，或分叉出一个保留这条消息及之前内容的新对话；git 项目分叉时会新建独立 worktree 和分支。
 - **状态一目了然**：排队、进行中、等待确认、本轮完成、失败、已停止。「总览」页按状态汇总所有项目的对话，等待确认的问题可以直接在列表里回答。
-- **多套模型接口**：在设置页保存多套接口地址、API key 和模型名，每个对话可以随时切换接口、模型和 effort（`low` 到 `max`）。
+- **多套模型接口**：在设置页保存多套 Anthropic 兼容或 Gemini 接口，每个对话可以随时切换接口、模型和 effort（`low` 到 `max`）。
 - **工作流**：除普通模式外，内置 `prl`（并行开发加评审）、`ser`（串行开发加评审）和 `plan`（只出计划）三种工作流，并显示各单元的进度。
 - **后台任务**：agent 在后台运行的下载、安装等耗时命令会显示进度和输出，可以随时停止。
 - **附件与语音**：可以粘贴图片、附加文本文件；iPhone Safari 上可以按住麦克风说话输入。
@@ -59,7 +59,7 @@ Claude Agent SDK ──► 每个对话一个 git worktree（或独立目录）
 
 - Node.js 22 或更高版本，以及 git。
 - `python3`、`make` 和 C++ 编译器（`g++` 或 `clang++`）：`npm install` 需要用它们编译「命令行」功能使用的原生模块 `node-pty`（Windows 上如果没有预编译包，需要 Visual Studio Build Tools）。
-- 一个 Anthropic API key，或者兼容 Anthropic API 的接口地址和 key。
+- 一个 Anthropic API key、兼容 Anthropic API 的接口地址和 key，或者 Gemini API key。
 - 可选：`gh`（GitHub PR）或 `glab`（GitLab MR），并在这台机器上登录。未安装时只影响 PR/MR 面板，其他功能不受影响。
 
 Linux 的部署脚本面向 bash 和 systemd。Windows 不需要 bash/systemd：部署页会用 Node 脚本（`deploy/deploy-job.mjs`）生成配置、构建并重启服务，见 [Windows 图形化部署](#windows-图形化部署)。本地开发用的 `npm run dev:all` 两个平台都能运行。
@@ -216,7 +216,12 @@ curl -H "X-Qubius-Token: $(cat .qubius/data/auth-token)" http://127.0.0.1:8787/a
 
 ### 模型接口
 
-在页面「设置」里可以保存多套接口，每套包括名称、地址、API key 和若干模型名。地址会作为 `ANTHROPIC_BASE_URL` 传给 Agent SDK，所以兼容 Anthropic API 的代理或网关也能使用。每套接口都可以点「测试」验证配置。修改接口地址后必须重新填写 API key，防止旧 key 被发到新地址。
+在页面「设置」里可以保存多套接口，每套包括名称、类型、地址、API key 和若干模型名。类型有两种：
+
+- **Anthropic 兼容**：地址会作为 `ANTHROPIC_BASE_URL` 传给 Agent SDK，所以兼容 Anthropic API 的代理或网关也能使用。
+- **Gemini**：直接填 Gemini API key 和模型名（例如 `gemini-2.5-pro`、`gemini-2.5-flash`）。qubius 在本机把 Anthropic Messages 请求翻译成 Gemini 原生 `generateContent`，不需要额外的兼容网关；地址一般保持默认的 `https://generativelanguage.googleapis.com` 即可，会自动补 `/v1beta`。
+
+每套接口都可以点「测试」验证配置。修改接口类型或地址后必须重新填写 API key，防止旧 key 被发到新地址或另一家服务。
 
 ## 远程访问
 

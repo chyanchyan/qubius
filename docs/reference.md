@@ -45,7 +45,9 @@ curl -H "X-Qubius-Token: $(cat .qubius/data/auth-token)" http://127.0.0.1:8787/a
 
 ### 模型接口与设置
 
-页面「设置」里可保存多套接口，每套有名称、地址、API key 和该地址上的多个模型名。开对话时选择一套接口、一个模型，再选 effort（`low` / `medium` / `high` / `xhigh` / `max`）。密钥写入 `dataDir/secrets.json`（权限尽量 `0600`），读取接口只返回 `hasApiKey`；地址作为 `ANTHROPIC_BASE_URL` 传给 Agent SDK。
+页面「设置」里可保存多套接口，每套有名称、类型、地址、API key 和该地址上的多个模型名。开对话时选择一套接口、一个模型，再选 effort（`low` / `medium` / `high` / `xhigh` / `max`）。密钥写入 `dataDir/secrets.json`（权限尽量 `0600`），读取接口只返回 `hasApiKey`。
+
+接口类型有两种。**Anthropic 兼容**（默认）：地址作为 `ANTHROPIC_BASE_URL` 传给 Agent SDK。**Gemini**：只填 Gemini API key 和模型名；服务端在本机回环地址起一个适配服务，把 Anthropic Messages 请求翻译成 Gemini 原生 `generateContent`（含流式响应、工具调用、图片和 token 用量），再把结果翻译回 Anthropic 格式。Gemini 地址会自动补 `/v1beta`，一般保持默认的 `https://generativelanguage.googleapis.com`。修改接口类型或地址后必须重新填写 API key。
 
 每套接口可填四个可选价格（输入、输出、缓存读、缓存写，美元/百万 token）；填了之后「总览」按 token 估算成本，留空只显示 token。每套接口的「测试」按钮会发一条最小请求验证地址、密钥和模型名，不回显密钥。
 
@@ -80,7 +82,7 @@ git 项目每次新建对话会执行 `git worktree add`，目录固定为 `<dat
 
 权限默认 `acceptEdits`：工作区内的读、改、搜索和 Bash 自动通过，工作区外需要允许或拒绝。Bash 是否放行靠 `server/src/permissions.ts` 里的命令文本启发式判断（检查字面路径是否越界），**不是操作系统级沙箱**：`sh script.sh`、`npm run ...`、`make ...`、`curl -d @.env ...` 这类命令会直接执行，脚本内容和 Makefile 不会被检查。只要仓库内容、网页或依赖里藏着提示词注入，就可能在当前用户权限下执行任意代码、外传数据。处理不可信内容时请把项目权限改成 `default`（每条 Bash 都确认），并建议用专用系统用户或容器运行，不要在该用户下放 SSH key、云凭据和浏览器 cookie。已开始的一轮要等下一条消息才换级别；提问在任何级别下都会等待回答。授权框的「本对话内允许这个工具」会在当前进程内记住该工具，重启或归档后失效，提问不套用。
 
-同一对话可随时切换接口、模型和 effort，下一轮生效，上下文保留；只改变之后的模型调用，不改历史。运行时在轮间检测配置变化并重启底层 query（`resume` 接上上下文）。只改同一套接口的地址或 key 不会重启已有对话，需要新开对话、重启服务，或换到另一套再切回。
+同一对话可随时切换接口、模型和 effort，下一轮生效，上下文保留；只改变之后的模型调用，不改历史。运行时在轮间检测配置变化并重启底层 query（`resume` 接上上下文）。只改同一套 Anthropic 兼容接口的地址或 key 不会重启已有对话，需要新开对话、重启服务，或换到另一套再切回；Gemini 接口由本机适配层在每次请求时读取最新配置，改完立即生效。
 
 归档对话会 `git worktree remove` 并删除分支；`isolated` 项目删自己的子目录。服务重启时仍在跑的对话会标成失败，提示再发消息继续（SDK `resume`）；「继续上次」就是发送一条“继续”。
 

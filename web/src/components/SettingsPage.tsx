@@ -21,6 +21,7 @@ import {
   type Effort,
   type Limits,
   type ProviderDraft,
+  type ProviderKind,
   type Settings,
 } from "../api";
 import { testSettingsProvider, type ProviderPricing } from "../api-usage";
@@ -61,12 +62,19 @@ interface EditableProvider {
   key: string;
   id?: string;
   name: string;
+  kind: ProviderKind;
   baseUrl: string;
   apiKey: string;
   hasApiKey: boolean;
   models: string[];
   pricing: EditablePricing;
 }
+
+/** 切换类型时只替换仍是当前类型默认值的地址，用户自己填过的保持不动。 */
+const DEFAULT_BASE_URL: Record<ProviderKind, string> = {
+  anthropic: "https://api.anthropic.com",
+  gemini: "https://generativelanguage.googleapis.com",
+};
 
 function emptyPricing(): EditablePricing {
   return { input: "", output: "", cacheRead: "", cacheWrite: "" };
@@ -100,7 +108,8 @@ function blankProvider(): EditableProvider {
   return {
     key: crypto.randomUUID(),
     name: "",
-    baseUrl: "https://api.anthropic.com",
+    kind: "anthropic",
+    baseUrl: DEFAULT_BASE_URL.anthropic,
     apiKey: "",
     hasApiKey: false,
     models: [""],
@@ -113,6 +122,7 @@ function fromSettings(data: SettingsWithPricing): EditableProvider[] {
     key: provider.id,
     id: provider.id,
     name: provider.name,
+    kind: provider.kind ?? "anthropic",
     baseUrl: provider.baseUrl,
     apiKey: "",
     hasApiKey: provider.hasApiKey,
@@ -269,6 +279,7 @@ export function SettingsPage() {
         const draft: ProviderDraftWithPricing = {
           id: provider.id,
           name: provider.name.trim(),
+          kind: provider.kind,
           baseUrl: provider.baseUrl.trim(),
           models: provider.models.map((model) => model.trim()).filter(Boolean),
         };
@@ -399,7 +410,7 @@ export function SettingsPage() {
   return (
     <section className="page settings-page">
       <h1 tabIndex={-1}>设置</h1>
-      <p className="lead">每套配置是一个地址和它的密钥，可以挂多个模型名。密钥只写在这台开发机上，保存后不会再显示。</p>
+      <p className="lead">每套配置选择协议类型（Anthropic 兼容或 Gemini），填地址、密钥和多个模型名。密钥只写在这台开发机上，保存后不会再显示。</p>
       <form id="settings-form" className="stack settings-form" onSubmit={onSave} noValidate>
         {providers.map((provider, index) => {
           const result = testResults[provider.key];
@@ -436,6 +447,24 @@ export function SettingsPage() {
               />
             </label>
             <label className="field">
+              类型
+              <select
+                value={provider.kind}
+                onChange={(event) => {
+                  const kind = event.target.value as ProviderKind;
+                  const current = provider.baseUrl.trim();
+                  // 只替换仍是另一类型默认值的地址，用户自己填过的保持不动。
+                  const baseUrl = !current || current === DEFAULT_BASE_URL[provider.kind]
+                    ? DEFAULT_BASE_URL[kind]
+                    : provider.baseUrl;
+                  update(provider.key, { kind, baseUrl });
+                }}
+              >
+                <option value="anthropic">Anthropic 兼容</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </label>
+            <label className="field">
               地址
               <input
                 ref={(element) => { fieldRefs.current[`${provider.key}:baseUrl`] = element; }}
@@ -444,6 +473,11 @@ export function SettingsPage() {
                 onChange={(event) => update(provider.key, { baseUrl: event.target.value })}
               />
             </label>
+            <p className="muted">
+              {provider.kind === "gemini"
+                ? "Gemini API 地址，会自动补 /v1beta；一般留默认值即可。"
+                : "兼容 Anthropic Messages 的地址，会作为 ANTHROPIC_BASE_URL 传给 Agent SDK。"}
+            </p>
             <div className="field">
               <label htmlFor={`provider-key-${provider.key}`}>API key</label>
               <span className="secret-input">
@@ -455,7 +489,7 @@ export function SettingsPage() {
                   value={provider.apiKey}
                   placeholder={
                     !provider.hasApiKey
-                      ? "粘贴 API key"
+                      ? (provider.kind === "gemini" ? "粘贴 Gemini API key" : "粘贴 API key")
                       : revealedKeys[provider.key]
                         // 已保存的密钥不会从服务端返回，明文只能显示新输入的内容。
                         ? "已保存的密钥无法查看，输入新值可替换"
@@ -520,6 +554,11 @@ export function SettingsPage() {
               <button type="button" className="btn" onClick={() => update(provider.key, { models: [...provider.models, ""] })}>
                 添加模型
               </button>
+              <p className="muted">
+                {provider.kind === "gemini"
+                  ? "例如 gemini-2.5-pro、gemini-2.5-flash。"
+                  : "模型名会原样传给接口。"}
+              </p>
             </div>
             <div className="stack">
               <span className="muted">价格（美元 / 百万 token，留空表示不计算成本）</span>

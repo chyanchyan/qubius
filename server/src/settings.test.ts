@@ -585,3 +585,63 @@ test("确认超时、限制和归档保留天数只接受合法区间", () => {
     assert.throws(() => applySettingsPatch(sample(), { limits }), /limits/);
   }
 });
+
+test("接口类型缺省按 anthropic 处理，Gemini 类型会保存并对外展示", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-provider-kind-"));
+  saveSettings(dir, {
+    ...sample(),
+    providers: [{
+      id: "p1",
+      name: "Gemini",
+      kind: "gemini",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      apiKey: "AIza-secret",
+      models: ["gemini-2.5-pro"],
+    }],
+  });
+  const loaded = loadSettings(dir);
+  assert.equal(loaded.providers[0]?.kind, "gemini");
+  assert.equal(publicSettings(loaded).providers[0]?.kind, "gemini");
+
+  // 老文件没有 kind 字段时按 Anthropic 兼容接口处理，对外也返回明确类型。
+  const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-provider-kind-legacy-"));
+  fs.writeFileSync(path.join(legacyDir, "secrets.json"), JSON.stringify({
+    effort: "high",
+    providers: [{
+      id: "p1",
+      name: "官方",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: secret,
+      models: ["sonnet"],
+    }],
+  }));
+  const legacy = loadSettings(legacyDir);
+  assert.equal(legacy.providers[0]?.kind, "anthropic");
+  assert.equal(publicSettings(legacy).providers[0]?.kind, "anthropic");
+});
+
+test("改接口类型且留空密钥时拒绝沿用旧密钥", () => {
+  // 地址不变、只改类型也拒绝沿用旧密钥。
+  assert.throws(() => applySettingsPatch(sample(), {
+    providers: [{
+      id: "p1",
+      name: "官方",
+      kind: "gemini",
+      baseUrl: "https://api.anthropic.com",
+      models: ["gemini-2.5-pro"],
+    }],
+  }), /接口类型变化时必须重新填写 API key/);
+
+  const next = applySettingsPatch(sample(), {
+    providers: [{
+      id: "p1",
+      name: "官方",
+      kind: "gemini",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      apiKey: "AIza-new",
+      models: ["gemini-2.5-pro"],
+    }],
+  });
+  assert.equal(next.providers[0]?.kind, "gemini");
+  assert.equal(next.providers[0]?.apiKey, "AIza-new");
+});

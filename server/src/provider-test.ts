@@ -1,4 +1,6 @@
 import { claudeConnection } from "./endpoint.js";
+import { geminiApiBase, geminiModelId } from "./gemini.js";
+import type { ProviderKind } from "./types.js";
 
 export interface ProviderTestResult {
   ok: boolean;
@@ -7,6 +9,8 @@ export interface ProviderTestResult {
 }
 
 export interface ProviderTestInput {
+  /** 缺省按 Anthropic 兼容接口测试。 */
+  kind?: ProviderKind;
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -32,6 +36,7 @@ export async function testProvider(
   input: ProviderTestInput,
   deps?: { fetch?: typeof fetch },
 ): Promise<ProviderTestResult> {
+  if (input.kind === "gemini") return testGeminiProvider(input, deps);
   // DeepSeek 等兼容接口需要先规范化 base 和模型名（例如加 [1m]）。
   const connection = claudeConnection(input.baseUrl, input.model);
   const url = `${connection.baseUrl}/v1/messages`;
@@ -96,6 +101,89 @@ export async function testProvider(
     }
     // 上游可能在错误体里回显请求 key（或 Bearer 头），展示前先脱敏。
     const snippet = redactSecrets(text.trim(), input.apiKey).slice(0, DETAIL_BODY_LIMIT);
+    return {
+      ok: false,
+      status,
+      detail: snippet ? `HTTP ${status}：${snippet}` : `HTTP ${status}`,
+    };
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+/**
+ * Gemini 原生接口的最小连通性测试：generateContent 发一个 ping。
+ * Gemini 的无效 key 大多返回 400 + "API key not valid"，需要单独识别。
+ */
+async function testGeminiProvider(
+  input: ProviderTestInput,
+  deps?: { fetch?: typeof fetch },
+): Promise<ProviderTestResult> {
+  const url = `${geminiApiBase(input.baseUrl)}/models/${encodeURIComponent(geminiModelId(input.model))}:generateContent`;
+  const doFetch = deps?.fetch ?? fetch;
+  const timeout = timeoutSignal(TIMEOUT_MS);
+
+  try {
+    let response: Response;
+    try {
+      response = await doFetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": input.apiKey,
+        },
+        // 不设 maxOutputTokens：2.5 Pro 等模型的思考预算不能为 0，
+        // 太小的输出上限反而会被 Gemini 以 400 拒绝。
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: "ping" }] }],
+        }),
+        redirect: "manual",
+        signal: timeout.signal,
+      });
+    } catch (reason) {
+      const name = reason instanceof Error ? reason.name : "";
+      if (timeout.signal.aborted || name === "TimeoutError" || name === "AbortError") {
+        return { ok: false, detail: `连接超时（${TIMEOUT_MS / 1000} 秒），请检查接口地址和网络` };
+      }
+      return { ok: false, detail: "网络连接失败，请检查接口地址和网络" };
+    }
+
+    const status = response.status;
+    if (response.ok) {
+      await discardBody(response);
+      return { ok: true, status, detail: "连接正常" };
+    }
+    if (status === 0 || (status >= 300 && status < 400)) {
+      await discardBody(response);
+      return {
+        ok: false,
+        status: status || undefined,
+        detail: "地址配置错误：接口返回了重定向，请检查接口地址",
+      };
+    }
+
+    const text = await readLimitedText(response, ERROR_BODY_READ_LIMIT);
+    let message = text.trim();
+    try {
+      const json = JSON.parse(text) as { error?: { message?: unknown } };
+      if (typeof json.error?.message === "string") message = json.error.message;
+    } catch {
+      // 不是 JSON 就保留原文。
+    }
+    const snippet = redactSecrets(message, input.apiKey).slice(0, DETAIL_BODY_LIMIT);
+
+    if (status === 401 || status === 403) {
+      return { ok: false, status, detail: "API key 无效或没有权限" };
+    }
+    if (status === 400 && /api[_ ]?key/i.test(snippet)) {
+      return { ok: false, status, detail: "API key 无效或没有权限" };
+    }
+    if (status === 404 || (status === 400 && /not found|not supported|does not exist/i.test(snippet))) {
+      return { ok: false, status, detail: "地址或模型不存在" };
+    }
+    if (status === 429) {
+      return { ok: false, status, detail: "接口可达，但被限流，请稍后重试" };
+    }
     return {
       ok: false,
       status,

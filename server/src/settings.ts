@@ -3,7 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "./atomic-file.js";
 import { DEFAULT_LIMITS, LIMIT_RULES, type LimitsConfig } from "./config.js";
-import { isEffort, type Effort, type PublicProvider, type PublicSettings } from "./types.js";
+import {
+  isEffort,
+  isProviderKind,
+  type Effort,
+  type ProviderKind,
+  type PublicProvider,
+  type PublicSettings,
+} from "./types.js";
 
 /** 每百万 token 的美元价格；缺失表示不计算这一项成本。 */
 export interface ProviderPricing {
@@ -16,10 +23,17 @@ export interface ProviderPricing {
 export interface ProviderConfig {
   id: string;
   name: string;
+  /** 缺省表示老配置，按 Anthropic 兼容接口处理。 */
+  kind?: ProviderKind;
   baseUrl: string;
   apiKey: string;
   models: string[];
   pricing?: ProviderPricing;
+}
+
+/** 读取接口类型；老设置文件没有 kind 字段时按 anthropic 处理。 */
+export function providerKind(provider: { kind?: ProviderKind }): ProviderKind {
+  return provider.kind ?? "anthropic";
 }
 
 /** 对外设置里的接口配置：PublicProvider 本身没有价格字段，这里用交叉类型补上。 */
@@ -214,6 +228,7 @@ export function saveSettings(dataDir: string, stored: StoredSettings): void {
         return {
           id: provider.id,
           name: provider.name,
+          kind: providerKind(provider),
           baseUrl: provider.baseUrl,
           apiKey: provider.apiKey,
           models: provider.models,
@@ -244,6 +259,7 @@ export function publicSettings(stored: StoredSettings): PublicSettingsView {
       return {
         id: provider.id,
         name: provider.name,
+        kind: providerKind(provider),
         baseUrl: provider.baseUrl,
         hasApiKey: provider.apiKey.trim().length > 0,
         models: [...provider.models],
@@ -336,6 +352,7 @@ function parseStored(
       providers: [{
         id: randomUUID(),
         name: "默认",
+        kind: "anthropic",
         baseUrl: "https://api.anthropic.com",
         apiKey: apiKey.trim(),
         models: [model || "sonnet"],
@@ -421,11 +438,19 @@ function readSavedProvider(value: unknown): ProviderConfig {
   return {
     id: record.id.trim(),
     name: record.name.trim(),
+    kind: readProviderKind(record.kind),
     baseUrl: record.baseUrl.trim(),
     apiKey: record.apiKey,
     models,
     ...(pricing ? { pricing } : {}),
   };
+}
+
+/** 缺省按 anthropic 兼容接口读取；写入时始终落盘明确的类型。 */
+function readProviderKind(value: unknown): ProviderKind {
+  if (value === undefined) return "anthropic";
+  if (!isProviderKind(value)) throw new Error("接口类型无效");
+  return value;
 }
 
 function readProviderList(value: unknown, current: ProviderConfig[]): ProviderConfig[] {
@@ -439,25 +464,32 @@ function readProviderList(value: unknown, current: ProviderConfig[]): ProviderCo
     const name = readName(record.name);
     if (names.has(name)) throw new Error(`配置名称重复：${name}`);
     names.add(name);
+    const kind = readProviderKind(record.kind);
     const baseUrl = normalizeBaseUrl(record.baseUrl);
     const models = readModels(record.models);
     const requestedId = typeof record.id === "string" ? record.id.trim() : "";
     const existing = requestedId ? current.find((provider) => provider.id === requestedId) : undefined;
     if (requestedId && !existing) throw new Error("接口配置不存在");
     if (requestedId && ids.has(requestedId)) throw new Error("接口配置重复提交");
-    // 留空表示沿用旧密钥；但地址一旦换了，旧密钥不能再跟着发往新地址。
+    // 留空表示沿用旧密钥；但地址或协议一旦换了，旧密钥不能再跟着发往新地址。
     // 旧文件里的地址可能没规范化过（尾斜杠/大写 host 等），比较前先尽量规范化。
     const submittedKey = record.apiKey;
     const keyLeftBlank = submittedKey === undefined
       || (typeof submittedKey === "string" && !submittedKey.trim());
-    if (existing && keyLeftBlank && baseUrl !== normalizedExistingBaseUrl(existing.baseUrl)) {
+    const addressMoved = existing !== undefined
+      && baseUrl !== normalizedExistingBaseUrl(existing.baseUrl);
+    const kindMoved = existing !== undefined && kind !== providerKind(existing);
+    if (existing && keyLeftBlank && addressMoved) {
       throw new Error("接口地址变化时必须重新填写 API key");
+    }
+    if (existing && keyLeftBlank && kindMoved) {
+      throw new Error("接口类型变化时必须重新填写 API key");
     }
     const apiKey = readApiKey(record.apiKey, existing, name);
     const pricing = readPricing(record.pricing);
     const id = existing?.id ?? randomUUID();
     ids.add(id);
-    return { id, name, baseUrl, apiKey, models, ...(pricing ? { pricing } : {}) };
+    return { id, name, kind, baseUrl, apiKey, models, ...(pricing ? { pricing } : {}) };
   });
 }
 
