@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { readAccessEntries } from "./access-entries.js";
 import { ArchiveError, type ArchiveStore } from "./archive.js";
 import { tokenFromRequest, tokenMatches } from "./auth.js";
+import type { BatchWatchManager } from "./batch-watch.js";
 import { queryProviderBalance, supportsBalance } from "./balance.js";
 import { resolveBuildInfo } from "./build-info.js";
 import {
@@ -438,6 +439,7 @@ export function createAppServer(options: {
   push?: PushService;
   schedules?: ScheduleStore;
   scheduleRunner?: ScheduleRunner;
+  batchWatches?: BatchWatchManager;
   /** 配置文件不存在（冷启动）时为 true，部署页据此引导填写。 */
   setupRequired?: boolean;
   /** 公网入口依赖注入（测试）；生产使用默认实现。 */
@@ -1910,6 +1912,7 @@ export function createAppServer(options: {
       store,
       runtime,
       settings: ctx.settings,
+      batchWatches: ctx.batchWatches,
       readJson,
       sendJson,
     });

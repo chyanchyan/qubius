@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { handleBatchWatchRoutes, type BatchWatchManager } from "./batch-watch.js";
 import type { AppConfig } from "./config.js";
 import { handleDiffCommentRoutes } from "./diff-comments.js";
 import { handleMultiModelGroupRoutes } from "./multi-model-groups.js";
@@ -10,10 +11,10 @@ import type { Store } from "./store.js";
 /**
  * 放在 http.ts 之外的独立功能路由。
  *
- * http.ts 已经很大，新增的 diff 评论、PR/MR 和多模型对比分组接口各自放在模块
- * 里；这里只做一次很薄的分发。模块返回 null 表示没匹配到自己的路径，交给后面的静态资源
- * 或 404 处理。模块直接返回状态码和 JSON，不依赖 http.ts 内部的 HttpError，
- * 避免循环引用。
+ * http.ts 已经很大，新增的 diff 评论、PR/MR、多模型对比分组和批量监听整合接口
+ * 各自放在模块里；这里只做一次很薄的分发。模块返回 null 表示没匹配到自己的路径，
+ * 交给后面的静态资源或 404 处理。模块直接返回状态码和 JSON，不依赖 http.ts 内部的
+ * HttpError，避免循环引用。
  */
 export interface FeatureContext {
   req: IncomingMessage;
@@ -24,6 +25,7 @@ export interface FeatureContext {
   store: Store;
   runtime: Runtime;
   settings: { current: StoredSettings };
+  batchWatches?: BatchWatchManager;
   readJson: (req: IncomingMessage) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 }
@@ -39,6 +41,7 @@ const HANDLERS: FeatureHandler[] = [
   handleDiffCommentRoutes,
   handlePullRequestRoutes,
   handleMultiModelGroupRoutes,
+  handleBatchWatchRoutes,
 ];
 
 export async function handleFeatureRoutes(ctx: FeatureContext): Promise<FeatureResult | null> {

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { ArchiveStore } from "./archive.js";
 import { writeFileAtomic } from "./atomic-file.js";
 import { AUTH_TOKEN_FILE, resolveAuthToken } from "./auth.js";
+import { BatchWatchManager, BatchWatchStore } from "./batch-watch.js";
 import { bootstrapConfig, DEFAULT_ALLOWED_HOSTS, loadConfig, type AppConfig } from "./config.js";
 import { envCompat, envFlag } from "./env.js";
 import { deployConfigDir, parseEnvFile } from "./deploy.js";
@@ -326,6 +327,30 @@ const scheduleRunner = scheduleStore
     },
   })
   : undefined;
+// 批量会话监听与自动整合：等待阶段订阅 Store 事件不消耗模型 token，全部完成后自动启动指定模型的审核会话。
+let batchWatchManager: BatchWatchManager | undefined;
+try {
+  const watchStore = new BatchWatchStore(config.dataDir);
+  batchWatchManager = new BatchWatchManager({
+    config,
+    store,
+    runtime,
+    settings,
+    watchStore,
+    createReviewSession: async (input) => {
+      const session = await createSession(input.project, {
+        prompt: input.prompt,
+        providerId: input.providerId,
+        model: input.model,
+        effort: input.effort,
+        title: input.title,
+      }, { config, store, runtime, settings });
+      return { id: session.id };
+    },
+  });
+} catch (error) {
+  console.error("[batch-watch] 初始化批量会话监听失败，该功能暂不可用:", error);
+}
 // 命令行与 /api 共用同一套 Host/令牌校验；PTY 走普通 HTTP 流。
 const terminalController = config.terminal === false
   ? undefined
@@ -355,6 +380,7 @@ const server = createAppServer({
   push,
   schedules: scheduleStore,
   scheduleRunner,
+  batchWatches: batchWatchManager,
   setupRequired,
   configFile,
   ...(authTokenSource ? { authTokenSource } : {}),
@@ -384,6 +410,7 @@ server.listen(config.port, config.host, () => {
   console.log(`qubius listening on http://${config.host}:${config.port}`);
 });
 scheduleRunner?.start();
+batchWatchManager?.start();
 
 if (sweeper) {
   const tick = () => {
@@ -409,6 +436,7 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
   shuttingDown = true;
   // 先停止接收新工作，避免 close 等待期间又开新会话。
   scheduleRunner?.stop();
+  batchWatchManager?.stop();
   runtime.beginShutdown();
   console.log(`收到 ${signal}，停止接收新请求`);
   // server.close 只停止接收新连接；SSE 这类长连接必须主动断开，否则会等满宽限。

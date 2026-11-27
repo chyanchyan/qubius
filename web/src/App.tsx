@@ -40,6 +40,7 @@ import {
   formatMessageFullTime,
 } from "./format";
 import { Approval } from "./components/Approval";
+import { BatchWatchPanel } from "./components/BatchWatchPanel";
 import { BranchBadge } from "./components/BranchBadge";
 import { ChipSelect, type ChipSelectOption } from "./components/ChipSelect";
 import { ComposerConfig } from "./components/ComposerConfig";
@@ -57,6 +58,8 @@ import { WorkflowDock } from "./components/WorkflowDock";
 import { DENSITY_OPTIONS, useDensity } from "./density";
 import { detectWorkflowSkill, WORKFLOW_OPTIONS } from "./workflow-mode";
 import { getDeployState } from "./api-deploy";
+import { getBatchWatches } from "./api-batch-watch";
+import { activeWatchCount } from "./batch-watch";
 import { startDiscussion } from "./api-discussion";
 import { AccessModeIcon, FontSizeIcon, MoreIcon, RefreshIcon } from "./header-icons";
 import { getMergeStatus, type MergeStatus } from "./api-git";
@@ -1451,6 +1454,10 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   const [archivedBusy, setArchivedBusy] = useState<{ id: string; action: "restore" | "delete" | "cleanup" } | null>(null);
   const [sweeping, setSweeping] = useState(false);
   const [showSchedules, setShowSchedules] = useState(false);
+  const [showBatchWatch, setShowBatchWatch] = useState(false);
+  const [batchWatchCount, setBatchWatchCount] = useState(0);
+  const [batchWatchSeed, setBatchWatchSeed] = useState<string[] | undefined>(undefined);
+  const clearBatchWatchSeed = useCallback(() => setBatchWatchSeed(undefined), []);
   const archiveSeq = useRef(0);
 
   const refreshArchive = useCallback(async () => {
@@ -1872,6 +1879,17 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     void refreshArchive();
     void refreshMerge();
     loadSettings();
+    let alive = true;
+    getBatchWatches(projectId)
+      .then((data) => {
+        if (alive) setBatchWatchCount(activeWatchCount(data.watches));
+      })
+      .catch(() => {
+        if (alive) setBatchWatchCount(0);
+      });
+    return () => {
+      alive = false;
+    };
   }, [projectId, loadProject, loadSettings, refreshMerge]);
 
   /* 会话被归档或被其他端删除后，选中集合里已经不在列表中的 id 要丢掉。 */
@@ -2186,9 +2204,16 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
         ]
       : []),
     {
+      id: "batch-watch",
+      label: showBatchWatch
+        ? "收起监听整合"
+        : `监听整合${batchWatchCount > 0 ? ` (${batchWatchCount})` : ""}`,
+      separatorBefore: true,
+      onSelect: () => setShowBatchWatch((value) => !value),
+    },
+    {
       id: "schedules",
       label: showSchedules ? "收起定时任务" : "定时任务",
-      separatorBefore: true,
       onSelect: () => setShowSchedules((value) => !value),
     },
   ];
@@ -2379,6 +2404,16 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
       <div className="archive-bar schedules-bar-wide">
         <button
           className="text-btn"
+          aria-expanded={showBatchWatch}
+          onClick={() => setShowBatchWatch((value) => !value)}
+        >
+          {showBatchWatch
+            ? "收起监听整合"
+            : `监听整合${batchWatchCount > 0 ? ` (${batchWatchCount})` : ""}`}
+        </button>
+        <span className="archive-path">脚本监听多个会话并在完成后用指定模型审核合入</span>
+        <button
+          className="text-btn"
           aria-expanded={showSchedules}
           onClick={() => setShowSchedules((value) => !value)}
         >
@@ -2386,6 +2421,20 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
         </button>
         <span className="archive-path">按固定间隔自动新建对话</span>
       </div>
+      {showBatchWatch && (
+        <BatchWatchPanel
+          projectId={projectId}
+          sessions={sessions}
+          providers={settings?.providers ?? []}
+          defaultProviderId={providerId}
+          defaultModel={model}
+          defaultEffort={effort}
+          initialSessionIds={batchWatchSeed}
+          onInitialConsumed={clearBatchWatchSeed}
+          onActiveCountChange={setBatchWatchCount}
+          go={go}
+        />
+      )}
       {showSchedules && <SchedulesPanel projectId={projectId} go={go} />}
       {selectMode && (
         <div className="archive-bar select-bar">
@@ -2403,6 +2452,18 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
             onClick={() => setSelectedIds(new Set())}
           >
             清除
+          </button>
+          <button
+            className="text-btn"
+            disabled={clearing || selectedIds.size === 0}
+            onClick={() => {
+              setBatchWatchSeed([...selectedIds]);
+              setShowBatchWatch(true);
+              setSelectMode(false);
+              setSelectedIds(new Set());
+            }}
+          >
+            监听整合 ({selectedIds.size})
           </button>
           <button
             className="text-btn danger"
