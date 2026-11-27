@@ -32,7 +32,7 @@ import {
   type WizardMode,
 } from "../deploy-wizard";
 import { pathIsAbsolute } from "../deploy-path";
-import { Dialog, Notice, useDialogs } from "../ui";
+import { Dialog, Notice, SecretInput, useDialogs } from "../ui";
 import { DeployWizard } from "./DeployWizard";
 import { EdgePanel } from "./EdgePanel";
 import { Hint } from "./FieldHint";
@@ -345,20 +345,29 @@ function TextField({ label, value, placeholder, className, type = "text", disabl
   action?: ReactNode;
   onChange: (value: string) => void;
 }) {
+  const control = type === "password" ? (
+    <SecretInput
+      revealLabel={label}
+      value={value}
+      placeholder={placeholder}
+      autoComplete="off"
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ) : (
+    <input
+      type={type}
+      value={value}
+      placeholder={placeholder}
+      autoComplete="off"
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
   return (
     <label className={className ? `field ${className}` : "field"}>
       <span className="field-label">{label}{hint && <Hint text={hint} />}</span>
-      <span className={action ? "field-control" : undefined}>
-        <input
-          type={type}
-          value={value}
-          placeholder={placeholder}
-          autoComplete="off"
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        {action}
-      </span>
+      {action ? <span className="field-control">{control}{action}</span> : control}
     </label>
   );
 }

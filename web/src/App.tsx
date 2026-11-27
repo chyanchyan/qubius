@@ -92,7 +92,7 @@ import {
 import { setBaseTitle } from "./title";
 import { useDraftPersistence } from "./useDraftPersistence";
 import { useEventStream } from "./useEventStream";
-import { ConnectionBanner, ErrorState, InlineLoading, Menu, Notice, PageLoading, useDialogs, type MenuItem } from "./ui";
+import { ConnectionBanner, ErrorState, InlineLoading, Menu, Notice, PageLoading, SecretInput, useDialogs, type MenuItem } from "./ui";
 import { onVisibleViewportChange, useVisibleViewport } from "./viewport";
 import {
   answerSession,
@@ -530,8 +530,8 @@ function TokenPrompt({ onClose }: { onClose: () => void }) {
         )}
         <label className="field dialog-field">
           <span>访问令牌</span>
-          <input
-            type="password"
+          <SecretInput
+            revealLabel="访问令牌"
             autoComplete="off"
             autoFocus
             value={value}

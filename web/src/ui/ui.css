@@ -19,6 +19,35 @@ textarea::placeholder {
   border: 0;
 }
 
+/* ---- 密码/令牌输入的明文切换 ---- */
+
+.secret-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.secret-input input {
+  flex: 1;
+  min-width: 0;
+  /* 给右侧眼睛按钮留出位置，长密钥不会压到图标下面。 */
+  padding-right: calc(34px * var(--control-scale));
+}
+
+.secret-toggle {
+  position: absolute;
+  right: calc(4px * var(--control-scale));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(26px * var(--control-scale));
+  height: calc(26px * var(--control-scale));
+  padding: 0;
+  color: var(--muted);
+}
+
 /* ---- 对话框 ---- */
 
 .dialog-backdrop {

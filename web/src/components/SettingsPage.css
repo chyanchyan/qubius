@@ -122,29 +122,6 @@
 }
 
 /* API key 显示/隐藏按钮：叠在输入框右侧，不额外占一行。 */
-.secret-input {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.secret-input input {
-  /* 给右侧按钮留出位置，长密钥不会压到图标下面。 */
-  padding-right: calc(34px * var(--control-scale));
-}
-
-.secret-toggle {
-  position: absolute;
-  right: calc(4px * var(--control-scale));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: calc(26px * var(--control-scale));
-  height: calc(26px * var(--control-scale));
-  padding: 0;
-  color: var(--muted);
-}
-
 @media (max-width: 640px) {
   .settings-provider-name {
     max-width: 100%;

@@ -25,7 +25,7 @@ import {
   type Settings,
 } from "../api";
 import { testSettingsProvider, type ProviderPricing } from "../api-usage";
-import { Notice, useDialogs } from "../ui";
+import { Notice, SecretInput, useDialogs } from "../ui";
 import { PushSettings } from "./PushSettings";
 import "./SettingsPage.css";
 
@@ -737,8 +737,8 @@ export function SettingsPage() {
         </p>
         <label className="field">
           访问令牌
-          <input
-            type="password"
+          <SecretInput
+            revealLabel="访问令牌"
             autoComplete="off"
             value={apiToken}
             placeholder="粘贴访问令牌"

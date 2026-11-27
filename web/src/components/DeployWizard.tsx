@@ -21,7 +21,7 @@ import {
   type WizardRole,
   type WizardScenario,
 } from "../deploy-wizard";
-import { Notice } from "../ui";
+import { Notice, SecretInput } from "../ui";
 import "./DeployWizard.css";
 
 /* 分步部署向导：首次运行（还没有 config.yaml）时自动进入，已有配置时由部署页的
@@ -162,8 +162,8 @@ function OptionalSettings({
         {form.authMode === "custom" && (
           <label className="field">
             自定义访问令牌
-            <input
-              type="password"
+            <SecretInput
+              revealLabel="访问令牌"
               value={form.authToken}
               placeholder={form.authTokenSet ? "已设置，留空保持不变" : "16 到 512 个字符"}
               autoComplete="off"
@@ -217,8 +217,8 @@ function OptionalSettings({
             />
             <label className="field">
               局域网登录密码
-              <input
-                type="password"
+              <SecretInput
+                revealLabel="局域网登录密码"
                 value={form.lanAuthPassword}
                 placeholder={form.lanAuthPasswordSet ? "已设置，留空保持不变" : "留空自动生成"}
                 autoComplete="off"

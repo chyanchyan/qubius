@@ -23,3 +23,4 @@ export {
 } from "./Feedback";
 export { Lightbox, type LightboxImage } from "./Lightbox";
 export { Menu, type MenuItem } from "./Menu";
+export { SecretInput } from "./SecretInput";
