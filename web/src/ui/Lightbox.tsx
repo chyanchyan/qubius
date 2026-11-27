@@ -13,7 +13,7 @@ export interface LightboxImage {
   href?: string;
 }
 
-/** 对话图片的全屏查看层；左右键/按钮切换同一条消息里的图片。 */
+/** 对话图片的全屏查看层；点图片或背景关闭，左右键/按钮切换同一条消息里的图片。 */
 export function Lightbox({
   images,
   index,
@@ -26,14 +26,14 @@ export function Lightbox({
   onClose: () => void;
 }) {
   const backdropRef = useRef<HTMLDivElement>(null);
-  const closeRef = useRef<HTMLButtonElement>(null);
   const open = index !== null && images.length > 0;
 
-  /* 只在打开/关闭时保存和恢复焦点；切换图片不能重新抢焦点。 */
+  /* 只在打开/关闭时保存和恢复焦点；切换图片不能重新抢焦点。
+     没有关闭按钮后焦点落在对话框本身，Esc 仍然可以关闭。 */
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    closeRef.current?.focus();
+    backdropRef.current?.focus();
     return () => previous?.focus();
   }, [open]);
 
@@ -51,14 +51,19 @@ export function Lightbox({
         onIndexChange(((index ?? 0) + 1) % images.length);
       } else if (event.key === "Tab") {
         const nodes = backdropRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
-        if (!nodes || nodes.length === 0) return;
+        if (!nodes || nodes.length === 0) {
+          // 单张图片且没有外链时页内没有可聚焦控件，把焦点留在对话框上。
+          event.preventDefault();
+          return;
+        }
         const first = nodes[0];
         const last = nodes[nodes.length - 1];
         if (!first || !last) return;
-        if (event.shiftKey && document.activeElement === first) {
+        const active = document.activeElement;
+        if (event.shiftKey && (active === first || active === backdropRef.current)) {
           event.preventDefault();
           last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
+        } else if (!event.shiftKey && (active === last || active === backdropRef.current)) {
           event.preventDefault();
           first.focus();
         }
@@ -79,44 +84,45 @@ export function Lightbox({
       role="dialog"
       aria-modal="true"
       aria-label="查看图片"
+      tabIndex={-1}
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <div className="lightbox-body">
-        <img src={image.src} alt={image.alt} />
+        {/* 再点一次图片即关闭，不再需要单独的关闭按钮。 */}
+        <img src={image.src} alt={image.alt} onClick={onClose} />
       </div>
-      <div className="lightbox-bar">
-        {images.length > 1 && (
-          <>
-            <button
-              type="button"
-              className="lightbox-btn"
-              aria-label="上一张"
-              onClick={() => onIndexChange(((index ?? 0) - 1 + images.length) % images.length)}
-            >
-              ‹
-            </button>
-            <span className="lightbox-count">{index + 1} / {images.length}</span>
-            <button
-              type="button"
-              className="lightbox-btn"
-              aria-label="下一张"
-              onClick={() => onIndexChange(((index ?? 0) + 1) % images.length)}
-            >
-              ›
-            </button>
-          </>
-        )}
-        {image.href && (
-          <a className="lightbox-link" href={image.href} target="_blank" rel="noreferrer">
-            新标签打开原图
-          </a>
-        )}
-        <button ref={closeRef} type="button" className="lightbox-btn lightbox-close" onClick={onClose}>
-          关闭
-        </button>
-      </div>
+      {(images.length > 1 || image.href) && (
+        <div className="lightbox-bar">
+          {images.length > 1 && (
+            <>
+              <button
+                type="button"
+                className="lightbox-btn"
+                aria-label="上一张"
+                onClick={() => onIndexChange(((index ?? 0) - 1 + images.length) % images.length)}
+              >
+                ‹
+              </button>
+              <span className="lightbox-count">{index + 1} / {images.length}</span>
+              <button
+                type="button"
+                className="lightbox-btn"
+                aria-label="下一张"
+                onClick={() => onIndexChange(((index ?? 0) + 1) % images.length)}
+              >
+                ›
+              </button>
+            </>
+          )}
+          {image.href && (
+            <a className="lightbox-link" href={image.href} target="_blank" rel="noreferrer">
+              新标签打开原图
+            </a>
+          )}
+        </div>
+      )}
     </div>,
     document.body,
   );

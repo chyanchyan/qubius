@@ -311,6 +311,8 @@ textarea::placeholder {
   max-height: 100%;
   object-fit: contain;
   border-radius: 4px;
+  /* 点击图片即关闭，用缩小光标提示。 */
+  cursor: zoom-out;
 }
 
 .lightbox-bar {
@@ -337,7 +339,6 @@ textarea::placeholder {
 
 .lightbox-link { color: #f1c9b8; }
 .lightbox-count { color: #dddddd; font-variant-numeric: tabular-nums; }
-.lightbox-close { margin-left: auto; }
 
 @media (pointer: coarse) {
   .dialog-actions .btn,
