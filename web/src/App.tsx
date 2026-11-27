@@ -109,13 +109,17 @@ import {
   getSessionMessages,
   getSessions,
   getSettings,
+  MAX_CONCURRENT_MAX,
+  MAX_CONCURRENT_MIN,
   mergeSessionFrame,
+  parseMaxConcurrentInput,
   PERMISSION_LABEL,
   prependHistoryPage,
   PERMISSIONS,
   PHASE_LABEL,
   readApiToken,
   restoreArchivedSession,
+  saveMaxConcurrent,
   saveProjectPermission,
   sendMessage,
   SETTINGS_SAVED_EVENT,
@@ -318,22 +322,158 @@ function FontStepButton({
 /**
  * 顶栏左上角：所有对话里正在运行的 agent 总数（主 agent + 子 agent）/ 设置里的上限，
  * 右侧是全部 agent 当前输出速度的合计（tokens/s，按流式增量估算）；空闲时隐藏。
+ *
+ * 计数本身就是设置并发上限的入口：点击后在原位置展开输入框（不弹对话框），
+ * 回车或「保存」写回设置，Esc /「取消」收起。
  */
-function AgentBadge({ running, limit, speed }: { running: number; limit: number; speed: number }) {
+function AgentBadge({ running, limit, speed, onSaveLimit }: {
+  running: number;
+  limit: number;
+  speed: number;
+  /** 保存并发上限；成功返回 null，失败返回可展示的错误文案。 */
+  onSaveLimit: (limit: number) => Promise<string | null>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(limit));
+  const [saving, setSaving] = useState(false);
+  /* 顶栏只放一段短提示，完整原因放在 title 里。 */
+  const [error, setError] = useState("");
+  const [errorDetail, setErrorDetail] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const label = speed > 0
     ? `运行中的 agent ${running}，上限 ${limit}，当前输出速度 ${speed} token/s`
     : `运行中的 agent ${running}，上限 ${limit}`;
+
+  /* 每次进入编辑都从当前上限开始，并直接聚焦、全选，键盘可以直接改。 */
+  useEffect(() => {
+    if (!editing) return;
+    setDraft(String(limit));
+    setError("");
+    setErrorDetail("");
+    const frame = window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
+    // 只在打开时同步一次；编辑期间外部改上限不应该覆盖用户正在输入的值。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
+
+  async function commit() {
+    if (saving) return;
+    const next = parseMaxConcurrentInput(draft);
+    if (next === null) {
+      setError(`${MAX_CONCURRENT_MIN}-${MAX_CONCURRENT_MAX} 的整数`);
+      setErrorDetail(`并发上限必须是 ${MAX_CONCURRENT_MIN} 到 ${MAX_CONCURRENT_MAX} 之间的整数`);
+      inputRef.current?.focus();
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setErrorDetail("");
+    let message: string | null = null;
+    try {
+      message = await onSaveLimit(next);
+    } catch (reason) {
+      message = reason instanceof Error ? reason.message : "保存失败";
+    } finally {
+      setSaving(false);
+    }
+    if (message) {
+      setError("保存失败");
+      setErrorDetail(message);
+      inputRef.current?.focus();
+      return;
+    }
+    setEditing(false);
+  }
+
+  function cancel() {
+    if (saving) return;
+    setEditing(false);
+    setError("");
+    setErrorDetail("");
+  }
+
+  if (editing) {
+    return (
+      <span
+        className="agent-badge agent-badge-editing"
+        data-over={running > limit || undefined}
+        title={`运行中的 agent ${running}，当前上限 ${limit}`}
+      >
+        <span className="agent-badge-label">agent</span>
+        <span className="agent-badge-count">{running}</span>
+        <span className="agent-badge-limit-label">上限</span>
+        <input
+          ref={inputRef}
+          className="agent-limit-input"
+          type="number"
+          min={MAX_CONCURRENT_MIN}
+          max={MAX_CONCURRENT_MAX}
+          step={1}
+          inputMode="numeric"
+          aria-label={`并发上限（${MAX_CONCURRENT_MIN} 到 ${MAX_CONCURRENT_MAX}）`}
+          value={draft}
+          disabled={saving}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            if (error) {
+              setError("");
+              setErrorDetail("");
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void commit();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              /* 键盘用户收起编辑时不要让 Esc 继续冒泡到页面的其他快捷键。 */
+              event.stopPropagation();
+              cancel();
+            }
+          }}
+        />
+        {error && (
+          <span className="agent-badge-error" role="alert" title={errorDetail || error}>
+            {error}
+          </span>
+        )}
+        <button
+          type="button"
+          className="agent-badge-action"
+          disabled={saving}
+          onClick={() => void commit()}
+        >
+          {saving ? "保存中…" : "保存"}
+        </button>
+        <button
+          type="button"
+          className="agent-badge-action"
+          disabled={saving}
+          onClick={cancel}
+        >
+          取消
+        </button>
+      </span>
+    );
+  }
+
   return (
-    <span
+    <button
+      type="button"
       className="agent-badge"
       data-over={running > limit || undefined}
-      title={label}
-      aria-label={label}
+      title={`${label}；点击设置并发上限`}
+      aria-label={`${label}；点击设置并发上限`}
+      onClick={() => setEditing(true)}
     >
       <span className="agent-badge-label">agent</span>
       <span className="agent-badge-count">{running}/{limit}</span>
       {speed > 0 && <span className="agent-badge-speed" aria-hidden="true">{speed} tok/s</span>}
-    </span>
+    </button>
   );
 }
 
@@ -440,6 +580,18 @@ export function App() {
       cancelled = true;
       window.removeEventListener(SETTINGS_SAVED_EVENT, onSaved);
     };
+  }, []);
+  /* 顶栏计数旁的即时入口：只把并发上限作为补丁提交，接口配置和 effort 不动。 */
+  const saveAgentLimit = useCallback(async (limit: number): Promise<string | null> => {
+    try {
+      const saved = await saveMaxConcurrent(limit);
+      setSessionLimit(clampMaxConcurrent(saved.maxConcurrent));
+      // 其他监听者（例如设置页）与顶栏使用同一份最新设置。
+      window.dispatchEvent(new CustomEvent(SETTINGS_SAVED_EVENT, { detail: saved }));
+      return null;
+    } catch (reason) {
+      return reason instanceof Error ? reason.message : "保存失败";
+    }
   }, []);
   /* 命令行页的项目上下文放在 query（/terminal?project=<id>）里：
      从项目页点「命令行」时据此让 PTY 在项目仓库路径下启动。 */
@@ -611,6 +763,7 @@ export function App() {
           running={attention.runningAgents}
           limit={sessionLimit}
           speed={attention.tokenSpeed}
+          onSaveLimit={saveAgentLimit}
         />
         <nav className="bar-actions">
           {/* 极窄宽度下只有这层导航滚动；字号组和「更多」菜单留在滚动层外面，

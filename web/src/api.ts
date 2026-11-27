@@ -460,6 +460,17 @@ export function clampMaxConcurrent(value: unknown): number {
   return Math.min(MAX_CONCURRENT_MAX, Math.max(MAX_CONCURRENT_MIN, Math.round(value)));
 }
 
+/**
+ * 解析顶栏输入框里的并发上限：只接受 1..256 的十进制整数。
+ * 空串、小数、正负号和超出范围的数字都返回 null，交给调用方提示。
+ */
+export function parseMaxConcurrentInput(value: string): number | null {
+  const text = value.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const limit = Number(text);
+  return limit >= MAX_CONCURRENT_MIN && limit <= MAX_CONCURRENT_MAX ? limit : null;
+}
+
 export type SecondaryState = "idle" | "running" | "success" | "failed";
 export type PrimaryRelation = "up-to-date" | "behind" | "diverged" | "unknown";
 
@@ -827,6 +838,14 @@ export function saveSettings(body: {
   maxConcurrent?: number;
 }, signal?: AbortSignal): Promise<Settings> {
   return request("/api/settings", { method: "PUT", body: JSON.stringify(body) }, signal);
+}
+
+/**
+ * 只改并发上限；服务端按补丁合并，接口配置和 effort 保持不变。
+ * 顶栏的 agent 计数点开后直接走这里，不必先读整份设置再原样写回。
+ */
+export function saveMaxConcurrent(maxConcurrent: number, signal?: AbortSignal): Promise<Settings> {
+  return request("/api/settings", { method: "PUT", body: JSON.stringify({ maxConcurrent }) }, signal);
 }
 
 export function getSessions(projectId: string, signal?: AbortSignal): Promise<{ sessions: Session[] }> {

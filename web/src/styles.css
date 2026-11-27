@@ -345,9 +345,66 @@ summary:focus-visible {
 
 .agent-badge[data-over="true"] .agent-badge-count { color: var(--warn); }
 
+/* 计数本身就是并发上限的入口：点击原地展开输入框，不弹对话框。
+   button 版本沿用上面的胶囊样式，只补可点击的反馈。 */
+button.agent-badge { font: inherit; cursor: pointer; }
+button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var(--fg); }
+.agent-badge[data-over="true"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+/* 编辑态：同一个胶囊里放输入框和保存/取消，顶栏保持一行。 */
+.agent-badge-editing { cursor: default; }
+.agent-badge-editing .agent-badge-count { font-weight: 600; color: var(--fg); }
+.agent-badge-limit-label { color: var(--muted); font-size: var(--fs-12); }
+
+/* 数字输入框：沿用输入框配色，去掉上下箭头，宽度只够 1..256。 */
+.agent-limit-input {
+  width: calc(4.5ch * var(--control-scale));
+  min-width: 0;
+  padding: calc(1px * var(--control-scale)) calc(3px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--input);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.agent-limit-input::-webkit-inner-spin-button,
+.agent-limit-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.agent-limit-input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
+.agent-badge-action {
+  padding: calc(1px * var(--control-scale)) calc(4px * var(--control-scale));
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+
+.agent-badge-action:hover:not(:disabled) { color: var(--fg); }
+
+/* 校验/保存失败时的短提示；完整原因在 title 里。 */
+.agent-badge-error {
+  max-width: 6em;
+  overflow: hidden;
+  color: var(--error);
+  font-size: var(--fs-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 窄屏和大字号时只留「3/8」，免得顶栏被挤爆。 */
 .bar.compact .agent-badge { gap: 0; padding: 1px 6px; }
 .bar.compact .agent-badge-label { display: none; }
+/* 编辑态里输入框和按钮之间需要间距，紧凑顶栏也不能贴在一起。 */
+.bar.compact .agent-badge-editing { gap: calc(4px * var(--control-scale)); }
 
 @media (max-width: 560px) {
   /* 窄屏顶栏的固定 padding/gap 同样是为极窄屏+大字号刻意保留的例外。 */

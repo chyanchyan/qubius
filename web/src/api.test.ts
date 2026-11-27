@@ -6,7 +6,9 @@ import {
   DEFAULT_MAX_CONCURRENT,
   ensureApiTokenCookie,
   getTaskOutput,
+  parseMaxConcurrentInput,
   request,
+  saveMaxConcurrent,
   stopBackgroundTask,
   UNAUTHORIZED_EVENT,
   writeApiToken,
@@ -96,6 +98,38 @@ test("clampMaxConcurrent 把任意值夹到 1..256，非法值退回默认", () 
   assert.equal(clampMaxConcurrent(Number.NaN), DEFAULT_MAX_CONCURRENT);
   assert.equal(clampMaxConcurrent("9"), DEFAULT_MAX_CONCURRENT);
   assert.equal(clampMaxConcurrent(undefined), DEFAULT_MAX_CONCURRENT);
+});
+
+test("parseMaxConcurrentInput 只接受 1..256 的整数字符串", () => {
+  assert.equal(parseMaxConcurrentInput("8"), 8);
+  assert.equal(parseMaxConcurrentInput(" 16 "), 16);
+  assert.equal(parseMaxConcurrentInput("1"), 1);
+  assert.equal(parseMaxConcurrentInput("256"), 256);
+  assert.equal(parseMaxConcurrentInput("0"), null);
+  assert.equal(parseMaxConcurrentInput("257"), null);
+  assert.equal(parseMaxConcurrentInput("3.6"), null);
+  assert.equal(parseMaxConcurrentInput("-1"), null);
+  assert.equal(parseMaxConcurrentInput("1e2"), null);
+  assert.equal(parseMaxConcurrentInput(""), null);
+  assert.equal(parseMaxConcurrentInput("  "), null);
+});
+
+test("saveMaxConcurrent 只提交并发上限补丁", async () => {
+  let method = "";
+  let body: unknown = null;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    method = init?.method ?? "";
+    body = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ providers: [], effort: "high", maxConcurrent: 7 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const saved = await saveMaxConcurrent(7);
+  assert.equal(method, "PUT");
+  assert.deepEqual(body, { maxConcurrent: 7 });
+  assert.equal(saved.maxConcurrent, 7);
 });
 
 test("调用方 signal 取消优先于超时", { timeout: 1_000 }, async () => {
