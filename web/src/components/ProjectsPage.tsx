@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getInstance,
   getProjects,
@@ -11,6 +11,8 @@ import {
   type Session,
 } from "../api";
 import { listAllSessions } from "../api-sessions";
+import { getMergeStatus, type MergeStatus } from "../api-git";
+import { projectLampState } from "../branch-state";
 import { formatRelativeTime } from "../format";
 import {
   activeProjectIds,
@@ -52,6 +54,11 @@ export function ProjectsPage({ go }: { go: (to: string) => void }) {
   const [activeIds, setActiveIds] = useState<ReadonlySet<string>>(() => new Set());
   const activeIdsRef = useRef<ReadonlySet<string>>(activeIds);
   const activityRef = useRef<ProjectActivity>(emptyActivity());
+  /* 项目列表的灯：会话快照 + 每个项目的分支状态。灯数据没到位前沿用原来的
+     活动灯（run / idle），避免首屏闪一下空心。 */
+  const [lampSessions, setLampSessions] = useState<Session[] | null>(null);
+  const [projectStatuses, setProjectStatuses] = useState<Record<string, MergeStatus>>({});
+  const lampSeq = useRef(0);
   const fetchSeq = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const fetching = useRef(false);
@@ -107,6 +114,57 @@ export function ProjectsPage({ go }: { go: (to: string) => void }) {
       });
     return () => controller.abort();
   }, [reloadToken]);
+
+  /* 项目灯的数据：一次拉全部会话，再为有分支的项目并发取 merge-status。
+     merge-status 会按会话 worktree 探测未提交改动，比普通列表请求重，
+     所以单独按 30 秒低频刷新；页面不可见时暂停。 */
+  const refreshLamps = useCallback(async () => {
+    if (!projects) return;
+    const seq = ++lampSeq.current;
+    let sessions: Session[];
+    try {
+      sessions = (await listAllSessions()).sessions;
+    } catch {
+      // 灯是辅助信息：失败时保留上一次结果，不打断项目列表。
+      return;
+    }
+    if (seq !== lampSeq.current) return;
+    const withBranches = new Set(
+      sessions.filter((session) => session.branch).map((session) => session.projectId),
+    );
+    const targets = projects.filter(
+      (project) => project.git && project.available && withBranches.has(project.id),
+    );
+    const results = await Promise.allSettled(targets.map((project) => getMergeStatus(project.id)));
+    if (seq !== lampSeq.current) return;
+    setProjectStatuses((current) => {
+      const next: Record<string, MergeStatus> = {};
+      targets.forEach((project, index) => {
+        const result = results[index];
+        // 单个项目请求失败时沿用上次成功的状态，灯不会突然变成空心。
+        if (result?.status === "fulfilled") next[project.id] = result.value;
+        else if (current[project.id]) next[project.id] = current[project.id];
+      });
+      return next;
+    });
+    setLampSessions(sessions);
+  }, [projects]);
+
+  useEffect(() => {
+    if (!projects) return;
+    void refreshLamps();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshLamps();
+    }, 30_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void refreshLamps();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [projects, refreshLamps]);
 
   const retry = useCallback(() => {
     setRetrying(true);
@@ -172,6 +230,16 @@ export function ProjectsPage({ go }: { go: (to: string) => void }) {
   const ordered = projects
     ? [...projects].sort((a, b) => Number(b.builtin) - Number(a.builtin))
     : null;
+  /* 按项目分组会话，用来算项目灯。 */
+  const lampGroups = useMemo(() => {
+    const groups = new Map<string, Session[]>();
+    for (const session of lampSessions ?? []) {
+      const list = groups.get(session.projectId);
+      if (list) list.push(session);
+      else groups.set(session.projectId, [session]);
+    }
+    return groups;
+  }, [lampSessions]);
   return (
     <section className="page projects-page">
       <div className="projects-head">
@@ -197,8 +265,22 @@ export function ProjectsPage({ go }: { go: (to: string) => void }) {
           {ordered.length === 0 && <p className="muted">还没有项目。</p>}
           <div className="stack">
             {ordered.map((project) => {
-              // 不可用项目优先显示红点；否则有活跃会话时闪烁，空闲时灰点。
-              const tone = !project.available ? "bad" : activeIds.has(project.id) ? "run" : "idle";
+              // 不可用项目优先显示红点；灯数据到位后按项目内的分支灯取
+              // 橙 > 黄 > 蓝 > 绿 > 灰，没有分支时用空心灯；数据加载前沿用活动灯。
+              const status = projectStatuses[project.id];
+              const lamp = lampSessions === null
+                ? undefined
+                : projectLampState(lampGroups.get(project.id) ?? [], {
+                    mergedKnown: Boolean(status?.base),
+                    merged: new Set(status?.merged ?? []),
+                    untouched: new Set(status?.untouched ?? []),
+                    dirty: new Set(status?.dirty ?? []),
+                  });
+              const tone = !project.available
+                ? "bad"
+                : lampSessions === null
+                  ? (activeIds.has(project.id) ? "run" : "idle")
+                  : (lamp ?? "empty");
               return (
                 <button
                   key={project.id}

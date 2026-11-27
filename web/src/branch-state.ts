@@ -1,3 +1,6 @@
+import type { Phase } from "./api";
+import { isActivePhase } from "./project-activity";
+
 /**
  * 会话分支灯的状态。分支标签用底色区分会话走到哪一步：
  *
@@ -35,4 +38,52 @@ export function branchLampState(input: BranchLampInput): BranchLamp | undefined 
   // 合入状态还没加载时不着色。
   if (input.merged === undefined) return undefined;
   return input.merged ? "merged" : "unmerged";
+}
+
+/** 项目列表里各灯色的优先级：橙 > 黄 > 蓝 > 绿 > 灰。 */
+const PROJECT_LAMP_ORDER: readonly BranchLamp[] = [
+  "dirty",
+  "unmerged",
+  "untouched",
+  "merged",
+  "starting",
+];
+
+/** 项目里一个会话的灯相关信息；只关心分支、当前 phase 和是否已有答复。 */
+export interface ProjectLampSession {
+  branch?: string;
+  phase: Phase;
+  hasEarlierReply?: boolean;
+}
+
+/** 项目分支状态；找不到基准分支时 mergedKnown 为 false。 */
+export interface ProjectBranchStatus {
+  mergedKnown: boolean;
+  merged: ReadonlySet<string>;
+  untouched: ReadonlySet<string>;
+  dirty: ReadonlySet<string>;
+}
+
+/**
+ * 项目列表的灯：先算出项目里每个会话分支的灯色，再按 橙 > 黄 > 蓝 > 绿 > 灰
+ * 取第一个存在的状态。项目没有任何分支（包括还没有会话）时返回 undefined，
+ * 界面显示空心灯。
+ */
+export function projectLampState(
+  sessions: readonly ProjectLampSession[],
+  status: ProjectBranchStatus,
+): BranchLamp | undefined {
+  const present = new Set<BranchLamp>();
+  for (const session of sessions) {
+    if (!session.branch) continue;
+    const state = branchLampState({
+      merged: status.mergedKnown ? status.merged.has(session.branch) : undefined,
+      untouched: status.untouched.has(session.branch),
+      dirty: status.dirty.has(session.branch),
+      active: isActivePhase(session.phase),
+      earlierReply: session.hasEarlierReply,
+    });
+    if (state) present.add(state);
+  }
+  return PROJECT_LAMP_ORDER.find((state) => present.has(state));
 }
