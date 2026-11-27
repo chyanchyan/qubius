@@ -124,7 +124,8 @@ function fromSettings(data: SettingsWithPricing): EditableProvider[] {
     name: provider.name,
     kind: provider.kind ?? "anthropic",
     baseUrl: provider.baseUrl,
-    apiKey: "",
+    // 设置页可以查看已保存密钥的原文，眼睛按钮切换明文。
+    apiKey: provider.apiKey ?? "",
     hasApiKey: provider.hasApiKey,
     models: provider.models.length > 0 ? [...provider.models] : [""],
     pricing: pricingToDraft(provider.pricing),
@@ -321,8 +322,7 @@ export function SettingsPage() {
         });
         return next;
       });
-      const leaked = JSON.stringify(saved).includes("apiKey");
-      setMessage(leaked ? "保存异常：响应里出现了密钥字段" : "已保存。响应里没有密钥。");
+      setMessage("已保存。");
     } catch (reason) {
       if (mounted.current) setError(readableError(reason, "保存失败"));
     }
@@ -410,7 +410,7 @@ export function SettingsPage() {
   return (
     <section className="page settings-page">
       <h1 tabIndex={-1}>设置</h1>
-      <p className="lead">每套配置选择协议类型（Anthropic 兼容或 Gemini），填地址、密钥和多个模型名。密钥只写在这台开发机上，保存后不会再显示。</p>
+      <p className="lead">每套配置选择协议类型（Anthropic 兼容或 Gemini），填地址、密钥和多个模型名。密钥只保存在这台开发机上，输入框默认隐藏，点右侧眼睛可以查看明文。</p>
       <form id="settings-form" className="stack settings-form" onSubmit={onSave} noValidate>
         {providers.map((provider, index) => {
           const result = testResults[provider.key];
@@ -487,14 +487,7 @@ export function SettingsPage() {
                   autoComplete="off"
                   spellCheck={false}
                   value={provider.apiKey}
-                  placeholder={
-                    !provider.hasApiKey
-                      ? (provider.kind === "gemini" ? "粘贴 Gemini API key" : "粘贴 API key")
-                      : revealedKeys[provider.key]
-                        // 已保存的密钥不会从服务端返回，明文只能显示新输入的内容。
-                        ? "已保存的密钥无法查看，输入新值可替换"
-                        : "••••••••••••"
-                  }
+                  placeholder={provider.kind === "gemini" ? "粘贴 Gemini API key" : "粘贴 API key"}
                   onChange={(event) => update(provider.key, { apiKey: event.target.value })}
                 />
                 <button

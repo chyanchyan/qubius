@@ -344,6 +344,8 @@ export interface PublicProvider {
   name: string;
   kind: ProviderKind;
   baseUrl: string;
+  /** 保存的密钥明文：设置页需要能通过「显示明文」查看原文。 */
+  apiKey: string;
   hasApiKey: boolean;
   models: string[];
 }

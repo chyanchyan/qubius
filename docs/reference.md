@@ -45,9 +45,9 @@ curl -H "X-Qubius-Token: $(cat .qubius/data/auth-token)" http://127.0.0.1:8787/a
 
 ### 模型接口与设置
 
-页面「设置」里可保存多套接口，每套有名称、类型、地址、API key 和该地址上的多个模型名。开对话时选择一套接口、一个模型，再选 effort（`low` / `medium` / `high` / `xhigh` / `max`）。密钥写入 `dataDir/secrets.json`（权限尽量 `0600`），读取接口只返回 `hasApiKey`。
+页面「设置」里可保存多套接口，每套有名称、类型、地址、API key 和该地址上的多个模型名。开对话时选择一套接口、一个模型，再选 effort（`low` / `medium` / `high` / `xhigh` / `max`）。密钥写入 `dataDir/secrets.json`（权限尽量 `0600`），读取接口会返回保存的密钥明文，设置页的输入框默认以圆点隐藏，点眼睛按钮可以查看原文。
 
-接口类型有两种。**Anthropic 兼容**（默认）：地址作为 `ANTHROPIC_BASE_URL` 传给 Agent SDK。**Gemini**：只填 Gemini API key 和模型名；服务端在本机回环地址起一个适配服务，把 Anthropic Messages 请求翻译成 Gemini 原生 `generateContent`（含流式响应、工具调用、图片和 token 用量），再把结果翻译回 Anthropic 格式。Gemini 地址会自动补 `/v1beta`，一般保持默认的 `https://generativelanguage.googleapis.com`。修改接口类型或地址后必须重新填写 API key。
+接口类型有两种。**Anthropic 兼容**（默认）：地址作为 `ANTHROPIC_BASE_URL` 传给 Agent SDK。**Gemini**：只填 Gemini API key 和模型名；服务端在本机回环地址起一个适配服务，把 Anthropic Messages 请求翻译成 Gemini 原生 `generateContent`（含流式响应、工具调用、图片和 token 用量），再把结果翻译回 Anthropic 格式。Gemini 地址会自动补 `/v1beta`，一般保持默认的 `https://generativelanguage.googleapis.com`。修改接口类型或地址时，留空的密钥会沿用原来的值，不需要重新填写。
 
 每套接口可填四个可选价格（输入、输出、缓存读、缓存写，美元/百万 token）；填了之后「总览」按 token 估算成本，留空只显示 token。每套接口的「测试」按钮会发一条最小请求验证地址、密钥和模型名，不回显密钥。
 

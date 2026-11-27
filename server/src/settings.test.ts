@@ -30,12 +30,11 @@ function sample(): StoredSettings {
   };
 }
 
-test("对外设置不包含 API key", () => {
+test("对外设置包含 API key 明文，设置页可以显示原文", () => {
   const view = publicSettings(sample());
   assert.equal(view.providers[0]?.hasApiKey, true);
+  assert.equal(view.providers[0]?.apiKey, secret);
   assert.deepEqual(view.providers[0]?.models, ["sonnet", "opus"]);
-  assert.equal(JSON.stringify(view).includes(secret), false);
-  assert.equal(JSON.stringify(view).includes("apiKey"), false);
 });
 
 test("同地址留空密钥时保留原密钥，也能改名称和模型", () => {
@@ -80,31 +79,20 @@ test("旧地址未规范化时等价地址仍算同一地址并保留密钥", ()
     assert.equal(next.providers[0]?.apiKey, secret, baseUrl);
     assert.equal(next.providers[0]?.baseUrl, "https://api.anthropic.com");
   }
-  // 真正的地址变化仍然拒绝。
-  const legacy: StoredSettings = {
-    ...sample(),
-    providers: [{ ...sample().providers[0]!, baseUrl: "https://API.Anthropic.com/" }],
-  };
-  assert.throws(() => applySettingsPatch(legacy, {
-    providers: [{
-      id: "p1",
-      name: "官方",
-      baseUrl: "https://gateway.example.com",
-      models: ["sonnet"],
-    }],
-  }), /接口地址变化时必须重新填写 API key/);
 });
 
-test("改地址且留空密钥时拒绝沿用旧密钥", () => {
-  assert.throws(() => applySettingsPatch(sample(), {
+test("改地址且留空密钥时沿用旧密钥，不需要重新填写", () => {
+  const moved = applySettingsPatch(sample(), {
     providers: [{
       id: "p1",
       name: "中转",
       baseUrl: "https://gateway.example.com/v1",
       models: ["claude-sonnet"],
     }],
-  }), /接口地址变化时必须重新填写 API key/);
-  assert.throws(() => applySettingsPatch(sample(), {
+  });
+  assert.equal(moved.providers[0]?.apiKey, secret);
+  assert.equal(moved.providers[0]?.baseUrl, "https://gateway.example.com/v1");
+  const blank = applySettingsPatch(sample(), {
     providers: [{
       id: "p1",
       name: "中转",
@@ -112,7 +100,8 @@ test("改地址且留空密钥时拒绝沿用旧密钥", () => {
       apiKey: "   ",
       models: ["claude-sonnet"],
     }],
-  }), /接口地址变化时必须重新填写 API key/);
+  });
+  assert.equal(blank.providers[0]?.apiKey, secret);
 });
 
 test("改地址时带上新密钥就正常保存", () => {
@@ -212,7 +201,7 @@ test("保存和重新加载会保留价格，0 也保留", () => {
     cacheRead: 0.3,
     cacheWrite: 0,
   });
-  assert.equal(JSON.stringify(view).includes(secret), false);
+  assert.equal(view.providers[0]?.apiKey, secret);
 });
 
 test("非法价格会被拒绝", () => {
@@ -502,7 +491,7 @@ test("旧的单密钥文件会变成一套接口配置", () => {
   assert.equal(again.providers[0]?.id, loaded.providers[0]?.id);
   const raw = JSON.parse(fs.readFileSync(path.join(dir, "secrets.json"), "utf8")) as Record<string, unknown>;
   assert.equal("apiKey" in raw, false);
-  assert.equal(JSON.stringify(publicSettings(again)).includes("sk-legacy-secret"), false);
+  assert.equal(publicSettings(again).providers[0]?.apiKey, "sk-legacy-secret");
 });
 
 test("确认超时、限制和归档保留天数随设置保存、加载并出现在对外设置里", () => {
@@ -620,9 +609,9 @@ test("接口类型缺省按 anthropic 处理，Gemini 类型会保存并对外�
   assert.equal(publicSettings(legacy).providers[0]?.kind, "anthropic");
 });
 
-test("改接口类型且留空密钥时拒绝沿用旧密钥", () => {
-  // 地址不变、只改类型也拒绝沿用旧密钥。
-  assert.throws(() => applySettingsPatch(sample(), {
+test("改接口类型且留空密钥时沿用旧密钥", () => {
+  // 地址不变、只改类型也会沿用原来的密钥。
+  const kept = applySettingsPatch(sample(), {
     providers: [{
       id: "p1",
       name: "官方",
@@ -630,7 +619,9 @@ test("改接口类型且留空密钥时拒绝沿用旧密钥", () => {
       baseUrl: "https://api.anthropic.com",
       models: ["gemini-2.5-pro"],
     }],
-  }), /接口类型变化时必须重新填写 API key/);
+  });
+  assert.equal(kept.providers[0]?.kind, "gemini");
+  assert.equal(kept.providers[0]?.apiKey, secret);
 
   const next = applySettingsPatch(sample(), {
     providers: [{

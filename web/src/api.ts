@@ -436,6 +436,8 @@ export interface Provider {
   name: string;
   kind: ProviderKind;
   baseUrl: string;
+  /** 已保存的密钥明文；旧服务端可能不返回，按空字符串处理。 */
+  apiKey?: string;
   hasApiKey: boolean;
   models: string[];
 }

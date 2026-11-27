@@ -261,6 +261,8 @@ export function publicSettings(stored: StoredSettings): PublicSettingsView {
         name: provider.name,
         kind: providerKind(provider),
         baseUrl: provider.baseUrl,
+        // 设置页需要显示已保存密钥的明文；服务端和页面在同一台开发机上。
+        apiKey: provider.apiKey,
         hasApiKey: provider.apiKey.trim().length > 0,
         models: [...provider.models],
         ...(pricing ? { pricing } : {}),
@@ -471,20 +473,7 @@ function readProviderList(value: unknown, current: ProviderConfig[]): ProviderCo
     const existing = requestedId ? current.find((provider) => provider.id === requestedId) : undefined;
     if (requestedId && !existing) throw new Error("接口配置不存在");
     if (requestedId && ids.has(requestedId)) throw new Error("接口配置重复提交");
-    // 留空表示沿用旧密钥；但地址或协议一旦换了，旧密钥不能再跟着发往新地址。
-    // 旧文件里的地址可能没规范化过（尾斜杠/大写 host 等），比较前先尽量规范化。
-    const submittedKey = record.apiKey;
-    const keyLeftBlank = submittedKey === undefined
-      || (typeof submittedKey === "string" && !submittedKey.trim());
-    const addressMoved = existing !== undefined
-      && baseUrl !== normalizedExistingBaseUrl(existing.baseUrl);
-    const kindMoved = existing !== undefined && kind !== providerKind(existing);
-    if (existing && keyLeftBlank && addressMoved) {
-      throw new Error("接口地址变化时必须重新填写 API key");
-    }
-    if (existing && keyLeftBlank && kindMoved) {
-      throw new Error("接口类型变化时必须重新填写 API key");
-    }
+    // 留空表示沿用旧密钥；修改地址或类型时也一样沿用，不需要重新填写。
     const apiKey = readApiKey(record.apiKey, existing, name);
     const pricing = readPricing(record.pricing);
     const id = existing?.id ?? randomUUID();
@@ -574,13 +563,4 @@ function normalizeBaseUrl(value: unknown): string {
   url.hash = "";
   url.search = "";
   return url.toString().replace(/\/$/, "");
-}
-
-/** 历史文件里的地址可能没规范化过；解析失败时退回原字符串参与比较。 */
-function normalizedExistingBaseUrl(value: string): string {
-  try {
-    return normalizeBaseUrl(value);
-  } catch {
-    return value;
-  }
 }
