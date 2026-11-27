@@ -8,6 +8,7 @@
     "web"
   ],
   "scripts": {
+    "postinstall": "node tools/patch-node-pty.mjs",
     "dev": "npm run dev -w server",
     "dev:web": "npm run dev -w web",
     "dev:all": "node tools/dev.mjs",

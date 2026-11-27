@@ -251,6 +251,28 @@ Windows 没有 bash/systemd/flock，部署页改走 Node 任务 `deploy/deploy-j
 
 Windows 上**不支持**：systemd/logrotate/crontab 安装、公网入口（edge，依赖 edgectl 和 shell ops lock）、副实例的同步/回滚（`deploy/secondary.sh` 是 bash）、开机自启（请用任务计划程序）。部署页在一次部署进行中仍由 `deploy.job.lock` 和 `deploy.json` 串行化；Windows 不使用 shell 的 `ops.lock`。
 
+### node-pty 补丁（关闭终端时的 AttachConsole 报错）
+
+node-pty 1.1.0（当前 npm 正式版）在 Windows 上关闭终端时，`WindowsPtyAgent.kill()` 会 fork
+`lib/conpty_console_list_agent.js` 去枚举控制台进程。shell 已经退出、或宿主进程没有控制台
+（服务、计划任务、session 0）时，原生 `AttachConsole` 失败，agent 没有 try/catch，会以未捕获
+异常退出并打印一整段栈。终端功能本身不受影响，只是日志噪音，外加一个要等 5 秒超时回收的子进程。
+
+`tools/patch-node-pty.mjs` 在 `npm ci` 的 postinstall 阶段给已安装的
+`node_modules/node-pty/lib/conpty_console_list_agent.js`（以及 `server/node_modules` 下的副本）
+加上 `shellPid > 0` 判断和 `try/catch`，与上游 microsoft/node-pty 的修复一致。补丁是幂等的、
+只改安装产物，不改依赖声明，也不需要重启服务；打补丁后源码会先通过语法校验再写入。
+
+- 覆盖版本：1.1.0。`node-pty@1.2.0-beta.18` 已包含上游修复；升级到包含修复的正式版后，
+  删除 `tools/patch-node-pty.mjs`、`tools/patch-node-pty.test.mjs` 和根 `package.json` 里的
+  `postinstall` 即可。
+- 文件内容无法识别（node-pty 升级导致实现变化）时只告警并跳过，不会让安装失败。如果日志里
+  再次出现 `AttachConsole failed`，按新的 agent 内容更新匹配规则和测试。
+- 手工补打：在仓库根执行 `node tools/patch-node-pty.mjs`。`--ignore-scripts` 会跳过补丁，但
+  node-pty 自身也要靠安装脚本编译原生模块，所以本项目的安装本来就不支持 `--ignore-scripts`。
+- `node_modules.prev` 回滚恢复的是上一次安装的依赖树。从更早版本升级后第一次部署如果回滚，
+  旧树可能还没打过补丁；下次 `npm ci` 或手工执行上面的命令即可，不影响终端功能。
+
 ## macOS 部署
 
 macOS 没有 Linux 部署脚本依赖的 `flock`、`ss`、`setsid`、`sha256sum` 和 `/proc`，所以部署页和 Windows 一样走纯 Node 任务 `deploy/deploy-job.mjs`（`server/src/deploy.ts` 的 `deployJobSpec` 按 `process.platform` 选择）。它不参与依赖 flock 的 shell ops lock，仍由 `deploy.job.lock` 和 `deploy.json` 串行化。
