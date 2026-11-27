@@ -355,7 +355,12 @@ export function derivePhase(state: Pick<
   return "queued";
 }
 
-export function applySdkMessage(prev: SessionCore, message: SdkMessage, seenLookup?: Set<string>): SessionCore {
+export function applySdkMessage(
+  prev: SessionCore,
+  message: SdkMessage,
+  seenLookup?: Set<string>,
+  runModel?: string,
+): SessionCore {
   // seen 仍按数组持久化；传入 Set 时用 Set 做 O(1) 去重查询，并在追加时同步裁剪。
   const lookup = seenLookup ?? new Set(prev.seen);
   if (message.uuid && lookup.has(message.uuid)) return prev;
@@ -481,13 +486,13 @@ export function applySdkMessage(prev: SessionCore, message: SdkMessage, seenLook
   } else if (message.type === "system" && message.subtype === "background_tasks_changed") {
     noteBackgroundTasksChanged(state, message);
   } else if (message.type === "stream_event") {
-    noteStream(state, message);
+    noteStream(state, message, runModel);
   } else if (message.type === "assistant") {
-    noteAssistant(state, message);
+    noteAssistant(state, message, runModel);
   } else if (message.type === "user") {
     if (!isSubagentScoped) noteToolResults(state, toolResults, message);
   } else if (message.type === "result") {
-    noteResult(state, message);
+    noteResult(state, message, runModel);
   }
 
   // 只有消息条数变化时才做全量上限检查：流式增量已逐条截断，避免每个 delta 都扫描整段对话。
@@ -875,7 +880,7 @@ function noteBackgroundTasksChanged(state: SessionCore, message: SdkMessage): vo
   }
 }
 
-function noteStream(state: SessionCore, message: SdkMessage): void {
+function noteStream(state: SessionCore, message: SdkMessage, runModel?: string): void {
   if (message.parent_tool_use_id || message.agent_id) return;
   const event = message.event;
   if (!event) return;
@@ -910,7 +915,7 @@ function noteStream(state: SessionCore, message: SdkMessage): void {
       current = { ...state.messages[index] };
       state.messages[index] = current;
     } else {
-      current = pushPartial(state, "text");
+      current = pushPartial(state, "text", runModel);
     }
     current.text = capMessageText(current.text + event.delta.text);
     state.summary = clip(current.text, 160);
@@ -970,7 +975,7 @@ function parseUsage(raw: RawUsage | undefined): TokenUsage | undefined {
   return { input, output, cacheRead, cacheWrite };
 }
 
-function noteAssistant(state: SessionCore, message: SdkMessage): void {
+function noteAssistant(state: SessionCore, message: SdkMessage, runModel?: string): void {
   if (message.parent_tool_use_id || message.agent_id) return;
   const blocks = contentBlocks(message.message?.content);
   // 这条完整消息新建的每种条目都记录产生时间；用量只属于 assistant 正文。
@@ -1038,6 +1043,7 @@ function noteAssistant(state: SessionCore, message: SdkMessage): void {
   if (!text) return;
   const item: TranscriptItem = { id: message.uuid || randomId(), role: "assistant", text, at };
   if (usage) item.usage = usage;
+  if (runModel) item.model = runModel;
   state.messages.push(item);
   state.summary = clip(text, 160);
 }
@@ -1104,7 +1110,7 @@ function finishThinking(state: SessionCore): void {
   };
 }
 
-function noteResult(state: SessionCore, message: SdkMessage): void {
+function noteResult(state: SessionCore, message: SdkMessage, runModel?: string): void {
   state.turnActive = false;
   state.queued = false;
   // 一轮结束：残留的流式片段不再显示“进行中”，也不能被下一轮当成自己的片段。
@@ -1140,6 +1146,7 @@ function noteResult(state: SessionCore, message: SdkMessage): void {
       };
       const usage = parseUsage(message.usage);
       if (usage) item.usage = usage;
+      if (runModel) item.model = runModel;
       state.messages.push(item);
     }
   }
@@ -1272,7 +1279,7 @@ function hoistQueuedMessages(messages: TranscriptItem[]): TranscriptItem[] {
   return [...rest, ...queued];
 }
 
-function pushPartial(state: SessionCore, kind: "text" | "thinking"): TranscriptItem {
+function pushPartial(state: SessionCore, kind: "text" | "thinking", runModel?: string): TranscriptItem {
   const item: TranscriptItem = {
     id: randomId(),
     role: "assistant",
@@ -1283,6 +1290,8 @@ function pushPartial(state: SessionCore, kind: "text" | "thinking"): TranscriptI
     // 流式片段也可能因失败/停止残留，先记下它的产生时间。
     at: new Date().toISOString(),
   };
+  // 正文片段从一开始就带上本轮模型，流式过程中也能显示在回答开头。
+  if (kind === "text" && runModel) item.model = runModel;
   state.messages.push(item);
   return item;
 }

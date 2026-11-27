@@ -553,6 +553,47 @@ test("思考增量在完整消息到达后保留下来", () => {
   assert.equal(state.messages.at(-1)?.text, "开始修改。");
 });
 
+test("按轮记录回答模型：流式片段、完整消息和 result 兜底都带上本轮模型", () => {
+  let state = blank();
+  state = applySdkMessage(state, {
+    type: "stream_event",
+    uuid: "d1",
+    parent_tool_use_id: null,
+    event: { type: "content_block_delta", delta: { type: "text_delta", text: "第一轮" } },
+  }, undefined, "model-a");
+  // 流式片段在产生时就带上本轮模型，回答开头能立刻显示。
+  assert.equal(state.messages[0]?.partial, true);
+  assert.equal(state.messages[0]?.model, "model-a");
+
+  state = applySdkMessage(state, {
+    type: "assistant",
+    uuid: "a1",
+    parent_tool_use_id: null,
+    message: { content: [{ type: "text", text: "第一轮回答。" }] },
+  }, undefined, "model-a");
+  assert.equal(state.messages[0]?.model, "model-a");
+
+  // 下一轮用新模型：只标记新一轮的条目，已有回答不回溯改写。
+  state = applySdkMessage(state, {
+    type: "assistant",
+    uuid: "a2",
+    parent_tool_use_id: null,
+    message: { content: [{ type: "text", text: "第二轮回答。" }] },
+  }, undefined, "model-b");
+  assert.deepEqual(state.messages.map((item) => item.model), ["model-a", "model-b"]);
+
+  // result 正文兜底新增的 assistant 条目同样属于本轮。
+  state = applySdkMessage(state, {
+    type: "result",
+    subtype: "success",
+    uuid: "r1",
+    result: "第三轮回答。",
+    is_error: false,
+  }, undefined, "model-c");
+  assert.equal(state.messages.at(-1)?.text, "第三轮回答。");
+  assert.equal(state.messages.at(-1)?.model, "model-c");
+});
+
 test("思考块结束时记录耗时，供简要档显示「思考了 N 秒」", () => {
   let state = blank();
   state = applySdkMessage(state, {

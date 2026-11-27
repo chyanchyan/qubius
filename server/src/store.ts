@@ -1445,10 +1445,12 @@ export class Store {
   /**
    * 应用一条 SDK 消息；返回是否真的生效（uuid 去重命中时返回 false）。
    * 调用方（runtime）据此判断 result 是不是重复投递的，避免重复放行排队消息。
+   * runModel 是这一轮启动时绑定的模型，写进本轮 assistant 回答，供前端按轮展示；
+   * 中途切换模型只影响下一轮，不能在这里读当前会话配置。
    */
-  apply(id: string, message: SdkMessage): boolean {
+  apply(id: string, message: SdkMessage, runModel?: string): boolean {
     const current = this.require(id);
-    const next = applySdkMessage(current, message, this.seenSet(id));
+    const next = applySdkMessage(current, message, this.seenSet(id), runModel);
     // 去重命中（next === current）时这条消息没有生效，不能再计一次速度。
     if (next !== current) this.noteOutputTokens(id, message);
     this.commit(next);
@@ -2497,6 +2499,7 @@ function strip(item: TranscriptItem): TranscriptItem {
     kind: item.kind,
     at: item.at,
     usage: item.usage,
+    model: item.model,
     speaker: item.speaker,
     discussion: item.discussion,
     roleRun: item.roleRun,

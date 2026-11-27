@@ -22,7 +22,13 @@ export interface ActivityGroup {
 
 export type TranscriptGroup =
   | { kind: "user"; key: string; item: Transcript }
-  | { kind: "assistant"; key: string; item: Transcript }
+  | {
+    kind: "assistant";
+    key: string;
+    item: Transcript;
+    /** 本轮第一条可标模型的回答：在回答开头显示这一轮使用的模型。 */
+    showModel: boolean;
+  }
   | ActivityGroup;
 
 /**
@@ -83,6 +89,9 @@ export function summarizeActivity(group: ActivityGroup): ActivitySummary {
 export function groupTranscript(items: Transcript[]): TranscriptGroup[] {
   const groups: TranscriptGroup[] = [];
   let run: Transcript[] = [];
+  // 每条用户消息开启新一轮；本轮第一条带 model 的 assistant 正文负责显示模型，
+  // 后面的正文（工具调用之间的补充说明）不重复占位。活动组不打断这个等待。
+  let awaitingTurnModel = false;
   const flush = () => {
     if (run.length > 0) groups.push(activityGroup(run));
     run = [];
@@ -94,9 +103,14 @@ export function groupTranscript(items: Transcript[]): TranscriptGroup[] {
       continue;
     }
     flush();
-    groups.push(item.role === "user"
-      ? { kind: "user", key: item.id, item }
-      : { kind: "assistant", key: item.id, item });
+    if (item.role === "user") {
+      groups.push({ kind: "user", key: item.id, item });
+      awaitingTurnModel = true;
+      continue;
+    }
+    const showModel = awaitingTurnModel && Boolean(item.model);
+    if (showModel) awaitingTurnModel = false;
+    groups.push({ kind: "assistant", key: item.id, item, showModel });
   }
   flush();
   return groups;

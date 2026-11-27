@@ -113,6 +113,12 @@ export interface TranscriptItem {
   at?: string;
   /** 产生这条 assistant 正文的那次模型调用消耗的 token。 */
   usage?: TokenUsage;
+  /**
+   * 产生这条 assistant 正文的那一轮实际使用的模型（本轮启动时绑定的会话模型）。
+   * 用于在每条回答开头标出模型；切换模型只影响下一轮，所以必须按轮记录，
+   * 不能读取当前会话配置。旧消息没有。
+   */
+  model?: string;
   /** 发送这条用户消息时随 SDKUserMessage 发出的 uuid；旧消息没有。 */
   sdkUuid?: string;
   /**

@@ -136,6 +136,35 @@ test("空输入返回空数组，纯活动输入返回单个组", () => {
   assert.equal((groups[0] as ActivityGroup).thinkingCount, 1);
 });
 
+test("每条用户消息后的第一条带模型的回答才标记模型", () => {
+  const groups = groupTranscript([
+    user("u1"),
+    tool("t1", "Bash"),
+    assistant("a1", "第一段", { model: "model-a" }),
+    assistant("a2", "同一轮的补充", { model: "model-a" }),
+    user("u2"),
+    // 旧数据没有 model：跳过它，等本轮第一条可标模型的正文。
+    assistant("a3", "旧回答"),
+    assistant("a4", "新回答", { model: "model-b" }),
+  ]);
+
+  const flags = groups.flatMap((group) => group.kind === "assistant" ? [group.showModel] : []);
+  assert.deepEqual(flags, [true, false, false, true]);
+});
+
+test("活动组不打断本轮模型标记的等待", () => {
+  const groups = groupTranscript([
+    user("u1"),
+    thinking("th1", "先想想"),
+    tool("t1", "Read"),
+    assistant("a1", "回答", { model: "model-a" }),
+  ]);
+
+  const assistantGroup = groups.find((group) => group.kind === "assistant");
+  assert.equal(assistantGroup?.kind, "assistant");
+  assert.equal(assistantGroup?.showModel, true);
+});
+
 test("summarizeActivity：工具优先标题，计数降序、同数按名称升序", () => {
   const group = activity([
     tool("t1", "Bash"),

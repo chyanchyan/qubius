@@ -1703,6 +1703,8 @@ export class Runtime {
 
   private async runSdk(id: string, queue: PromptQueue, signal: AbortSignal): Promise<void> {
     const session = this.store.require(id);
+    // 这一轮实际使用的模型在启动时绑定；中途改会话配置只影响下一轮。
+    const runModel = session.model;
     const permission = this.deps.permission(session.projectId);
     const { apiKey, baseUrl } = this.deps.credential(session.providerId);
     const connection = claudeConnection(baseUrl, session.model);
@@ -1760,7 +1762,7 @@ export class Runtime {
       this.checkpointed.add(id);
       for await (const message of stream) {
         if (this.releasing.has(id)) break;
-        const applied = this.store.apply(id, message as SdkMessage);
+        const applied = this.store.apply(id, message as SdkMessage, runModel);
         const finished = applied && (message as SdkMessage).type === "result";
         // 首个成功轮次结束时给会话生成标题；放在放行排队消息之前，
         // 避免 beginTurn 把这一轮的成功状态带进下一轮。
@@ -1957,6 +1959,8 @@ export class Runtime {
   }
 
   private async runFake(id: string, queue: PromptQueue, signal: AbortSignal): Promise<void> {
+    // 和真实 run 一样，本轮模型在启动时绑定；假的回答也按轮标注模型。
+    const runModel = this.store.get(id)?.model;
     for await (const message of queue.messages()) {
       if (signal.aborted || this.releasing.has(id)) return;
       const content = message.message.content;
@@ -1975,8 +1979,8 @@ export class Runtime {
         ? content
         : content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
       const workflow = /请先调用 (prl|ser|plan) skill/.exec(text)?.[1] as WorkflowSkill | undefined;
-      if (workflow) await this.playFakeWorkflow(id, workflow, signal);
-      else await this.playFake(id, text, signal);
+      if (workflow) await this.playFakeWorkflow(id, workflow, signal, runModel);
+      else await this.playFake(id, text, signal, runModel);
       // 假运行里的 playFake/playFakeWorkflow 已经发出 result，视为一轮结束。
       // 被停止时 playFake 会提前返回且没有 result，不能在这里复活会话。
       if (!signal.aborted && !this.releasing.has(id)) this.maybeSummarizeTitle(id);
@@ -1996,7 +2000,12 @@ export class Runtime {
    * prl/ser/plan 的假运行：发出带 `[wf:...]` 标签的子任务事件，
    * 让底部进度条在没接模型时也能看到多单元、开发/评审和轮次。
    */
-  private async playFakeWorkflow(id: string, skill: WorkflowSkill, signal: AbortSignal): Promise<void> {
+  private async playFakeWorkflow(
+    id: string,
+    skill: WorkflowSkill,
+    signal: AbortSignal,
+    runModel?: string,
+  ): Promise<void> {
     this.store.apply(id, {
       type: "system",
       subtype: "init",
@@ -2004,14 +2013,14 @@ export class Runtime {
       session_id: `fake-${id}`,
     });
     if (skill === "prl") {
-      await this.fakeParallelUnits(id, skill, ["登录接口", "会话存储"], signal);
+      await this.fakeParallelUnits(id, skill, ["登录接口", "会话存储"], signal, runModel);
     } else if (skill === "ser") {
       for (const [index, name] of ["登录接口", "会话存储"].entries()) {
         if (signal.aborted) return;
-        await this.fakeUnitPair(id, skill, index + 1, 2, name, signal);
+        await this.fakeUnitPair(id, skill, index + 1, 2, name, signal, runModel);
       }
     } else {
-      await this.fakeUnitPair(id, skill, 1, 1, "开发计划", signal);
+      await this.fakeUnitPair(id, skill, 1, 1, "开发计划", signal, runModel);
     }
     if (signal.aborted) return;
     this.store.apply(id, {
@@ -2020,7 +2029,7 @@ export class Runtime {
       uuid: randomUUID(),
       result: `${skill} 工作流完成。这是本地假运行，没有调用模型。`,
       is_error: false,
-    });
+    }, runModel);
   }
 
   private async fakeParallelUnits(
@@ -2028,13 +2037,14 @@ export class Runtime {
     skill: WorkflowSkill,
     names: string[],
     signal: AbortSignal,
+    runModel?: string,
   ): Promise<void> {
     const total = names.length;
     const devs = names.map((name, index) => ({
       name,
       taskId: this.fakeTaskStart(id, skill, index + 1, total, "dev", name),
     }));
-    this.fakeAssistant(id, "先并行推进各单元，再统一评审。");
+    this.fakeAssistant(id, "先并行推进各单元，再统一评审。", runModel);
     await delay(160, signal);
     if (signal.aborted) return;
     for (const dev of devs) this.fakeTaskProgress(id, dev.taskId, `正在处理${dev.name}`, "Edit");
@@ -2060,9 +2070,10 @@ export class Runtime {
     total: number,
     name: string,
     signal: AbortSignal,
+    runModel?: string,
   ): Promise<void> {
     const dev = this.fakeTaskStart(id, skill, unit, total, "dev", name);
-    this.fakeAssistant(id, `开始处理单元 ${unit}：${name}`);
+    this.fakeAssistant(id, `开始处理单元 ${unit}：${name}`, runModel);
     await delay(120, signal);
     if (signal.aborted) return;
     // plan 只读；不要显示 Edit，避免和“只做计划、不改代码”矛盾。
@@ -2121,16 +2132,21 @@ export class Runtime {
     });
   }
 
-  private fakeAssistant(id: string, text: string): void {
+  private fakeAssistant(id: string, text: string, runModel?: string): void {
     this.store.apply(id, {
       type: "assistant",
       uuid: randomUUID(),
       parent_tool_use_id: null,
       message: { role: "assistant", content: [{ type: "text", text }] },
-    });
+    }, runModel);
   }
 
-  private async playFake(id: string, text: string, signal: AbortSignal): Promise<void> {
+  private async playFake(
+    id: string,
+    text: string,
+    signal: AbortSignal,
+    runModel?: string,
+  ): Promise<void> {
     const fail = text.includes("失败");
     const slow = text.includes("慢");
     const taskId = randomUUID();
@@ -2156,7 +2172,7 @@ export class Runtime {
         role: "assistant",
         content: [{ type: "text", text: fail ? "这个方向走不通。" : "先看结构，再改一处独立的部分。" }],
       },
-    });
+    }, runModel);
     if (slow) await delay(1200, signal);
     if (signal.aborted) return;
     this.store.apply(id, {
@@ -2188,7 +2204,7 @@ export class Runtime {
         uuid: randomUUID(),
         result: "本轮完成。这是本地假运行，没有调用模型。",
         is_error: false,
-      });
+      }, runModel);
   }
 }
 

@@ -506,7 +506,9 @@ function sameGroup(a: TranscriptGroup, b: TranscriptGroup): boolean {
     return true;
   }
   if (a.kind === "user" && b.kind === "user") return a.item === b.item;
-  if (a.kind === "assistant" && b.kind === "assistant") return a.item === b.item;
+  if (a.kind === "assistant" && b.kind === "assistant") {
+    return a.item === b.item && a.showModel === b.showModel;
+  }
   return false;
 }
 
@@ -544,6 +546,7 @@ function renderGroup(group: TranscriptGroup, ctx: RowContext): ReactElement {
     <AssistantRow
       key={group.key}
       item={group.item}
+      showModel={group.showModel}
       now={ctx.now}
       scrollRef={ctx.scrollRef}
       stickRef={ctx.stickRef}
@@ -1243,11 +1246,14 @@ const UserRow = memo(function UserRow({
 /** assistant 正文；历史项与 live tail 共用，partial 时走节流后的 Markdown。 */
 const AssistantRow = memo(function AssistantRow({
   item,
+  showModel = false,
   now,
   scrollRef,
   stickRef,
 }: {
   item: Transcript;
+  /** 本轮第一条回答：在正文开头标出这一轮实际使用的模型。 */
+  showModel?: boolean;
   now: number;
   scrollRef: RefObject<HTMLDivElement | null>;
   stickRef?: RefObject<boolean>;
@@ -1255,6 +1261,9 @@ const AssistantRow = memo(function AssistantRow({
   const text = useThrottledText(item.text, Boolean(item.partial));
   return (
     <div className="assistant">
+      {showModel && item.model && (
+        <div className="assistant-model" title="本轮回答使用的模型">{item.model}</div>
+      )}
       {item.speaker && item.discussion && (
         <div className="discussion-speaker">
           <span className="discussion-speaker-name">{item.speaker}</span>

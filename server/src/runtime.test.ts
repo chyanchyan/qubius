@@ -394,6 +394,13 @@ test("中途改 model/effort 后下一轮用新配置重启，不会误判失败
     assert.equal(session?.queued, false);
     assert.equal(session?.turnActive, false);
     assert.deepEqual(runtime.queueSnapshot("s1"), []);
+    // 每轮回答记住启动时绑定的模型：第一轮 model-x，切换配置后的第二轮 model-y。
+    const answerModels = (session?.messages ?? [])
+      .filter((item) => item.role === "assistant" && item.text)
+      .map((item) => item.model);
+    assert.ok(answerModels.includes("model-x"), `第一轮应记录 model-x：${answerModels.join(",")}`);
+    assert.ok(answerModels.includes("model-y"), `第二轮应记录 model-y：${answerModels.join(",")}`);
+    assert.equal(answerModels.at(-1), "model-y");
 
     await runtime.stop("s1");
   } finally {

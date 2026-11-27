@@ -943,6 +943,15 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
   padding: calc(2px * var(--control-scale)) 0;
 }
 
+/* 本轮回答开头的小号模型标签：只占一行、弱化显示，不抢正文。 */
+.assistant-model {
+  margin-bottom: calc(2px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-11);
+  line-height: 1.3;
+  user-select: none;
+}
+
 /* 多模型讨论：每条发言上方标注发言者和阶段。 */
 .discussion-speaker {
   display: flex;

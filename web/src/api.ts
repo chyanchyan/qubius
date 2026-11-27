@@ -332,6 +332,8 @@ export interface Transcript {
   at?: string;
   /** 产生这条 assistant 正文的那次模型调用消耗的 token。 */
   usage?: TokenUsage;
+  /** 产生这条 assistant 正文的那一轮实际使用的模型；旧消息没有。 */
+  model?: string;
 }
 
 /** 一条已经提交、尚未被 agent 取走的排队消息。 */
