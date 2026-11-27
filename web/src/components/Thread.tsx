@@ -645,12 +645,48 @@ function renderBriefActivity(group: ActivityGroup, ctx: RowContext): ReactElemen
   return <Fragment key={group.key}>{rows}</Fragment>;
 }
 
+export interface ChangeSummary {
+  files: number;
+  added: number;
+  removed: number;
+}
+
+/**
+ * 活动组里已完成编辑的合并增删统计，组行收起时用来显示变更数量。
+ * 编辑输入还没收全或解析失败时不统计；整组没有可解析的编辑返回 null。
+ */
+export function groupChangeSummary(group: ActivityGroup, cwd: string): ChangeSummary | null {
+  /* 只统计、不合并 diff 行：这里每个 token 都会随运行中的活动组重算，
+     mergeChanges 会复制整段行数组，没必要。路径相同的编辑算一个文件。 */
+  const paths = new Set<string>();
+  let anonymous = 0;
+  let added = 0;
+  let removed = 0;
+  let edits = 0;
+  for (const item of group.items) {
+    const diff = briefEditDiff(item, cwd);
+    if (!diff) continue;
+    edits += 1;
+    added += diff.added;
+    removed += diff.removed;
+    if (diff.path) paths.add(diff.path);
+    else anonymous += 1;
+  }
+  if (edits === 0) return null;
+  return { files: paths.size + anonymous, added, removed };
+}
+
 /**
  * 精简密度下的活动组：折成一行摘要，点击摘要才展开组内每个工具/思考行。
- * 详细密度平铺、简要密度走改动卡。
+ * 收起时摘要带一行增删数量；展开后用和简要档相同的改动卡显示编辑，
+ * 不再只有原始 JSON。详细密度平铺、简要密度走改动卡。
  */
 function ActivityGroupRow({ group, ctx }: { group: ActivityGroup; ctx: RowContext }) {
   const summary = summarizeActivity(group);
+  const changes = useMemo(
+    () => groupChangeSummary(group, ctx.cwd),
+    [group, ctx.cwd],
+  );
   const [open, setOpen] = useState(false);
   const tone = group.failed ? "bad" : group.active ? "run" : "ok";
   return (
@@ -664,10 +700,20 @@ function ActivityGroupRow({ group, ctx }: { group: ActivityGroup; ctx: RowContex
       <summary>
         <span className="tool-name tool-badge">{summary.title}</span>
         {summary.meta && <span className="tool-extra">{summary.meta}</span>}
+        {changes && (
+          <span
+            className="diff-stats group-changes"
+            title={`${changes.files} 个文件，新增 ${changes.added} 行，删除 ${changes.removed} 行`}
+          >
+            <span className="diff-files">{changes.files} 个文件</span>
+            <span className="diff-add">+{changes.added}</span>
+            <span className="diff-del">−{changes.removed}</span>
+          </span>
+        )}
       </summary>
       {open && (
         <div className="tool-group-body">
-          {group.items.map((item) => renderRow(item, ctx))}
+          {renderBriefActivity(group, ctx)}
         </div>
       )}
     </details>
@@ -1525,7 +1571,7 @@ const ToolRow = memo(function ToolRow({
   /** data-kind：普通工具 / Diff / 子任务，保持三类行原有的展开行为。 */
   kind?: "tool" | "diff" | "subagent";
   /** 显式摘要（Diff/子任务用）；不传时用 summarizeTool 生成人话摘要。 */
-  extra?: string;
+  extra?: ReactNode;
   text: string;
   tone?: string;
   /** 工具结果状态，写到 data-status 供样式区分成功/失败。 */
@@ -1666,13 +1712,24 @@ export function DiffDock({
   onToggle?: (open: boolean) => void;
 }) {
   /* diff 可能很大；每来一个流式 token 都 trim/拼接整段字符串很浪费，
-     只依赖 diff 本身和 cwd 缓存结果。 */
-  const info = useMemo(() => {
+     只依赖 diff 本身和 cwd 缓存结果。收起时用补丁统计显示一行变更数量，
+     比原来的第一条 `diff --git` 更有信息量。 */
+  const info = useMemo<{ summary: ReactNode; body: string }>(() => {
     const text = diff.trim();
-    return text
-      ? { summary: preview(text), body: `${cwd}\n${text}` }
-      : { summary: "没有改动", body: "没有改动" };
-  }, [diff, cwd]);
+    if (!text) return { summary: "没有改动", body: "没有改动" };
+    const stats = patch.trim() ? patchStats(patch) : null;
+    const summary: ReactNode = stats && stats.files > 0 ? (
+      <span
+        className="diff-stats"
+        title={`${stats.files} 个文件，新增 ${stats.added} 行，删除 ${stats.removed} 行`}
+      >
+        <span className="diff-files">{stats.files} 个文件</span>
+        <span className="diff-add">+{stats.added}</span>
+        <span className="diff-del">−{stats.removed}</span>
+      </span>
+    ) : preview(text);
+    return { summary, body: `${cwd}\n${text}` };
+  }, [diff, patch, cwd]);
 
   return (
     <div className="diff-dock">
@@ -2000,6 +2057,53 @@ export function splitPatch(text: string): PatchFile[] {
     current.lines.push({ text: line, kind });
   }
   return files;
+}
+
+export interface PatchStats {
+  files: number;
+  added: number;
+  removed: number;
+}
+
+/**
+ * 补丁的文件数和增删行数，供 Diff 面板收起时显示一行变更摘要。
+ *
+ * 统计口径和 splitPatch 一致：只算 hunk 里的 +/-，文件头（`---`/`+++`）
+ * 不算；`已暂存` / `未暂存` 标签不开启新文件。这里不生成行数组，整段补丁
+ * 很大时也只是逐行扫一遍。没有 hunk 的文本（例如读取失败提示）返回全 0。
+ */
+export function patchStats(text: string): PatchStats {
+  let files = 0;
+  let added = 0;
+  let removed = 0;
+  let inFile = false;
+  let inHunk = false;
+  for (const raw of text.split("\n")) {
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    if (line === "已暂存" || line === "未暂存") {
+      inFile = false;
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith("diff --git ")) {
+      files += 1;
+      inFile = true;
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith("@@")) {
+      if (!inFile) {
+        files += 1;
+        inFile = true;
+      }
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (line.startsWith("+")) added += 1;
+    else if (line.startsWith("-")) removed += 1;
+  }
+  return { files, added, removed };
 }
 
 /* 有会话 id 时交给可评论的 DiffReview；没有时沿用只读的拆文件渲染。

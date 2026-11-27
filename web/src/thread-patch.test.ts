@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diffFileName, splitPatch } from "./components/Thread";
+import {
+  diffFileName,
+  groupChangeSummary,
+  patchStats,
+  splitPatch,
+} from "./components/Thread";
+import type { Transcript } from "./api";
+import type { ActivityGroup } from "./transcript-groups";
 
 function lines(...items: string[]): string {
   return items.join("\n");
@@ -152,4 +159,78 @@ test("二进制分隔（无 hunk）不计新增/删除行", () => {
   assert.equal(files[0].name, "logo.png");
   assert.equal(files[0].added, 0);
   assert.equal(files[0].removed, 0);
+});
+
+test("patchStats：按文件累计 hunk 内的增删行数", () => {
+  const stats = patchStats(lines(
+    "已暂存",
+    "diff --git a/a.ts b/a.ts",
+    "--- a/a.ts",
+    "+++ b/a.ts",
+    "@@ -1,2 +1,2 @@",
+    "-old",
+    "+new",
+    " context",
+    "未暂存",
+    "diff --git a/b.ts b/b.ts",
+    "--- a/b.ts",
+    "+++ b/b.ts",
+    "@@ -1 +1,3 @@",
+    " same",
+    "+one",
+    "+two",
+  ));
+
+  assert.deepEqual(stats, { files: 2, added: 3, removed: 1 });
+});
+
+test("patchStats：没有 diff --git 的单文件补丁在首个 hunk 处计一个文件", () => {
+  const stats = patchStats(lines(
+    "--- a/x.txt",
+    "+++ b/x.txt",
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+  ));
+
+  assert.deepEqual(stats, { files: 1, added: 1, removed: 1 });
+});
+
+test("patchStats：二进制或读取失败文本没有增删行", () => {
+  assert.deepEqual(
+    patchStats(lines("diff --git a/logo.png b/logo.png", "Binary files a/logo.png and b/logo.png differ")),
+    { files: 1, added: 0, removed: 0 },
+  );
+  assert.deepEqual(patchStats("这个目录不是 git 仓库，没有 diff。"), { files: 0, added: 0, removed: 0 });
+});
+
+test("groupChangeSummary 合并同组编辑并按文件统计", () => {
+  const edit = (id: string, file: string, oldText: string, newText: string): Transcript => ({
+    id,
+    role: "tool",
+    toolName: "Edit",
+    text: JSON.stringify({ file_path: file, old_string: oldText, new_string: newText }),
+  });
+  const group: ActivityGroup = {
+    kind: "activity",
+    key: "g",
+    items: [
+      edit("1", "/repo/a.ts", "one\ntwo", "one\nTWO"),
+      edit("2", "/repo/a.ts", "three", "three\nfour"),
+      edit("3", "/repo/b.ts", "x", "y"),
+    ],
+    toolCount: 3,
+    thinkingCount: 0,
+    failed: false,
+    active: false,
+  };
+
+  assert.deepEqual(groupChangeSummary(group, "/repo"), { files: 2, added: 3, removed: 2 });
+
+  const noEdits: ActivityGroup = {
+    ...group,
+    items: [{ id: "4", role: "tool", toolName: "Bash", text: JSON.stringify({ command: "ls" }) }],
+    toolCount: 1,
+  };
+  assert.equal(groupChangeSummary(noEdits, "/repo"), null);
 });

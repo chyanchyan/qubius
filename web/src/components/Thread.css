@@ -201,6 +201,10 @@
 
 .diff-add { color: var(--green); }
 .diff-del { color: var(--red); }
+.diff-files { color: var(--muted); white-space: nowrap; }
+
+/* 精简档收起时把编辑统计推到行尾，和工具行的耗时列对齐。 */
+.tool[data-kind="group"] > summary .group-changes { margin-left: auto; }
 
 /* ---- 简要档的代码改动卡 ---- */
 /* 相邻编辑合并成一张卡：标题行汇总文件和增删行数，卡内按文件分块，
