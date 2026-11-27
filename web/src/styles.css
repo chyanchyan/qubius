@@ -39,6 +39,12 @@
   font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
   font-size: var(--fs-13);
   line-height: 1.45;
+  /* 关掉移动端浏览器的自动字体放大（iOS Safari / Android Chrome 的
+     text autosizing）。整站字号已经由 --font-scale 统一缩放，浏览器只按
+     文本块宽度放大其中一部分，会让同一段 diff 里几行突然变成两倍大。
+     text-size-adjust 可继承，写在 :root 就能覆盖整个页面。 */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 * { box-sizing: border-box; }
@@ -786,6 +792,12 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
   /* 触控板横向 overscroll 不应触发浏览器后退；纵向照常滚动。 */
   overscroll-behavior-x: contain;
 }
+
+/* 记录区是定高的 flex 纵向容器：直接子项默认允许收缩，而 .change-card 带
+   overflow: hidden，弹性最小尺寸会被算成 0。简要档把改动卡直接挂在 .thread
+   下，活动一多就被压成 2px 的细线，看起来像「没有展开代码变更」；精简档的
+   卡片嵌在 .tool-group-body 普通块里，所以不受影响。直接子项一律不收缩。 */
+.thread > * { flex: none; }
 
 /* Positions the floating "back to bottom" control over the transcript without
    becoming part of its scrollable content. */
