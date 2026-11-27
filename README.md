@@ -152,7 +152,7 @@ make deploy-wan   # 公网：再应用 edgectl 公网入口（交互确认）
 
 默认部署当前 checkout，配置和数据都在它的 `.qubius/` 里；需要双实例、非默认端口或自定义路径时，在 `/deploy` 页面或 `deploy/env` 里配置。检测到 systemd user unit 已接管时用 `systemctl --user restart`，否则交给 `deploy/start-all.sh --restart`。`make deploy` 不会停止已经运行的局域网/公网入口；非交互环境应用公网入口时加 `QUBIUS_EDGE_YES=1`。
 
-部署不会静默打断正在工作的会话：停止/重启前会检查 `/api/health` 的 `activeSessions`，有会话时 Linux 交互终端会询问等待/强制/取消，页面部署和其它非交互环境直接失败（退出码 3）。设 `QUBIUS_DEPLOY_FORCE=1` 强制重启，或设 `QUBIUS_DEPLOY_WAIT=<秒>` 等待空闲。构建产物、git HEAD、config 和 env 都没有变化时会跳过构建和重启；需要无变化也重启时设 `QUBIUS_DEPLOY_RESTART=1`。这三个开关也可以写进 env 文件，细节见[部署文档](docs/deployment.md#忙碌保护不静默打断正在工作的会话)。
+部署不会静默打断正在工作的会话：停止/重启前会检查 `/api/health` 的 `activeSessions`，有会话时 Linux 交互终端会询问等待/强制/取消，页面部署和其它非交互环境直接失败（退出码 3）。部署页在忙碌中止后直接提供「强制重启」按钮，也可以随时点「强制重启」忽略「无变化」判定；只作用于本次部署，不需要修改环境变量。命令行环境下设 `QUBIUS_DEPLOY_FORCE=1` 强制重启，或设 `QUBIUS_DEPLOY_WAIT=<秒>` 等待空闲；构建产物、git HEAD、config 和 env 都没有变化时会跳过构建和重启，需要无变化也重启时设 `QUBIUS_DEPLOY_RESTART=1`。这三个开关也可以写进 env 文件，细节见[部署文档](docs/deployment.md#忙碌保护不静默打断正在工作的会话)。
 
 构建使用 staging + 原子切换：先写到 `server/dist.next`、`web/dist.next`，成功后才切换为 live（旧产物留在 `dist.prev`）。因此构建期间旧服务继续可用，构建或启动失败会回滚到旧产物；安装过依赖时还会保留 `node_modules.prev`。成功部署后磁盘上会同时保留一份旧产物用于回滚，下次成功部署/安装时再清理，细节见[构建 staging、原子切换与回滚](docs/deployment.md#构建-staging原子切换与回滚)。
 

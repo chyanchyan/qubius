@@ -560,6 +560,8 @@ export function DeployPage() {
   const restartDeadline = useRef(0);
   /** 本次提交（或加载时正在运行）的任务 id；用来忽略 configDir 里的旧任务。 */
   const activeJobId = useRef("");
+  /** 上一次提交的入口：忙碌中止后强制重试时沿用同一流程（更新或表单）。 */
+  const lastAttempt = useRef<"form" | "update" | null>(null);
   /** 当前服务进程实际监听的端口（来自 DeployState.port）。 */
   const servicePort = useRef(0);
   /** 本次配置会继续监听的端口，用来判断当前页面重启后是否还可用。 */
@@ -1017,6 +1019,22 @@ export function DeployPage() {
     setFormError(readableError(reason, "提交部署失败"));
   }
 
+  /** 表单提交载荷：两个实例共用同一仓库，副实例地址始终跟随界面上的仓库输入。 */
+  function formPayload(
+    base: DeployForm,
+    actions: { confirmStopInstance?: boolean; forceRestart?: boolean } = {},
+  ): DeployForm {
+    const hosts = effectivePublicHosts(base);
+    return {
+      ...base,
+      publicHost: hosts.publicHost,
+      publicHostSecondary: hosts.publicHostSecondary,
+      secondaryRepoUrl: base.primaryRepoUrl,
+      confirmStopInstance: actions.confirmStopInstance === true,
+      forceRestart: actions.forceRestart === true,
+    };
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (
@@ -1052,17 +1070,10 @@ export function DeployPage() {
       if (!confirmed) return;
     }
 
+    lastAttempt.current = "form";
     const controller = startDeployTracking(form);
     try {
-      // 两个实例共用同一个仓库：副实例地址始终跟随界面上唯一的仓库输入。
-      const hosts = effectivePublicHosts(form);
-      const payload: DeployForm = {
-        ...form,
-        publicHost: hosts.publicHost,
-        publicHostSecondary: hosts.publicHostSecondary,
-        secondaryRepoUrl: form.primaryRepoUrl,
-        confirmStopInstance: needsStopConfirm,
-      };
+      const payload = formPayload(form, { confirmStopInstance: needsStopConfirm });
       let result;
       try {
         result = await applyDeploy(payload, controller.signal);
@@ -1126,11 +1137,67 @@ export function DeployPage() {
 
     // 服务端用的是已保存配置；跟踪状态也用同一份，避免把表单里未保存的
     // 端口/域名当成部署结果，导致错误的“端口已变化”提示和访问地址。
+    lastAttempt.current = "update";
     const controller = startDeployTracking(deployState.form);
     try {
       const result = await updateDeploy(controller.signal, {
         confirmStopInstance: needsStopConfirm,
       });
+      if (!mounted.current || controller.signal.aborted) return;
+      acceptDeploy(result);
+    } catch (reason) {
+      if (!mounted.current || controller.signal.aborted) return;
+      handleDeployError(reason);
+    } finally {
+      if (submitAbort.current === controller) submitAbort.current = null;
+    }
+  }
+
+  /**
+   * 页面强制重启：忽略“无变化”判定并跳过忙碌保护，会中断进行中的会话。
+   * 这是本次任务的一次性选择，不写回 env 文件。
+   * retry 为 true 表示忙碌中止后的原样重试：上一次是「更新」时继续走更新流程，
+   * 否则按最近一次提交的表单重新部署（不带强制重启的普通按钮不会额外拉取代码）。
+   */
+  async function onForceRestart(retry = false) {
+    if (
+      !form ||
+      !deployState ||
+      phase === "submitting" ||
+      phase === "running" ||
+      phase === "restarting" ||
+      phase === "relocated" ||
+      reloading
+    ) return;
+
+    const confirmed = await dialogs.confirm({
+      title: "强制重启服务？",
+      message:
+        "强制重启会中断当前进行中的会话，并忽略「无变化」检查直接重启。"
+        + "这个选择只作用于本次部署，不需要修改环境变量。",
+      confirmLabel: "强制重启",
+      danger: true,
+    });
+    if (!confirmed || !mounted.current) return;
+
+    /* 一键更新失败后重试：沿用更新流程，继续从 GitHub 拉取最新代码；
+       其它情况按最近一次提交的表单（没有时用当前已保存的配置）重新部署。 */
+    const redoUpdate = retry && lastAttempt.current === "update";
+    const base = submittedForm ?? deployState.form;
+    const controller = startDeployTracking(base);
+    try {
+      const result = redoUpdate
+        ? await updateDeploy(controller.signal, {
+          confirmStopInstance: deployState.platform === "win32",
+          forceRestart: true,
+        })
+        : await applyDeploy(
+          formPayload(base, {
+            confirmStopInstance: deployState.platform === "win32",
+            forceRestart: true,
+          }),
+          controller.signal,
+        );
       if (!mounted.current || controller.signal.aborted) return;
       acceptDeploy(result);
     } catch (reason) {
@@ -1258,6 +1325,8 @@ export function DeployPage() {
     }
     // 服务端会保留上一次成功记录；加载到它时只提示，不进入忙碌状态。
     const historicalSuccess = phase === "idle" && job?.state === "success";
+    /* 忙碌保护中止：不再让用户去改 QUBIUS_DEPLOY_FORCE，直接在页面上给强制重启入口。 */
+    const busyAborted = phase === "failed" && job?.step === "busy";
     return (
       <>
         {oneTime && <OneTimeCredentials info={oneTime} onDismiss={dismissOneTime} />}
@@ -1276,7 +1345,27 @@ export function DeployPage() {
           )}
         </div>
         {job?.step && <p className="deploy-step mono">{job.step}</p>}
-        {job?.message && <p className={phase === "failed" ? "error" : "deploy-message"}>{job.message}</p>}
+        {job?.message && !busyAborted && (
+          <p className={phase === "failed" ? "error" : "deploy-message"}>{job.message}</p>
+        )}
+        {busyAborted && (
+          <p className="deploy-message">
+            有进行中的会话，部署已中止。可以直接在页面强制重启（会中断这些会话），
+            或等会话结束后再部署。
+          </p>
+        )}
+        {busyAborted && (
+          <div className="deploy-status-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => onForceRestart(true)}
+              disabled={busy || reloading}
+            >
+              强制重启并继续部署
+            </button>
+          </div>
+        )}
         {phase === "restarting" && <p className="deploy-message">服务正在重启，等待恢复…</p>}
         {phase === "success" && (
           <p className="note">
@@ -1290,7 +1379,7 @@ export function DeployPage() {
         {historicalSuccess && (
           <p className="note">上次部署已成功；修改配置后可以再次提交。</p>
         )}
-        {phase === "failed" && (
+        {phase === "failed" && !busyAborted && (
           <p className="deploy-message">可以修改上面的配置后再次点击「保存并部署」。</p>
         )}
         {phase === "unknown" && (
@@ -1351,9 +1440,18 @@ export function DeployPage() {
           >
             重新部署…
           </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || reloading || phase === "relocated"}
+            onClick={() => onForceRestart()}
+          >
+            强制重启…
+          </button>
           <p className="deploy-inline-hint">
             「更新」从 GitHub 远端拉取最新代码（依次尝试 github 远端、下面配置的 GitHub 仓库、origin），
             按当前已保存的配置重新构建并重启，不用逐项确认；「重新部署」从向导第一步开始，可以修改任意配置后再提交。
+            「强制重启」忽略「无变化」检查直接重启，有进行中的会话时也会中断它们；只作用于本次部署，不需要修改环境变量。
           </p>
         </div>
       )}

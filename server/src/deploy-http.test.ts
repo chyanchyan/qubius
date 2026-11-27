@@ -305,7 +305,7 @@ test("POST /api/deploy/update 按当前配置启动拉取部署，且不写回�
       harness,
       "POST",
       "/api/deploy/update",
-      {},
+      { forceRestart: true },
     );
     assert.equal(result.status, 202);
     assert.ok(result.data.jobId.length > 0);
@@ -314,10 +314,12 @@ test("POST /api/deploy/update 按当前配置启动拉取部署，且不写回�
       (value) => value.data.job?.state === "success" && value.data.job.jobId === result.data.jobId,
     );
 
-    // 一键更新不改用户保存的配置；强制拉取只作用于本次任务。
+    // 一键更新不改用户保存的配置；强制拉取和强制重启只作用于本次任务。
     const envText = fs.readFileSync(path.join(harness.configDir, "env"), "utf8");
     assert.match(envText, /^QUBIUS_PULL_LATEST=0$/m);
     assert.doesNotMatch(envText, /QUBIUS_PULL_PREFER_GITHUB/);
+    assert.doesNotMatch(envText, /QUBIUS_DEPLOY_FORCE/);
+    assert.doesNotMatch(envText, /QUBIUS_DEPLOY_RESTART/);
   } finally {
     await harness.close();
   }

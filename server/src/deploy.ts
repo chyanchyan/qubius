@@ -95,6 +95,11 @@ export interface DeployForm {
   confirmDataDirChange?: boolean;
   /** 页面已确认部署可以先停止当前实例；Windows 部署任务据此跳过控制台提问。 */
   confirmStopInstance?: boolean;
+  /**
+   * 页面要求本次部署强制重启：忽略“无变化”判定，并跳过进行中会话的忙碌保护。
+   * 只作用于本次任务，不写入 env 文件。
+   */
+  forceRestart?: boolean;
 }
 
 export interface DeployInstanceInfo {
@@ -860,6 +865,7 @@ export function validateDeployForm(
     projects: validateProjects(record.projects),
     confirmDataDirChange: record.confirmDataDirChange === true,
     confirmStopInstance: record.confirmStopInstance === true,
+    forceRestart: record.forceRestart === true,
   };
   // clonePeer 只对副实例有意义；没启用副实例时归一化为 false，避免 env 里残留 1。
   form.clonePeer = form.startSecondary && form.clonePeer;
@@ -2051,6 +2057,12 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
     // 页面已经确认过可以停止当前实例；Windows 部署任务据此跳过控制台提问，
     // 手机远程部署时没人能操作宿主机上弹出的终端窗口。
     if (form.confirmStopInstance) values.QUBIUS_DEPLOY_CONFIRM_STOP = "1";
+    // 页面选择的“强制重启”：忽略无变化判定（RESTART）并跳过忙碌保护（FORCE）。
+    // 只进本次任务的进程环境，env 文件保持用户保存的配置不变。
+    if (form.forceRestart) {
+      values.QUBIUS_DEPLOY_FORCE = "1";
+      values.QUBIUS_DEPLOY_RESTART = "1";
+    }
     if (options.forcePullLatest) values.QUBIUS_PULL_LATEST = "1";
     if (options.preferGithubRemote) values.QUBIUS_PULL_PREFER_GITHUB = "1";
     // 页面单独保存的 GitHub 镜像不在 MANAGED_KEYS 里，显式传给任务，
@@ -2138,6 +2150,8 @@ export interface RedeployWithPullOptions {
   platform?: NodeJS.Platform;
   /** 页面已确认更新可以先停止当前实例。 */
   confirmStopInstance?: boolean;
+  /** 页面要求本次更新强制重启（忽略无变化，并跳过忙碌保护）。 */
+  forceRestart?: boolean;
 }
 
 /**
@@ -2164,12 +2178,13 @@ export function redeployWithPull(options: RedeployWithPullOptions): ApplyDeployR
   if (derived.projectsError) {
     throw new DeployValidationError(`现有 projects 文件无法读取：${derived.projectsError}`);
   }
+  // 一键更新不接受页面表单，但“停止当前实例”“强制重启”是用户刚在页面上做的
+  // 选择，只把这些布尔值带进来，不改动任何配置字段。
+  const actions: Partial<DeployForm> = {};
+  if (options.confirmStopInstance === true) actions.confirmStopInstance = true;
+  if (options.forceRestart === true) actions.forceRestart = true;
   return applyDeploy({
-    // 一键更新不接受页面表单，但“停止当前实例”的确认是用户刚在页面上做的，
-    // 只把这个布尔值带进来，不改动任何配置字段。
-    body: options.confirmStopInstance === true
-      ? { ...derived.form, confirmStopInstance: true }
-      : derived.form,
+    body: Object.keys(actions).length > 0 ? { ...derived.form, ...actions } : derived.form,
     repoRoot: options.repoRoot,
     ...(options.configFile ? { configFile: options.configFile } : {}),
     env,

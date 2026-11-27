@@ -64,6 +64,11 @@ export interface DeployForm {
   confirmDataDirChange?: boolean;
   /** 页面已确认部署可以先停止当前实例（Windows 部署任务据此跳过控制台提问）。 */
   confirmStopInstance?: boolean;
+  /**
+   * 本次部署强制重启：忽略“无变化”判定，并跳过进行中会话的忙碌保护。
+   * 只作用于本次任务，不写入 env 文件。
+   */
+  forceRestart?: boolean;
 }
 
 export interface DeployInstanceInfo {
@@ -193,13 +198,16 @@ export function getDeployStatus(signal?: AbortSignal): Promise<{ job: DeployJob 
  */
 export function updateDeploy(
   signal?: AbortSignal,
-  options: { confirmStopInstance?: boolean } = {},
+  options: { confirmStopInstance?: boolean; forceRestart?: boolean } = {},
 ): Promise<{ ok: true; jobId: string; oneTime?: DeployOneTimeInfo }> {
   return request(
     "/api/deploy/update",
     {
       method: "POST",
-      body: JSON.stringify({ confirmStopInstance: options.confirmStopInstance === true }),
+      body: JSON.stringify({
+        confirmStopInstance: options.confirmStopInstance === true,
+        forceRestart: options.forceRestart === true,
+      }),
     },
     signal,
   );

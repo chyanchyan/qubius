@@ -160,6 +160,14 @@ fieldset.deploy-section { padding: calc(8px * var(--control-scale)) calc(12px * 
 .deploy-status p { margin: calc(6px * var(--control-scale)) 0 0; }
 .deploy-status .deploy-message { overflow-wrap: anywhere; }
 
+/* 忙碌中止后的页面动作：直接给强制重启入口，不用去改环境变量。 */
+.deploy-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--control-scale)) calc(10px * var(--control-scale));
+  margin-top: calc(8px * var(--control-scale));
+}
+
 .deploy-step {
   margin: calc(6px * var(--control-scale)) 0 0;
   color: var(--muted);

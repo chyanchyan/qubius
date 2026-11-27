@@ -185,7 +185,7 @@ Windows/macOS 上，`make start`、`make restart`、`make deploy`、`make deploy
 - `QUBIUS_DEPLOY_FORCE=1` → 跳过保护，强制重启（会中断这些会话）。
 - `QUBIUS_DEPLOY_WAIT=<秒>` → 每 2 秒轮询，直到空闲或超时；超时以退出码 3 失败。
 - Linux 上的交互终端（`make deploy*` 走 `deploy.sh` / `start-all.sh`）→ 询问 `[w]等待 / [f]强制 / [c]取消`，默认取消；选 `w` 时按 `QUBIUS_DEPLOY_WAIT`（未设置则 600 秒）等待。
-- 非交互环境（页面部署、cron，以及 Windows/macOS 的 Node 部署任务）→ 直接失败并以退出码 3 结束，消息里写明还有几个会话。
+- 非交互环境（页面部署、cron，以及 Windows/macOS 的 Node 部署任务）→ 直接失败并以退出码 3 结束，消息里写明还有几个会话。部署页会在状态卡里直接给出「强制重启」按钮，选中后带着本次任务的 `QUBIUS_DEPLOY_FORCE=1` 重试，不需要用户去改 env 文件。
 
 修改端口时，检查范围同时包含新端口和上次部署实际使用的端口（记录在 `.deploy-stamp` 的 `port` 字段），避免旧端口上的会话被静默中断。被跳过的“无变化”部署不会触发忙碌保护，因为不会停止任何进程。
 
@@ -200,7 +200,7 @@ Windows/macOS 上，`make start`、`make restart`、`make deploy`、`make deploy
 
 ### 强制重启
 
-`QUBIUS_DEPLOY_RESTART=1` 忽略“无变化”判定，始终重启；第一次部署或没有 stamp 时也会正常重启。三个开关都可以写在 env 文件里，或通过环境变量传给 `make deploy*` / 部署页任务。
+`QUBIUS_DEPLOY_RESTART=1` 忽略“无变化”判定，始终重启；第一次部署或没有 stamp 时也会正常重启。部署页「更新 / 重新部署」按钮旁的「强制重启」会同时带上 `QUBIUS_DEPLOY_RESTART=1` 和 `QUBIUS_DEPLOY_FORCE=1`，忽略无变化并跳过忙碌保护（会中断进行中的会话），这两个开关只作用于本次任务、不写入 env；忙碌中止后的状态卡里也有同样的重试按钮。三个开关也都可以写在 env 文件里，或通过环境变量传给 `make deploy*` / 部署页任务。
 
 ## 页面部署与冷启动
 

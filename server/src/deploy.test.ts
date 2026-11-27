@@ -748,6 +748,8 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
       + "  configDir: process.env.QUBIUS_CONFIG_DIR ?? \"\",\n"
       + "  primaryDir: process.env.QUBIUS_PRIMARY_DIR ?? \"\",\n"
       + "  confirmStop: process.env.QUBIUS_DEPLOY_CONFIRM_STOP ?? \"\",\n"
+      + "  force: process.env.QUBIUS_DEPLOY_FORCE ?? \"\",\n"
+      + "  restart: process.env.QUBIUS_DEPLOY_RESTART ?? \"\",\n"
       + "}));\n",
   );
 
@@ -756,6 +758,7 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
     env: { HOME: base, QUBIUS_CONFIG_DIR: configDir },
     platform: "darwin",
     confirmStopInstance: true,
+    forceRestart: true,
   });
   assert.ok("jobId" in result, `期望启动部署任务，实际：${JSON.stringify(result)}`);
 
@@ -766,6 +769,8 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
     configDir: string;
     primaryDir: string;
     confirmStop: string;
+    force: string;
+    restart: string;
   };
   // 本次任务强制拉取并优先 GitHub。
   assert.equal(job.pullLatest, "1");
@@ -777,12 +782,17 @@ test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHu
   assert.equal(job.primaryDir, base);
   // 页面确认可以停止当前实例后，部署任务跳过控制台提问。
   assert.equal(job.confirmStop, "1");
+  // 页面选择强制重启后，本次任务忽略无变化并跳过忙碌保护。
+  assert.equal(job.force, "1");
+  assert.equal(job.restart, "1");
 
   // env 文件里保存的配置不变；强制开关和这次确认都不会持久化。
   const envText = fs.readFileSync(path.join(configDir, "env"), "utf8");
   assert.match(envText, /^QUBIUS_PULL_LATEST=0$/m);
   assert.doesNotMatch(envText, /QUBIUS_PULL_PREFER_GITHUB/);
   assert.doesNotMatch(envText, /QUBIUS_DEPLOY_CONFIRM_STOP/);
+  assert.doesNotMatch(envText, /QUBIUS_DEPLOY_FORCE/);
+  assert.doesNotMatch(envText, /QUBIUS_DEPLOY_RESTART/);
 });
 
 test("applyDeploy 未确认时不会替页面答应停止当前实例", async () => {
@@ -809,6 +819,43 @@ test("applyDeploy 未确认时不会替页面答应停止当前实例", async ()
 
   const job = JSON.parse(await waitForFile(recorded)) as { confirmStop: string };
   assert.equal(job.confirmStop, "");
+});
+
+test("applyDeploy 的强制重启只传给本次任务，不写回 env", async () => {
+  const base = tmp();
+  const configDir = path.join(base, "config");
+  fs.mkdirSync(configDir, { recursive: true });
+  makeRepo(base);
+  const recorded = path.join(base, "recorded-force.json");
+  writeJob(
+    base,
+    "#!/bin/bash\nexit 1\n",
+    `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(recorded)}, JSON.stringify({\n`
+      + "  force: process.env.QUBIUS_DEPLOY_FORCE ?? \"\",\n"
+      + "  restart: process.env.QUBIUS_DEPLOY_RESTART ?? \"\",\n"
+      + "}));\n",
+  );
+
+  // 旧页面不提交这个字段时按 false 接受。
+  assert.equal(validateDeployForm(validForm(base)).forceRestart, false);
+
+  const result = applyDeploy({
+    body: { ...validForm(base), configDir, forceRestart: true },
+    repoRoot: base,
+    env: { HOME: base, QUBIUS_CONFIG_DIR: configDir },
+    platform: "darwin",
+  });
+  assert.ok("jobId" in result, `期望启动部署任务，实际：${JSON.stringify(result)}`);
+
+  const job = JSON.parse(await waitForFile(recorded)) as { force: string; restart: string };
+  // 强制重启同时跳过「无变化」判定和忙碌保护。
+  assert.equal(job.force, "1");
+  assert.equal(job.restart, "1");
+
+  // 两个开关只进本次任务的进程环境，用户保存的 env 不变。
+  const envText = fs.readFileSync(path.join(configDir, "env"), "utf8");
+  assert.doesNotMatch(envText, /QUBIUS_DEPLOY_FORCE/);
+  assert.doesNotMatch(envText, /QUBIUS_DEPLOY_RESTART/);
 });
 
 test("redeployWithPull 在没有部署配置或项目文件损坏时拒绝", () => {
