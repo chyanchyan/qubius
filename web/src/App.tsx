@@ -1208,7 +1208,7 @@ const BoardSessionRow = memo(function BoardSessionRow({
   selected: boolean;
   /** 分支是否已合入基准分支；合入状态还没加载时为 undefined。 */
   merged?: boolean;
-  /** 分支创建后从未改过代码：显示灰灯。 */
+  /** 分支创建后从未改过代码：显示蓝灯。 */
   untouched?: boolean;
   mergeBase?: string;
   onToggleOpen: (id: string, open: boolean) => void;
@@ -1433,12 +1433,12 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   const answeringIdsRef = useRef(new Set<string>());
   const [clearing, setClearing] = useState(false);
   const clearingRef = useRef(false);
-  /* 分支合入 / 改动状态：列表里用分支标签底色展示（绿=已合入，灰=从未改过代码），
-     「全部归档」跳过运行中和从未改过代码的会话，默认只归档已合入的。 */
+  /* 分支合入 / 改动状态：列表里用分支标签底色展示（绿=已合入，蓝=从未改过代码），
+     「全部归档」跳过运行中的会话，默认只归档已合入的。 */
   const [mergeStatus, setMergeStatus] = useState<MergeStatus | null>(null);
   const mergeSeq = useRef(0);
   const mergedBranches = useMemo(() => new Set(mergeStatus?.merged ?? []), [mergeStatus]);
-  /* 分支创建后从未提交过代码；标签显示灰灯，「全部归档」始终跳过。 */
+  /* 分支创建后从未提交过代码；标签显示蓝灯（归档不会丢代码，按已合入处理）。 */
   const untouchedBranches = useMemo(() => new Set(mergeStatus?.untouched ?? []), [mergeStatus]);
   const mergeBase = mergeStatus?.base ?? undefined;
   const [archived, setArchived] = useState<ArchivedSession[]>([]);
@@ -1671,14 +1671,13 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     }
     const base = mergeStatus?.base ?? "";
     const mergedBranches = new Set(mergeStatus?.merged ?? []);
-    const untouchedBranches = new Set(mergeStatus?.untouched ?? []);
     // 只有找到基准分支时才能在弹窗里提供「仅归档已合入」；找不到时明确提示会归档全部。
     const canFilter = isGitProject && Boolean(mergeStatus?.base);
-    // 运行中的会话始终保留；其余会话在取消勾选时都会归档（包括未合入和从未改过代码的）。
+    // 运行中的会话始终保留；其余会话在取消勾选时都会归档（包括未合入的）。
     const candidates = clearAllCandidates(sessions);
     const runningCount = sessions.length - candidates.length;
-    // 勾选项默认打开：只归档已合入且确实改过代码的会话。
-    const defaultTargets = pickArchiveTargets(sessions, canFilter, mergedBranches, untouchedBranches);
+    // 勾选项默认打开：只归档已合入的会话（含从未改过代码的蓝灯分支）。
+    const defaultTargets = pickArchiveTargets(sessions, canFilter, mergedBranches);
     if (candidates.length === 0) {
       reportActionError("没有可归档的对话：运行中的会话会保留");
       return;
@@ -1697,7 +1696,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
             label: `仅归档已合入 ${base} 的会话`,
             checked: true,
             description: candidates.length > defaultTargets.length
-              ? `取消勾选会把可归档的 ${candidates.length} 个对话全部归档（多 ${candidates.length - defaultTargets.length} 个），包括尚未合入 ${base} 和从未改过代码的会话。`
+              ? `取消勾选会把可归档的 ${candidates.length} 个对话全部归档（多 ${candidates.length - defaultTargets.length} 个），包括尚未合入 ${base} 的会话。`
               : undefined,
           }
         : undefined,
@@ -1705,9 +1704,9 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
       danger: true,
     });
     if (!choice.confirmed) return;
-    const targets = pickArchiveTargets(sessions, canFilter && choice.checked, mergedBranches, untouchedBranches);
+    const targets = pickArchiveTargets(sessions, canFilter && choice.checked, mergedBranches);
     if (targets.length === 0) {
-      reportActionError(`没有已合入 ${base || "main"} 且改过代码的对话可归档`);
+      reportActionError(`没有已合入 ${base || "main"} 的对话可归档`);
       return;
     }
     clearingRef.current = true;

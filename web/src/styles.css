@@ -664,12 +664,12 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
   color: var(--green);
 }
 
-/* 分支创建后从未改过代码：灰灯。它虽然停在基准分支上，但没有可归档的
-   改动，「全部归档」也会跳过。 */
+/* 分支创建后从未改过代码：蓝灯。它停在基准分支上、没有可归档的改动，
+   归档不会丢掉任何代码，「全部归档」按已合入处理。 */
 .branch-badge[data-state="untouched"] {
-  border-color: color-mix(in srgb, var(--muted) 35%, var(--line));
-  background: color-mix(in srgb, var(--muted) 12%, transparent);
-  color: var(--muted);
+  border-color: color-mix(in srgb, var(--blue) 45%, var(--line));
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
+  color: var(--blue);
 }
 
 /* 标题行：分支标签放在标题左侧，与标题同一行，不额外占一行高度。 */

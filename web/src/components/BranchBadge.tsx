@@ -12,7 +12,7 @@ export function shortBranch(branch: string | undefined): string {
 /**
  * 分支标签。列表拿到合入状态后传入 merged / base / untouched，用底色表示
  * 分支的状态：已合入为绿底，未合入保持默认；分支创建后从未改过代码时为
- * 灰底（它只是停在基准分支上，并没有可归档的改动）。
+ * 蓝底（它停在基准分支上，没有可归档的改动）。
  * 不传 merged / untouched（详情页、总览页、状态未加载）时样式不变。
  */
 export function BranchBadge({

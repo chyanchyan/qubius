@@ -113,23 +113,21 @@ test("全部归档始终跳过运行中的会话", () => {
   );
 });
 
-test("从未改过代码的分支默认跳过，取消勾选时归档", () => {
+test("从未改过代码的分支算已合入，默认归档", () => {
   const unchanged = "qubius/aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa";
   const sessions = [
     session("done", { branch: "qubius/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" }),
     session("never", { branch: unchanged }),
   ];
   const merged = new Set([sessions[0]?.branch ?? "", unchanged]);
-  const untouched = new Set([unchanged]);
 
-  // 绿 / 灰灯的区分只影响默认过滤：灰灯分支虽然已合入，但没有改动，默认保留。
+  // 蓝灯分支虽然从未改过代码，但停在基准分支上，归档不会丢代码。
   assert.deepEqual(
-    pickArchiveTargets(sessions, true, merged, untouched).map((item) => item.id),
-    ["done"],
+    pickArchiveTargets(sessions, true, merged).map((item) => item.id),
+    ["done", "never"],
   );
-  // 取消勾选后归档所有非运行中的会话，包括从未改过代码的。
   assert.deepEqual(
-    pickArchiveTargets(sessions, false, merged, untouched).map((item) => item.id),
+    pickArchiveTargets(sessions, false, merged).map((item) => item.id),
     ["done", "never"],
   );
   assert.deepEqual(

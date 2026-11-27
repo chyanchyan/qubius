@@ -53,22 +53,19 @@ export function clearAllCandidates(sessions: readonly Session[]): Session[] {
 }
 
 /**
- * 「全部归档」的目标会话。开关打开时只归档分支已经合入基准分支、并且确实
- * 改过代码的会话：未合入的分支、从未改过代码的分支（灰灯）以及没有分支的
- * 会话保留，避免删掉 main 里还没有的改动、或删掉还没有内容的会话。
- * 关掉开关时归档所有非运行中的会话，包括未合入和从未改过代码的。
+ * 「全部归档」的目标会话。开关打开时只归档分支已经合入基准分支的会话：
+ * 未合入的分支和没有分支的会话保留，避免删掉 main 里还没有的改动。
+ * 从未改过代码的分支（蓝灯）同样算已合入，归档它不会丢掉任何代码，因此
+ * 也会被归档。关掉开关时归档所有非运行中的会话。
  */
 export function pickArchiveTargets(
   sessions: readonly Session[],
   onlyMerged: boolean,
   mergedBranches: ReadonlySet<string>,
-  untouchedBranches: ReadonlySet<string> = new Set(),
 ): Session[] {
   const candidates = clearAllCandidates(sessions);
   if (!onlyMerged) return candidates;
   return candidates.filter((session) => Boolean(
-    session.branch
-      && mergedBranches.has(session.branch)
-      && !untouchedBranches.has(session.branch),
+    session.branch && mergedBranches.has(session.branch),
   ));
 }
