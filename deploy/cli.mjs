@@ -44,17 +44,18 @@ const HELP_TEXT = [
   "  test-deploy    部署脚本测试",
   "",
   "运行：",
-  "  start          启动启用的实例（缺构建先构建）",
-  "  restart        重启启用的实例",
+  "  start          启动启用的实例（Windows/macOS 前台运行，Ctrl+C 停止）",
+  "  restart        重启启用的实例（Windows/macOS 前台运行）",
   "  stop           停止实例和局域网入口",
   "  status         显示配置目录、健康状态和局域网凭据文件",
   "  install        Linux：渲染配置/systemd/logrotate 并构建",
   "  pull           从 origin 快进当前 checkout",
   "",
   "部署：",
-  "  deploy         本地部署：构建并重启，只保证 127.0.0.1",
+  "  deploy         本地部署：构建并重启，只保证 127.0.0.1（Windows/macOS 前台）",
   "  deploy-lan     本地部署 + 局域网入口（缺凭据时生成并打印一次）",
   "  deploy-wan     局域网部署 + 公网入口（交互确认）",
+  "  QUBIUS_BACKGROUND=1   Windows/macOS 改回后台启动（Ctrl+C 不停止服务）",
   "",
   "备份/恢复：",
   "  backup         备份配置和数据目录",
@@ -301,12 +302,26 @@ function ensureBuilt(entry) {
   if (result.status !== 0) fail(`${entry.label}构建失败`);
 }
 
+/* 用终端直接跑服务：默认在前台，Ctrl+C 或关窗口即停止；输出被重定向/CI
+   里没有 TTY 时保持后台，避免命令永远不返回。QUBIUS_BACKGROUND=1 可显式退回后台。 */
+const foreground = Boolean(process.stdout.isTTY) && !envBool("QUBIUS_BACKGROUND", false);
+
+function waitForExit(child) {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve(child.exitCode ?? 1);
+      return;
+    }
+    child.once("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+  });
+}
+
 async function startEntry(entry) {
   entry = effectiveSettings(entry);
   const current = await health(entry.port);
   if (current) {
     say(`${entry.label}已在运行：http://127.0.0.1:${entry.port}`);
-    return;
+    return null;
   }
   if (!fs.existsSync(entry.repo)) {
     fail(`${entry.label}的 checkout 不存在：${entry.repo}`);
@@ -319,26 +334,52 @@ async function startEntry(entry) {
   ensureBuilt(entry);
   fs.mkdirSync(entry.dataDir, { recursive: true, mode: 0o700 });
   const logFile = path.join(entry.dataDir, "qubius.log");
-  const fd = fs.openSync(logFile, "a");
   let child;
-  try {
+  let logStream;
+  if (foreground) {
+    /* 前台：服务跟 make start 待在同一个终端里，日志同时写窗口和 qubius.log。 */
     child = spawn(process.execPath, [path.join(entry.repo, "server", "dist", "index.js")], {
       cwd: entry.repo,
       env: childEnv(entry),
-      detached: true,
-      windowsHide: true,
-      stdio: ["ignore", fd, fd],
+      detached: false,
+      windowsHide: false,
+      stdio: ["ignore", "pipe", "pipe"],
     });
-  } finally {
-    fs.closeSync(fd);
+    logStream = fs.createWriteStream(logFile, { flags: "a" });
+    child.stdout?.pipe(logStream, { end: false });
+    child.stdout?.pipe(process.stdout, { end: false });
+    child.stderr?.pipe(logStream, { end: false });
+    child.stderr?.pipe(process.stderr, { end: false });
+    child.once("exit", () => logStream.end());
+  } else {
+    const fd = fs.openSync(logFile, "a");
+    try {
+      child = spawn(process.execPath, [path.join(entry.repo, "server", "dist", "index.js")], {
+        cwd: entry.repo,
+        env: childEnv(entry),
+        detached: true,
+        windowsHide: true,
+        stdio: ["ignore", fd, fd],
+      });
+    } finally {
+      fs.closeSync(fd);
+    }
+    child.unref();
   }
-  child.unref();
   fs.writeFileSync(pidfile, `${child.pid ?? ""}\n`);
   say(`启动${entry.label}：http://127.0.0.1:${entry.port}（pid=${child.pid}）`);
   if (!(await waitHealthy(entry.port))) {
+    if (foreground) {
+      try {
+        child.kill();
+      } catch {
+        // 已经退出。
+      }
+    }
     fail(`${entry.label}启动后 /api/health 未就绪，查看 ${logFile}`);
   }
   await startLan(entry);
+  return foreground ? child : null;
 }
 
 function lanCredentialsFile() {
@@ -393,6 +434,14 @@ async function startLan(entry) {
   say(`启动${entry.label}局域网入口（端口 ${entry.port}）`);
 }
 
+/** 只停局域网入口，保留主服务的 pidfile（前台服务可能刚退出，别去 kill）。 */
+function stopLanEntry(entry) {
+  entry = effectiveSettings(entry);
+  const pidfile = path.join(entry.dataDir, "lan-proxy.pid");
+  killPid(readPid(pidfile), `${entry.label}局域网入口`);
+  removeFile(pidfile);
+}
+
 function stopEntry(entry) {
   entry = effectiveSettings(entry);
   killPid(readPid(path.join(entry.dataDir, "lan-proxy.pid")), `${entry.label}局域网入口`);
@@ -404,7 +453,40 @@ function stopEntry(entry) {
 async function startAll() {
   const entries = roleEntries();
   if (entries.length === 0) fail("没有启用的实例（检查 QUBIUS_START_PRIMARY / QUBIUS_START_SECONDARY）");
-  for (const entry of entries) await startEntry(entry);
+  const children = [];
+  const started = [];
+  for (const entry of entries) {
+    const child = await startEntry(entry);
+    if (child) {
+      children.push(child);
+      started.push(entry);
+    }
+  }
+  if (children.length === 0) return;
+  say("服务已在前台运行；按 Ctrl+C 或关闭此窗口即停止。");
+  /* Ctrl+C 时子服务会自己优雅退出，这里补一刀把局域网入口也停掉，
+     避免留下后台 node 进程；正常退出路径在下面统一清理。 */
+  const onSigint = () => {
+    for (const entry of started) {
+      const pid = readPid(path.join(entry.dataDir, "lan-proxy.pid"));
+      if (alive(pid)) {
+        try {
+          process.kill(pid);
+        } catch {
+          // 已经退出。
+        }
+      }
+    }
+    process.exit(130);
+  };
+  process.once("SIGINT", onSigint);
+  const codes = await Promise.all(children.map((child) => waitForExit(child)));
+  process.removeListener("SIGINT", onSigint);
+  /* 主服务退出后局域网入口没有上游，一并停掉，避免留下后台 node 进程。 */
+  for (const entry of started) stopLanEntry(entry);
+  const failed = codes.find((code) => code !== 0);
+  if (failed !== undefined) process.exitCode = failed || 1;
+  say("服务已退出");
 }
 
 function stopAll() {
@@ -527,6 +609,9 @@ async function deployWithNode(mode) {
     fail(`找不到 ${envFile}；先运行 make quickstart 或在 /deploy 完成首次配置`);
   }
   const startLan = mode !== "local";
+  /* 和页面部署一致：终端里默认让部署任务把服务和日志放在前台；wan 需要在任务
+     返回后应用 edge，仍走后台启动。 */
+  const consoleDeploy = foreground && mode !== "wan";
   if (startLan) ensureLanCredentials();
   const primaryRepo = resolveDir(envValue("QUBIUS_PRIMARY_DIR", repoRoot));
   const secondaryRepo = resolveDir(envValue("QUBIUS_SECONDARY_DIR", path.join(os.homedir(), "co-qubius")));
@@ -550,6 +635,9 @@ async function deployWithNode(mode) {
     QUBIUS_DEPLOY_JOB_ID: crypto.randomUUID(),
     QUBIUS_DEPLOY_STARTED_AT: new Date().toISOString(),
     QUBIUS_DEPLOY_REPO_ROOT: repoRoot,
+    QUBIUS_DEPLOY_CONSOLE: consoleDeploy ? "1" : "0",
+    /* 终端模式下任务不会返回，令牌由任务在服务就绪后直接打到窗口（不写日志）。 */
+    ...(consoleDeploy && startLan ? { QUBIUS_DEPLOY_PRINT_TOKEN: "1" } : {}),
   };
   fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
   // 把这次部署的入口选择写回 env，之后的 make start/restart 沿用同一套目录和 LAN 开关。
@@ -581,11 +669,12 @@ async function deployWithNode(mode) {
   if (jobEnv.QUBIUS_START_SECONDARY === "1") {
     entries.push({ role: "secondary", label: "副实例 co-qubius", dataDir: jobEnv.QUBIUS_DATA_SECONDARY });
   }
-  if (startLan) printAuthTokens(entries);
+  if (startLan && !consoleDeploy) printAuthTokens(entries);
   if (mode === "wan") {
     await applyEdge(jobEnv, entries);
   }
-  say(`部署完成：${mode}`);
+  if (consoleDeploy) say("服务已退出");
+  else say(`部署完成：${mode}`);
 }
 
 async function applyEdge(jobEnv, entries) {

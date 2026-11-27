@@ -1420,9 +1420,51 @@ async function main() {
   finish("success", "done", "部署完成");
   say("部署完成");
 
+  /* 终端模式下 make deploy 的进程要等任务退出才能继续，令牌在这里直接打到
+     窗口；不能用 say()，否则会一并写进 deploy.log。 */
+  if (deployConsole && envBool("QUBIUS_DEPLOY_PRINT_TOKEN", false)) {
+    for (const entry of entries) {
+      try {
+        const file = path.join(entry.dataDir, "auth-token");
+        if (!fs.existsSync(file)) continue;
+        const token = fs.readFileSync(file, "utf8").trim();
+        if (token) console.log(`${entry.label} API 访问令牌（只显示这一次）：${token}`);
+      } catch {
+        // 读不到就跳过；令牌仍可在设置页重置。
+      }
+    }
+  }
+
   if (deployConsole && consoleServers.length > 0) {
     say("服务已在前台运行；按 Ctrl+C 或关闭此窗口即停止。");
+    /* Ctrl+C 会同时送达前台服务，它会自己优雅退出；这里补一刀停掉局域网
+       入口，避免留下后台 node 进程。 */
+    process.once("SIGINT", () => {
+      if (startLan) {
+        for (const entry of entries) {
+          const pid = readPid(path.join(entry.dataDir, "lan-proxy.pid"));
+          if (pid && isAlive(pid)) {
+            try {
+              process.kill(pid);
+            } catch {
+              // 已经退出。
+            }
+          }
+        }
+      }
+      process.exit(130);
+    });
     const codes = await Promise.all(consoleServers.map((child) => waitForExit(child)));
+    /* 主服务退出后 LAN 入口没有上游，一并停掉，避免留下后台 node 进程。 */
+    if (startLan) {
+      for (const entry of entries) {
+        try {
+          await stopProxy(entry);
+        } catch {
+          // 停不掉就留给 make stop / 下次部署处理。
+        }
+      }
+    }
     const failed = codes.find((code) => code !== 0);
     if (failed !== undefined) {
       say(`服务进程已退出（退出码 ${failed}）`);

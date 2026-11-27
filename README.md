@@ -133,6 +133,8 @@ npm start         # 服务和页面都在 http://127.0.0.1:8787
 
 `make` 是统一的启动/部署入口，内部通过 Node 执行：Linux 转给 `deploy/*.sh`（systemd、flock、双实例），Windows/macOS 由 `deploy/cli.mjs` 用 Node 完成同样的启动/停止，部署走 `deploy/deploy-job.mjs`。npm 脚本（`npm start`、`npm run quickstart`、`npm run dev:all`）仍然保留。
 
+Windows/macOS 上 `make start`、`make restart`、`make deploy`、`make deploy-lan` 默认在**当前终端前台**运行服务：日志直接打在窗口里，Ctrl+C 或关闭窗口即停止。确需后台运行时设置 `QUBIUS_BACKGROUND=1`（CI、重定向输出等没有 TTY 的场景会自动使用后台）。`make deploy-wan` 需要在部署任务返回后应用公网入口，仍按后台方式启动；Linux 的 systemd 管理不受影响。
+
 ```bash
 make              # 列出全部目标
 make quickstart   # 首次启动：npm 源、配置/数据目录、端口
@@ -170,7 +172,7 @@ Windows 和 Linux/macOS 的默认目录一致：配置、env、数据和日志�
 
 部署页每个字段旁都有问号提示，悬停或聚焦可查看详细说明。局域网密码和访问令牌都支持在页面上重置：密码立即写盘，运行中的局域网入口会在响应后自动重启；令牌立即生效，旧令牌保留 60 秒宽限，不需要重启服务。重置结果会一次性弹出并显示重启/生效说明，提供复制图标。
 
-Windows 上也可以用上面的 make 目标（`make start/stop/restart/status/deploy/deploy-lan`）：Makefile 只调用 Node，`start/stop` 由 `deploy/cli.mjs` 通过 pidfile 管理进程，部署走 `deploy/deploy-job.mjs`。`npm start` 仍然可用。
+Windows 上也可以用上面的 make 目标（`make start/stop/restart/status/deploy/deploy-lan`）：Makefile 只调用 Node，`start/stop` 由 `deploy/cli.mjs` 通过 pidfile 管理进程，部署走 `deploy/deploy-job.mjs`。`start` / `restart` / `deploy` / `deploy-lan` 默认在当前终端前台运行服务，关闭窗口或 Ctrl+C 即停止；要后台运行设置 `QUBIUS_BACKGROUND=1`。`npm start` 仍然可用。
 
 Windows 部署**不做**这些事：安装 systemd/logrotate/crontab、公网入口（edge）、副实例的「同步主功能/回滚」、开机自启。需要开机自启时，用「任务计划程序」登记 `node server\dist\index.js`（工作目录设为仓库根目录）。
 

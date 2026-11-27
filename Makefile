@@ -3,6 +3,8 @@
 # 所有目标都通过 node/npm 执行，不依赖 bash，Windows（cmd/PowerShell/Git Bash）、
 # Linux 和 macOS 都能用。启动/部署在 Linux 上内部转给 deploy/*.sh（systemd、flock），
 # Windows/macOS 上由 deploy/cli.mjs 用 Node 完成同样的步骤。
+# Windows/macOS 的 start/restart/deploy/deploy-lan 默认在当前终端前台运行服务，
+# Ctrl+C 或关窗口即停止；需要后台运行时设置 QUBIUS_BACKGROUND=1。
 # npm 脚本（npm start / npm run quickstart / npm run dev:all）仍然保留。
 
 .PHONY: help run dev quickstart build install start stop restart status pull \

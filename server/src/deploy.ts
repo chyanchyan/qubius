@@ -1529,7 +1529,8 @@ export function startDeployJob(options: StartDeployOptions): { jobId: string } |
     QUBIUS_DEPLOY_PARENT_DATA_DIR: options.parentDataDir ?? "",
     QUBIUS_DEPLOY_PARENT_PORT: options.parentPort ? String(options.parentPort) : "",
     QUBIUS_DEPLOY_REPO_ROOT: repoRoot,
-    ...(consoleMode ? { QUBIUS_DEPLOY_CONSOLE: "1" } : {}),
+    /* 显式写 0/1，避免从父进程环境继承到上一次终端部署留下的值。 */
+    QUBIUS_DEPLOY_CONSOLE: consoleMode ? "1" : "0",
   };
   // Windows / macOS 的 Node 部署任务自己串行化（deploy.job.lock + deploy.json），
   // 不使用依赖 flock 的 shell ops lock。

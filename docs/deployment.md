@@ -156,6 +156,8 @@ Windows/macOS 的 Node 部署任务（`deploy/deploy-job.mjs`）使用 `deploy/d
 
 `make` 是统一的启动/部署入口，所有目标都通过 Node 执行，Windows、Linux 和 macOS 都能用。Linux 上内部调用 `deploy/*.sh`（保留 systemd、flock、双实例逻辑），Windows/macOS 由 `deploy/cli.mjs` 用 Node 启动/停止，部署走 `deploy/deploy-job.mjs`。npm 脚本仍然保留。
 
+Windows/macOS 上，`make start`、`make restart`、`make deploy`、`make deploy-lan` 默认把服务放在**当前终端前台**运行：stdout/stderr 同时打到窗口和 `<dataDir>/qubius.log`，Ctrl+C 或关闭窗口即停止；`make stop` 仍按 pidfile 从其它终端停止。输出不是 TTY（CI、重定向）或设置 `QUBIUS_BACKGROUND=1` 时退回后台 detached 启动。`make deploy-wan` 因为要在部署任务返回后应用公网入口，仍使用后台启动；Linux 的 systemd 管理路径不变。
+
 | 命令 | 做什么 |
 |---|---|
 | `make start` / `make restart` / `make stop` | 启动/重启/停止启用的实例和局域网入口（Linux 转给 `start-all.sh`） |
