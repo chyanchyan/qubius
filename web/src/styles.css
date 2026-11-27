@@ -17,7 +17,10 @@
   --warn: #e1c08d;
   --blue: #3b82f6;
   --violet: #a78bfa;
-  --placeholder: #a8a8a8;
+  /* 控件里已填的值要比正文更亮，提示文字要明显更暗，
+     这样一眼能分清「已经填了」和「还没填、只是占位」。 */
+  --input-fg: #e6e6e6;
+  --placeholder: #8a8a8a;
   /* Readability scale set from the 小/大 buttons in the header. Range is
      0.6 (60%) to 3 (300%); 1 = normal. Every explicit font size multiplies by
      it so the whole UI grows together. --control-scale tracks the exact same
@@ -50,6 +53,11 @@ body {
 }
 
 button, input, textarea, select { font: inherit; color: inherit; }
+/* 表单控件的已填值固定用 --input-fg：.field 等容器把 color 设成了 --muted，
+   若不覆盖，输入框会继承提示/标签的灰色，和 placeholder 几乎分不出来。 */
+input, textarea, select { color: var(--input-fg); }
+/* 禁用态仍用弱化色，避免不可编辑的值看着比可编辑的还亮。 */
+input:disabled, textarea:disabled, select:disabled { color: var(--muted); }
 
 button {
   background: transparent;
@@ -2155,6 +2163,7 @@ h1 { font-size: var(--fs-15); font-weight: 600; margin: calc(4px * var(--control
     --error: #a12d20;
     --warn: #7a5a12;
     --blue: #2563eb;
+    --input-fg: #151515;
     --placeholder: #6f6f6f;
   }
 
