@@ -1759,8 +1759,10 @@ export function DeployPage() {
           tabIndex={-1}
         >
           <legend>通用</legend>
-          <div className="deploy-grid">
-            <div className="field deploy-readonly">
+          {/* 固定 4 列：每行条目按 1/2 列组合正好铺满，标签保持一行，
+              同一行的输入框才会横向和纵向都对齐；窄屏依次降为 2 列、1 列。 */}
+          <div className="deploy-grid deploy-grid-general">
+            <div className="field deploy-readonly deploy-span-2">
               <span className="field-label">
                 配置目录
                 <Hint text="由服务端启动时的 QUBIUS_CONFIG_DIR 决定，运行中不能修改；默认 .qubius/。" />
@@ -1768,14 +1770,14 @@ export function DeployPage() {
               <span className="mono deploy-readonly-value">{form.configDir || "—"}</span>
             </div>
             <TextField
-              label="LAN 监听地址（留空自动）"
+              label="LAN 监听地址"
               value={form.lanHost}
               placeholder="留空时自动选择"
               hint="局域网入口绑定的 IPv4；留空自动选择第一个非回环地址。"
               onChange={(value) => update({ lanHost: value })}
             />
             <TextField
-              label="Node 路径（留空自动）"
+              label="Node 路径"
               value={form.nodeBin}
               placeholder={placeholders.nodeBin}
               hint="Node.js 22+ 可执行文件；留空从 PATH 和 ~/.nvm 查找。"
@@ -1783,13 +1785,13 @@ export function DeployPage() {
             />
             <TextField
               className="deploy-span-2"
-              label="额外允许的访问域名（逗号分隔，可选）"
+              label="额外允许的访问域名"
               value={form.allowedHostsExtra}
               placeholder="例如 qa.example.com, [2001:db8::1]"
               hint="额外的 Host 白名单（逗号分隔），和公网域名一起合并；局域网经 lan-proxy 不需要填。"
               onChange={(value) => update({ allowedHostsExtra: value })}
             />
-            <div className="field">
+            <div className="field deploy-span-2">
               <span className="field-label">
                 访问令牌
                 <Hint text="关闭不校验令牌；自动生成会写入数据目录 auth-token；自定义可指定 16-512 个字符。重置会切换到自定义模式。" />
@@ -1813,8 +1815,25 @@ export function DeployPage() {
                 </button>
               </span>
             </div>
+            <NumberField
+              label="并发上限"
+              min={1}
+              hint="只在首次启动、设置文件还没有该字段时生效（1-256）；之后以「设置」页保存的值为准，改这里不会覆盖已有设置。"
+              value={form.maxConcurrent}
+              onChange={(value) => update({ maxConcurrent: value })}
+            />
+            <NumberField
+              label="确认超时"
+              min={0}
+              hint="首次启动的默认值（0-1440）；之后请在「设置」页修改，保存后立即生效。0 表示一直等待，不显示倒计时。"
+              value={form.approvalTimeoutMinutes}
+              onChange={(value) => update({ approvalTimeoutMinutes: value })}
+            />
+            {/* 自定义令牌属于条件字段，放在并发/超时之后：即使出现也只占本行后两列，
+                不影响前两列已对齐的控件。 */}
             {form.authMode === "custom" && (
               <TextField
+                className="deploy-span-2"
                 type="password"
                 label="自定义访问令牌"
                 value={form.authToken}
@@ -1823,38 +1842,26 @@ export function DeployPage() {
                 onChange={(value) => update({ authToken: value })}
               />
             )}
-            <NumberField
-              label="并发上限（首次启动默认值）"
-              min={1}
-              hint="只在首次启动、设置文件还没有该字段时生效（1-256）；之后以「设置」页保存的值为准，改这里不会覆盖已有设置。"
-              value={form.maxConcurrent}
-              onChange={(value) => update({ maxConcurrent: value })}
-            />
-            <NumberField
-              label="确认超时（首次启动默认值，0 不自动拒绝）"
-              min={0}
-              hint="首次启动的默认值（0-1440）；之后请在「设置」页修改，保存后立即生效。0 表示一直等待，不显示倒计时。"
-              value={form.approvalTimeoutMinutes}
-              onChange={(value) => update({ approvalTimeoutMinutes: value })}
-            />
-            <label className="field field-check">
-              <input
-                type="checkbox"
-                checked={form.terminal}
-                onChange={(event) => update({ terminal: event.target.checked })}
-              />
-              启用浏览器命令行页
-              <Hint text="打开后是运行服务用户的完整 shell；不需要时关闭。" />
-            </label>
-            <label className="field field-check">
-              <input
-                type="checkbox"
-                checked={form.lanEnabled}
-                onChange={(event) => update({ lanEnabled: event.target.checked })}
-              />
-              启用局域网入口（Basic 认证）
-              <Hint text="启用后启动 lan-proxy；部署成功会一次性显示访问地址、用户名、密码和 API 令牌。" />
-            </label>
+            <div className="deploy-checks deploy-span-2">
+              <label className="field field-check">
+                <input
+                  type="checkbox"
+                  checked={form.terminal}
+                  onChange={(event) => update({ terminal: event.target.checked })}
+                />
+                启用浏览器命令行页
+                <Hint text="打开后是运行服务用户的完整 shell；不需要时关闭。" />
+              </label>
+              <label className="field field-check">
+                <input
+                  type="checkbox"
+                  checked={form.lanEnabled}
+                  onChange={(event) => update({ lanEnabled: event.target.checked })}
+                />
+                启用局域网入口（Basic 认证）
+                <Hint text="启用后启动 lan-proxy；部署成功会一次性显示访问地址、用户名、密码和 API 令牌。" />
+              </label>
+            </div>
             <TextField
               label="局域网用户名"
               value={form.lanAuthUser}
@@ -1931,14 +1938,14 @@ export function DeployPage() {
               </div>
             </details>
             <TextField
-              label="归档目录（留空不归档）"
+              label="归档目录"
               value={form.archiveDir}
               placeholder="留空表示不归档"
               hint="会话超过保留天数后先归档到这里再从本机删除；留空不归档、不自动清理。"
               onChange={(value) => update({ archiveDir: value })}
             />
             <NumberField
-              label="列表保留天数（首次启动默认值）"
+              label="列表保留天数"
               min={1}
               hint="首次启动的默认天数（1-3650）；之后请在「设置」页修改，下一轮整理即按新值生效。"
               value={form.archiveRetentionDays}

@@ -767,13 +767,14 @@ export function App() {
             {instanceVersion && <span className="brand-version">v{instanceVersion}</span>}
           </span>
         </button>
-        {/* agent 计数器左侧：本次页面是通过本机、局域网还是公网入口打开的。 */}
+        {/* agent 计数器左侧：本次页面是通过本机、局域网还是公网入口打开的。
+            悬停时用自绘提示立即显示说明（原生 title 延迟太久）。 */}
         <span
           className="access-mode"
           data-mode={accessMode}
+          data-tooltip={`${ACCESS_MODE_LABEL[accessMode]}：${ACCESS_MODE_HINT[accessMode]}`}
           role="img"
-          aria-label={ACCESS_MODE_LABEL[accessMode]}
-          title={`${ACCESS_MODE_LABEL[accessMode]}：${ACCESS_MODE_HINT[accessMode]}`}
+          aria-label={`${ACCESS_MODE_LABEL[accessMode]}：${ACCESS_MODE_HINT[accessMode]}`}
         >
           <AccessModeIcon mode={accessMode} className="access-mode-icon" />
         </span>

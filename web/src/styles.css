@@ -217,6 +217,7 @@ summary:focus-visible {
 /* 顶栏访问模式指示：agent 计数器左侧，颜色区分本机/局域网/公网入口。
    只是状态指示、不可点击，完整含义放在 title / aria-label 里。 */
 .access-mode {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -227,6 +228,41 @@ summary:focus-visible {
   color: var(--green);
   background: color-mix(in srgb, var(--green) 12%, transparent);
   cursor: help;
+}
+
+/* 悬停时立即显示入口说明；原生 title 的延迟太长，也不方便截图/触屏查看。 */
+.access-mode::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + calc(6px * var(--control-scale)));
+  left: 0;
+  width: max-content;
+  max-width: min(260px, calc(100vw - 24px));
+  padding: calc(5px * var(--control-scale)) calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--menu);
+  color: var(--fg);
+  font-size: var(--fs-11);
+  line-height: 1.5;
+  white-space: normal;
+  box-shadow: 0 6px 18px #00000066;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(calc(-2px * var(--control-scale)));
+  transition: opacity 120ms ease, transform 120ms ease;
+  pointer-events: none;
+}
+
+.access-mode:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .access-mode::after { transition: none; }
 }
 
 .access-mode[data-mode="lan"] {
