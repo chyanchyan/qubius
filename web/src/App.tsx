@@ -15,6 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { ACCESS_MODE_HINT, ACCESS_MODE_LABEL, accessModeForHost } from "./access-mode";
 import { answerBody } from "./answers";
 import { addPending, hasPending, removePending } from "./pending-actions";
 import { willQueue } from "./queue-view";
@@ -51,6 +52,7 @@ import { DENSITY_OPTIONS, useDensity } from "./density";
 import { detectWorkflowSkill, WORKFLOW_OPTIONS } from "./workflow-mode";
 import { getDeployState } from "./api-deploy";
 import { startDiscussion } from "./api-discussion";
+import { AccessModeIcon, FontSizeIcon, MoreIcon, RefreshIcon } from "./header-icons";
 import { getMergeStatus, type MergeStatus } from "./api-git";
 import { patchSession } from "./api-sessions";
 import { projectDraftKey, sessionDraftKey } from "./drafts";
@@ -275,11 +277,14 @@ function useFontPercent() {
 
 function FontStepButton({
   symbol,
+  direction,
   label,
   disabled,
   onStep,
 }: {
   symbol: string;
+  /** 窄屏/大字号的紧凑顶栏里用图标代替「小」「大」。 */
+  direction: "down" | "up";
   label: string;
   disabled: boolean;
   onStep: () => void;
@@ -314,7 +319,8 @@ function FontStepButton({
       onPointerLeave={stop}
       onPointerCancel={stop}
     >
-      {symbol}
+      <span className="bar-btn-text" aria-hidden="true">{symbol}</span>
+      <FontSizeIcon direction={direction} className="bar-btn-icon" />
     </button>
   );
 }
@@ -548,6 +554,8 @@ export function App() {
   const [fontPercent, setFontPercent] = useFontPercent();
   /* 字号放大后顶栏会明显变宽，和窄屏一样把次要入口收进「更多」。 */
   const compact = fontPercent > 100;
+  /* 一次连接里地址栏不会变，启动时判断一次访问模式即可。 */
+  const accessMode = useMemo(() => accessModeForHost(window.location.hostname), []);
   const [path, setPath] = useState(window.location.pathname);
   /* 全局订阅一次，badge 和标签页标题在项目/对话/总览页都一致。 */
   const attention = useGlobalAttention();
@@ -759,6 +767,16 @@ export function App() {
             {instanceVersion && <span className="brand-version">v{instanceVersion}</span>}
           </span>
         </button>
+        {/* agent 计数器左侧：本次页面是通过本机、局域网还是公网入口打开的。 */}
+        <span
+          className="access-mode"
+          data-mode={accessMode}
+          role="img"
+          aria-label={ACCESS_MODE_LABEL[accessMode]}
+          title={`${ACCESS_MODE_LABEL[accessMode]}：${ACCESS_MODE_HINT[accessMode]}`}
+        >
+          <AccessModeIcon mode={accessMode} className="access-mode-icon" />
+        </span>
         <AgentBadge
           running={attention.runningAgents}
           limit={sessionLimit}
@@ -782,12 +800,14 @@ export function App() {
           <div className="font-controls" role="group" aria-label="字号">
             <FontStepButton
               symbol="小"
+              direction="down"
               label={`缩小字号（当前 ${fontPercent}%）`}
               disabled={fontPercent <= FONT_PERCENT_MIN}
               onStep={() => setFontPercent((value) => stepFontPercent(value, -1))}
             />
             <FontStepButton
               symbol="大"
+              direction="up"
               label={`放大字号（当前 ${fontPercent}%）`}
               disabled={fontPercent >= FONT_PERCENT_MAX}
               onStep={() => setFontPercent((value) => stepFontPercent(value, 1))}
@@ -810,7 +830,12 @@ export function App() {
           <Menu
             className="bar-more"
             buttonClassName="nav-btn menu-trigger"
-            label="更多"
+            label={(
+              <>
+                <span className="bar-btn-text" aria-hidden="true">更多</span>
+                <MoreIcon className="bar-btn-icon" />
+              </>
+            )}
             ariaLabel="更多导航"
             align="right"
             items={moreItems}
@@ -825,7 +850,8 @@ export function App() {
             title="重新加载页面"
             onClick={() => window.location.reload()}
           >
-            刷新
+            <span className="bar-btn-text" aria-hidden="true">刷新</span>
+            <RefreshIcon className="bar-btn-icon" />
           </button>
         </nav>
       </header>

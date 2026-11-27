@@ -214,6 +214,36 @@ summary:focus-visible {
 
 .brand:hover { background: transparent; color: var(--fg); }
 
+/* 顶栏访问模式指示：agent 计数器左侧，颜色区分本机/局域网/公网入口。
+   只是状态指示、不可点击，完整含义放在 title / aria-label 里。 */
+.access-mode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: calc(21px * var(--control-scale));
+  height: calc(21px * var(--control-scale));
+  border-radius: 999px;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  cursor: help;
+}
+
+.access-mode[data-mode="lan"] {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+}
+
+.access-mode[data-mode="public"] {
+  color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+}
+
+.access-mode-icon {
+  width: calc(13px * var(--control-scale));
+  height: calc(13px * var(--control-scale));
+}
+
 .bar-actions {
   margin-left: auto;
   display: flex;
@@ -249,6 +279,18 @@ summary:focus-visible {
 }
 
 .nav-btn[data-on="true"] { color: var(--fg); }
+
+/* 顶栏右侧按钮（字号、更多、刷新）在窄屏/大字号时只显示图标，
+   文字收起让位给标题和计数；完整含义仍由 aria-label / title 提供。 */
+.bar .bar-btn-icon {
+  display: none;
+  width: calc(15px * var(--control-scale));
+  height: calc(15px * var(--control-scale));
+  flex: none;
+}
+
+.bar.compact .bar-btn-text { display: none; }
+.bar.compact .bar-btn-icon { display: block; }
 
 /* 顶栏自适应：字号放大（.compact）或窄屏时，总览/命令行/技能/部署/设置收进「更多」。
    首页入口是左上角的品牌按钮；待处理 badge 始终保留，避免任何宽度下裁掉可操作入口。
@@ -417,6 +459,10 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
   .bar-scroll { gap: 0; }
   .bar .bar-secondary { display: none; }
   .bar .bar-more { display: inline-flex; }
+
+  /* 窄屏右侧按钮同样改成图标，给品牌、访问模式和 agent 计数留出宽度。 */
+  .bar .bar-btn-text { display: none; }
+  .bar .bar-btn-icon { display: block; }
 
   /* 窄屏上只留「3/8」，给品牌和导航留出宽度。 */
   .agent-badge-label { display: none; }
