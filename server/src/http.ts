@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readAccessEntries } from "./access-entries.js";
 import { ArchiveError, type ArchiveStore } from "./archive.js";
 import { tokenFromRequest, tokenMatches } from "./auth.js";
 import { resolveBuildInfo } from "./build-info.js";
@@ -575,6 +576,13 @@ export function createAppServer(options: {
         secondary: readSecondaryStatus(config, repoRoot, BUILD_HEAD),
         terminal: Boolean(ctx.terminal),
         activeSessions,
+        // 顶栏据此在「当前入口」图标旁标出实例还开放了哪些入口。
+        access: readAccessEntries({
+          config,
+          repoRoot,
+          env: process.env,
+          ...(ctx.edge ? { edge: ctx.edge } : {}),
+        }),
         ...(BUILD_INFO.version ? { version: BUILD_INFO.version } : {}),
       });
       return;

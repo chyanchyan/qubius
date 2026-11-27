@@ -499,6 +499,9 @@ export const LIMIT_RANGES: Array<{ key: keyof Limits; min: number; max: number }
 /** 设置页保存成功后广播；顶栏据此立即更新并发 / agent 上限，不必重新请求。 */
 export const SETTINGS_SAVED_EVENT = "qubius:settings-saved";
 
+/** 部署成功等入口配置变化后广播；顶栏据此重新读取已启用的访问入口。 */
+export const INSTANCE_REFRESH_EVENT = "qubius:instance-refresh";
+
 /** 把任意输入夹到并发上限的合法范围；非数字退回默认值。 */
 export function clampMaxConcurrent(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_MAX_CONCURRENT;
@@ -570,6 +573,8 @@ export interface InstanceInfo {
   terminal?: boolean;
   /** 进行中（排队/运行/等确认）的会话数；重启服务会中断它们。 */
   activeSessions?: number;
+  /** 除本机外实例还启用了哪些入口；旧服务端没有这个字段。 */
+  access?: { lan: boolean; public: boolean };
   /** 运行中构建的版本号（根 package.json 的 version）；旧服务端没有。 */
   version?: string;
 }

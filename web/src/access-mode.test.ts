@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accessModeForHost } from "./access-mode";
+import {
+  accessModeForHost,
+  accessModeTooltip,
+  otherEnabledEntries,
+  type AccessEntries,
+} from "./access-mode";
 
 test("回环地址和 localhost 算本机访问", () => {
   assert.equal(accessModeForHost("localhost"), "local");
@@ -53,4 +58,29 @@ test("主机名缺失或无法解析时按公网处理，不冒充本机", () =>
   assert.equal(accessModeForHost(undefined), "public");
   assert.equal(accessModeForHost(null), "public");
   assert.equal(accessModeForHost("999.1.1.1"), "public");
+});
+
+test("已启用入口标记跳过当前入口本身", () => {
+  const none: AccessEntries = { lan: false, public: false };
+  const all: AccessEntries = { lan: true, public: true };
+  assert.deepEqual(otherEnabledEntries("local", none), []);
+  assert.deepEqual(otherEnabledEntries("local", all), ["lan", "public"]);
+  assert.deepEqual(otherEnabledEntries("lan", all), ["public"]);
+  assert.deepEqual(otherEnabledEntries("public", all), ["lan"]);
+  assert.deepEqual(otherEnabledEntries("lan", { lan: true, public: false }), []);
+});
+
+test("悬停说明只在有其他已启用入口时追加列表", () => {
+  assert.equal(
+    accessModeTooltip("local", { lan: false, public: false }),
+    "本机访问：页面通过本机地址打开",
+  );
+  assert.equal(
+    accessModeTooltip("local", { lan: true, public: false }),
+    "本机访问：页面通过本机地址打开 · 其他已启用入口：局域网",
+  );
+  assert.equal(
+    accessModeTooltip("lan", { lan: true, public: true }),
+    "局域网访问：页面通过局域网地址打开 · 其他已启用入口：公网",
+  );
 });

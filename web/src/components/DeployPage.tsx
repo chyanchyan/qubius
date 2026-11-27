@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { PERMISSIONS, PERMISSION_LABEL, writeApiToken } from "../api";
+import { INSTANCE_REFRESH_EVENT, PERMISSIONS, PERMISSION_LABEL, writeApiToken } from "../api";
 import {
   applyDeploy,
   deployBusyKind,
@@ -671,6 +671,9 @@ export function DeployPage() {
           setPhaseSafe("success");
           stopPolling();
           setPortChanged(!samePort);
+          // 这次部署可能刚启用/停用了局域网或公网入口：让顶栏重新读取标记，
+          // 不依赖页面自动刷新（向导和一次性凭据场景本来就不会自动刷新）。
+          window.dispatchEvent(new Event(INSTANCE_REFRESH_EVENT));
           // 向导模式或还有一次性凭据未保存时不自动刷新：先让用户复制密码/令牌。
           const autoReload = samePort && !wizardRef.current && !oneTimeRef.current;
           setReloading(autoReload);

@@ -15,7 +15,12 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { ACCESS_MODE_HINT, ACCESS_MODE_LABEL, accessModeForHost } from "./access-mode";
+import {
+  accessModeForHost,
+  accessModeTooltip,
+  otherEnabledEntries,
+  type AccessEntries,
+} from "./access-mode";
 import { answerBody } from "./answers";
 import { addPending, hasPending, removePending } from "./pending-actions";
 import { willQueue } from "./queue-view";
@@ -111,6 +116,7 @@ import {
   getSessionMessages,
   getSessions,
   getSettings,
+  INSTANCE_REFRESH_EVENT,
   MAX_CONCURRENT_MAX,
   MAX_CONCURRENT_MIN,
   mergeSessionFrame,
@@ -639,20 +645,34 @@ export function App() {
   /* null 表示实例信息还没拿到（请求失败也保持 null）：入口先不显示，
      /terminal 仍按旧服务端兼容渲染，避免入口闪一下再消失。 */
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
+  /* 除本机外实例还开放了哪些入口；顶部主图标仍只表示当前页面用的入口。 */
+  const [accessEntries, setAccessEntries] = useState<AccessEntries>({ lan: false, public: false });
   useEffect(() => {
     let cancelled = false;
-    getInstance()
-      .then((info) => {
-        if (cancelled) return;
-        setInstanceRole(info.role);
-        setInstanceVersion(info.version ?? "");
-        setTerminalEnabled(info.terminal !== false);
-      })
-      .catch(() => {});
+    function loadInstance() {
+      getInstance()
+        .then((info) => {
+          if (cancelled) return;
+          setInstanceRole(info.role);
+          setInstanceVersion(info.version ?? "");
+          setTerminalEnabled(info.terminal !== false);
+          setAccessEntries({
+            lan: info.access?.lan === true,
+            public: info.access?.public === true,
+          });
+        })
+        .catch(() => {});
+    }
+    loadInstance();
+    /* 部署成功后入口配置可能变化（例如刚勾选局域网入口），不必刷新整页。 */
+    window.addEventListener(INSTANCE_REFRESH_EVENT, loadInstance);
     return () => {
       cancelled = true;
+      window.removeEventListener(INSTANCE_REFRESH_EVENT, loadInstance);
     };
   }, []);
+  const extraAccessEntries = otherEnabledEntries(accessMode, accessEntries);
+  const accessModeHint = accessModeTooltip(accessMode, accessEntries);
   const brand = instanceBrand(instanceRole);
 
   /* 还没有配置文件时，第一次打开应用直接带到部署页。
@@ -767,16 +787,23 @@ export function App() {
             {instanceVersion && <span className="brand-version">v{instanceVersion}</span>}
           </span>
         </button>
-        {/* agent 计数器左侧：本次页面是通过本机、局域网还是公网入口打开的。
-            悬停时用自绘提示立即显示说明（原生 title 延迟太久）。 */}
+        {/* agent 计数器左侧：主图标表示本次页面通过哪个入口打开；旁边的小圆点
+            标出实例另外还启用了哪些入口。悬停时用自绘提示立即显示说明。 */}
         <span
           className="access-mode"
           data-mode={accessMode}
-          data-tooltip={`${ACCESS_MODE_LABEL[accessMode]}：${ACCESS_MODE_HINT[accessMode]}`}
+          data-tooltip={accessModeHint}
           role="img"
-          aria-label={`${ACCESS_MODE_LABEL[accessMode]}：${ACCESS_MODE_HINT[accessMode]}`}
+          aria-label={accessModeHint}
         >
           <AccessModeIcon mode={accessMode} className="access-mode-icon" />
+          {extraAccessEntries.length > 0 && (
+            <span className="access-mode-entries" aria-hidden="true">
+              {extraAccessEntries.map((entry) => (
+                <span key={entry} className="access-mode-dot" data-mode={entry} />
+              ))}
+            </span>
+          )}
         </span>
         <AgentBadge
           running={attention.runningAgents}

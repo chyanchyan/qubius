@@ -222,13 +222,32 @@ summary:focus-visible {
   align-items: center;
   justify-content: center;
   flex: none;
-  width: calc(21px * var(--control-scale));
+  gap: calc(3px * var(--control-scale));
+  min-width: calc(21px * var(--control-scale));
   height: calc(21px * var(--control-scale));
+  padding: 0 calc(4px * var(--control-scale));
   border-radius: 999px;
   color: var(--green);
   background: color-mix(in srgb, var(--green) 12%, transparent);
   cursor: help;
 }
+
+/* 当前入口在主图标里；其余已启用入口用与对应图标同色的小圆点标出。 */
+.access-mode-entries {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(2px * var(--control-scale));
+}
+
+.access-mode-dot {
+  flex: none;
+  width: calc(5px * var(--control-scale));
+  height: calc(5px * var(--control-scale));
+  border-radius: 50%;
+}
+
+.access-mode-dot[data-mode="lan"] { background: var(--blue); }
+.access-mode-dot[data-mode="public"] { background: var(--orange); }
 
 /* 悬停时立即显示入口说明；原生 title 的延迟太长，也不方便截图/触屏查看。 */
 .access-mode::after {

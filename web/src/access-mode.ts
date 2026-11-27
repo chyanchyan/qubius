@@ -1,8 +1,9 @@
 /* 顶栏的访问模式指示。
  *
- * 同一个实例可以同时开放本机、局域网和公网入口，所以这里判断的不是服务端
- * 部署了哪些入口，而是「这次页面是从哪个入口打开的」——浏览器地址栏的主机名
- * 就是最可靠的依据：lan-proxy 只改写上游请求的 Host，地址栏仍是局域网地址。
+ * 主图标表示「这次页面是从哪个入口打开的」——浏览器地址栏的主机名就是最可靠
+ * 的依据：lan-proxy 只改写上游请求的 Host，地址栏仍是局域网地址。
+ * 同一个实例可以同时开放本机、局域网和公网入口，所以服务端另外上报已启用的
+ * 入口，用主图标旁的小圆点标出当前入口之外的入口。
  */
 export type AccessMode = "local" | "lan" | "public";
 
@@ -17,6 +18,35 @@ export const ACCESS_MODE_HINT: Record<AccessMode, string> = {
   lan: "页面通过局域网地址打开",
   public: "页面通过公网地址打开",
 };
+
+/** 实例除本机外可以启用的入口；本机入口始终可用，不用单独标记。 */
+export type AccessEntry = "lan" | "public";
+
+export interface AccessEntries {
+  lan: boolean;
+  public: boolean;
+}
+
+export const ACCESS_ENTRY_LABEL: Record<AccessEntry, string> = {
+  lan: "局域网",
+  public: "公网",
+};
+
+/** 当前页面的入口已经在主图标上，这里只返回还需要额外标记的已启用入口。 */
+export function otherEnabledEntries(current: AccessMode, entries: AccessEntries): AccessEntry[] {
+  const result: AccessEntry[] = [];
+  if (entries.lan && current !== "lan") result.push("lan");
+  if (entries.public && current !== "public") result.push("public");
+  return result;
+}
+
+/** 悬停说明：当前入口 + 其他已启用入口，没有其他入口时只说明当前入口。 */
+export function accessModeTooltip(current: AccessMode, entries: AccessEntries): string {
+  const base = `${ACCESS_MODE_LABEL[current]}：${ACCESS_MODE_HINT[current]}`;
+  const others = otherEnabledEntries(current, entries);
+  if (others.length === 0) return base;
+  return `${base} · 其他已启用入口：${others.map((entry) => ACCESS_ENTRY_LABEL[entry]).join("、")}`;
+}
 
 /** 按浏览器当前访问的主机名判断访问模式。 */
 export function accessModeForHost(raw: string | undefined | null): AccessMode {
