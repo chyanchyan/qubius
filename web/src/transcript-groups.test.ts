@@ -165,6 +165,19 @@ test("活动组不打断本轮模型标记的等待", () => {
   assert.equal(assistantGroup?.showModel, true);
 });
 
+test("可见窗口从一轮中间开始时也标出模型", () => {
+  // 历史分页/手机重连只加载最近一页：用户消息在窗口之外，开头就是工具和思考。
+  const groups = groupTranscript([
+    tool("t1", "Bash"),
+    thinking("th1", "继续"),
+    assistant("a1", "收尾", { model: "model-a" }),
+    assistant("a2", "同一轮的补充", { model: "model-a" }),
+  ]);
+
+  const flags = groups.flatMap((group) => group.kind === "assistant" ? [group.showModel] : []);
+  assert.deepEqual(flags, [true, false]);
+});
+
 test("summarizeActivity：工具优先标题，计数降序、同数按名称升序", () => {
   const group = activity([
     tool("t1", "Bash"),

@@ -91,7 +91,9 @@ export function groupTranscript(items: Transcript[]): TranscriptGroup[] {
   let run: Transcript[] = [];
   // 每条用户消息开启新一轮；本轮第一条带 model 的 assistant 正文负责显示模型，
   // 后面的正文（工具调用之间的补充说明）不重复占位。活动组不打断这个等待。
-  let awaitingTurnModel = false;
+  // 初始就视为等待：历史分页/手机重连后可见窗口常常从一轮中间开始，用户消息
+  // 已经翻到窗口之外，第一段正文仍要标出模型，否则长回合里永远看不到模型名。
+  let awaitingTurnModel = true;
   const flush = () => {
     if (run.length > 0) groups.push(activityGroup(run));
     run = [];
