@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   commitAndPush,
   createWorktree,
+  dirtySessionBranches,
   gitStatus,
   isGitRepo,
   mergedSessionBranches,
@@ -91,8 +92,35 @@ test("mergedSessionBranches 没有 main 时退回 master，非仓库返回 null"
   }
 });
 
-function remoteBranchSha(remote: string, branch: string): string {
-  return execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", `refs/heads/${branch}`], {
+test("dirtySessionBranches 报告有未提交改动的会话分支", async () => {
+  const { base, work } = setupRepo();
+  try {
+    const branch = `qubius/${randomUUID()}`;
+    git(work, "checkout", "-q", "-b", branch);
+    assert.deepEqual(await dirtySessionBranches([{ branch, cwd: work }]), []);
+
+    fs.writeFileSync(path.join(work, "a.txt"), "changed\n");
+    assert.deepEqual(await dirtySessionBranches([{ branch, cwd: work }]), [branch]);
+
+    // 未跟踪文件也算改动。
+    git(work, "checkout", "--", "a.txt");
+    fs.writeFileSync(path.join(work, "new.txt"), "new\n");
+    assert.deepEqual(await dirtySessionBranches([{ branch, cwd: work }]), [branch]);
+
+    // 目录已经不存在时按没有改动处理，不影响其它会话。
+    assert.deepEqual(
+      await dirtySessionBranches([
+        { branch: `qubius/${randomUUID()}`, cwd: path.join(base, "missing") },
+        { branch, cwd: work },
+      ]),
+      [branch],
+    );
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+function remoteBranchSha(remote: string, branch: string): string {  return execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", `refs/heads/${branch}`], {
     encoding: "utf8",
   }).trim();
 }

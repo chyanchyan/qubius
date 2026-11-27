@@ -60,6 +60,8 @@ import { getDeployState } from "./api-deploy";
 import { startDiscussion } from "./api-discussion";
 import { AccessModeIcon, FontSizeIcon, MoreIcon, RefreshIcon } from "./header-icons";
 import { getMergeStatus, type MergeStatus } from "./api-git";
+import { branchLampState, type BranchLamp } from "./branch-state";
+import { isActivePhase } from "./project-activity";
 import { patchSession } from "./api-sessions";
 import { projectDraftKey, sessionDraftKey } from "./drafts";
 import { useGlobalAttention } from "./global-attention";
@@ -1184,8 +1186,7 @@ const BoardSessionRow = memo(function BoardSessionRow({
   continuing,
   selectMode,
   selected,
-  merged,
-  untouched,
+  lamp,
   mergeBase,
   onToggleOpen,
   onDelete,
@@ -1199,10 +1200,8 @@ const BoardSessionRow = memo(function BoardSessionRow({
   continuing: boolean;
   selectMode: boolean;
   selected: boolean;
-  /** 分支是否已合入基准分支；合入状态还没加载时为 undefined。 */
-  merged?: boolean;
-  /** 分支创建后从未改过代码：显示蓝灯。 */
-  untouched?: boolean;
+  /** 分支灯状态：灰=首轮答复中，橙=有未提交改动，黄=未合入，绿=已合入，蓝=做过答复且无改动。 */
+  lamp?: BranchLamp;
   mergeBase?: string;
   onToggleOpen: (id: string, open: boolean) => void;
   onDelete: (session: Session) => void;
@@ -1254,8 +1253,7 @@ const BoardSessionRow = memo(function BoardSessionRow({
                 <BranchBadge
                   branch={session.branch}
                   className="convo-branch"
-                  merged={merged}
-                  untouched={untouched}
+                  state={lamp}
                   base={mergeBase}
                 />
               )}
@@ -1426,13 +1424,16 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   const answeringIdsRef = useRef(new Set<string>());
   const [clearing, setClearing] = useState(false);
   const clearingRef = useRef(false);
-  /* 分支合入 / 改动状态：列表里用分支标签底色展示（绿=已合入，蓝=从未改过代码），
-     「全部归档」跳过运行中的会话，默认只归档已合入的。 */
+  /* 分支合入 / 改动状态：列表里用分支标签底色展示（绿=已合入，黄=未合入，
+     橙=有未提交改动，蓝=做过答复且无改动，灰=首轮答复中），「全部归档」跳过
+     运行中的会话，默认只归档已合入的。 */
   const [mergeStatus, setMergeStatus] = useState<MergeStatus | null>(null);
   const mergeSeq = useRef(0);
   const mergedBranches = useMemo(() => new Set(mergeStatus?.merged ?? []), [mergeStatus]);
-  /* 分支创建后从未提交过代码；标签显示蓝灯（归档不会丢代码，按已合入处理）。 */
+  /* 分支创建后从未提交过代码；用来区分灰灯和蓝灯，归档按已合入处理。 */
   const untouchedBranches = useMemo(() => new Set(mergeStatus?.untouched ?? []), [mergeStatus]);
+  /* 有未提交改动的分支：橙灯，归档会连同这些文件一起删掉。 */
+  const dirtyBranches = useMemo(() => new Set(mergeStatus?.dirty ?? []), [mergeStatus]);
   const mergeBase = mergeStatus?.base ?? undefined;
   const [archived, setArchived] = useState<ArchivedSession[]>([]);
   const [archiveStatus, setArchiveStatus] = useState<ArchiveStatus | null>(null);
@@ -1481,6 +1482,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
         && current.base === status.base
         && sameBranches(current.merged, status.merged)
         && sameBranches(current.untouched, status.untouched)
+        && sameBranches(current.dirty ?? [], status.dirty ?? [])
           ? current
           : status
       ));
@@ -1669,8 +1671,8 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     // 运行中的会话始终保留；其余会话在取消勾选时都会归档（包括未合入的）。
     const candidates = clearAllCandidates(sessions);
     const runningCount = sessions.length - candidates.length;
-    // 勾选项默认打开：只归档已合入的会话（含从未改过代码的蓝灯分支）。
-    const defaultTargets = pickArchiveTargets(sessions, canFilter, mergedBranches);
+    // 勾选项默认打开：只归档已合入、且没有未提交改动的会话（含蓝灯分支）。
+    const defaultTargets = pickArchiveTargets(sessions, canFilter, mergedBranches, dirtyBranches);
     if (candidates.length === 0) {
       reportActionError("没有可归档的对话：运行中的会话会保留");
       return;
@@ -1689,7 +1691,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
             label: `仅归档已合入 ${base} 的会话`,
             checked: true,
             description: candidates.length > defaultTargets.length
-              ? `取消勾选会把可归档的 ${candidates.length} 个对话全部归档（多 ${candidates.length - defaultTargets.length} 个），包括尚未合入 ${base} 的会话。`
+              ? `取消勾选会把可归档的 ${candidates.length} 个对话全部归档（多 ${candidates.length - defaultTargets.length} 个），包括尚未合入 ${base} 和有未提交改动的会话。`
               : undefined,
           }
         : undefined,
@@ -1697,7 +1699,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
       danger: true,
     });
     if (!choice.confirmed) return;
-    const targets = pickArchiveTargets(sessions, canFilter && choice.checked, mergedBranches);
+    const targets = pickArchiveTargets(sessions, canFilter && choice.checked, mergedBranches, dirtyBranches);
     if (targets.length === 0) {
       reportActionError(`没有已合入 ${base || "main"} 的对话可归档`);
       return;
@@ -2457,8 +2459,13 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
                   continuing={continuingIds.has(entry.session.id)}
                   selectMode={selectMode}
                   selected={selectedIds.has(entry.session.id)}
-                  merged={mergeBase && entry.session.branch ? mergedBranches.has(entry.session.branch) : undefined}
-                  untouched={Boolean(entry.session.branch && untouchedBranches.has(entry.session.branch))}
+                  lamp={entry.session.branch ? branchLampState({
+                    merged: mergeBase ? mergedBranches.has(entry.session.branch) : undefined,
+                    untouched: untouchedBranches.has(entry.session.branch),
+                    dirty: dirtyBranches.has(entry.session.branch),
+                    active: isActivePhase(entry.session.phase),
+                    earlierReply: entry.session.hasEarlierReply,
+                  }) : undefined}
                   mergeBase={mergeBase}
                   onToggleOpen={onToggleSwipe}
                   onDelete={onDeleteSession}

@@ -16,6 +16,9 @@ const PROBE_TIMEOUT_MS = 10_000;
 // 大仓库首次 checkout / 删除大量文件可能超过一分钟，允许用环境变量调整。
 const WORKTREE_TIMEOUT_MS = timeoutFromEnv("QUBIUS_WORKTREE_TIMEOUT_MS", 120_000);
 const DIFF_TIMEOUT_MS = timeoutFromEnv("QUBIUS_DIFF_TIMEOUT_MS", 60_000);
+// 会话列表轮询未提交改动：每 20 秒一次，单次探测要比刷新间隔短，
+// 避免大仓库拖住下一次轮询。
+const DIRTY_PROBE_TIMEOUT_MS = timeoutFromEnv("QUBIUS_DIRTY_PROBE_TIMEOUT_MS", 5_000);
 const PROBE_MAX_BUFFER = 1_000_000;
 const MAX_UNTRACKED_SHOWN = 200;
 const WORKTREE_MAX_BUFFER = 2_000_000;
@@ -553,8 +556,9 @@ async function sessionBranchCreations(projectPath: string): Promise<Map<string, 
  * 开发分支 merge 进 main 之后，会话分支都会成为 main 的祖先，因此这里能覆盖
  * 两种收尾流程。未提交的工作区改动不属于分支提交，不参与判断。
  *
- * 另外报告从未提交过代码的分支（untouched）：它们同样以「已合入」出现，
- * 界面用蓝灯区分；归档这类分支不会丢掉任何代码，全部归档按已合入处理。
+ * 另外报告从未提交过代码的分支（untouched）：它们同样以「已合入」出现。
+ * 列表据此区分灰灯（还在首轮答复、没有任何结果）和蓝灯（做过答复但没有
+ * 改动）；归档这类分支不会丢掉任何代码，全部归档按已合入处理。
  */
 export async function mergedSessionBranches(projectPath: string): Promise<MergeStatus> {
   const [refs, tips, creations] = await Promise.all([
@@ -589,6 +593,45 @@ export async function mergedSessionBranches(projectPath: string): Promise<MergeS
     // 仓库还没有提交或基准分支损坏：保守返回空列表，界面按未合入显示。
     return { base: base.name, merged: [], untouched };
   }
+}
+
+/** 会话分支所在的 worktree；cwd 是列表里的会话工作目录。 */
+export interface SessionWorktree {
+  branch: string;
+  cwd: string;
+}
+
+/**
+ * 有未提交改动（含未跟踪文件）的会话分支。逐个 worktree 跑 `git status`：
+ * 分支没有新提交时也可能有改动，列表用橙灯提醒，归档会连带删掉这些文件。
+ *
+ * 只读探测，目录已删除、不是仓库或超时都按「没有改动」处理；并发限制在
+ * 4 个，避免会话多时一次拉起大量 git 进程。
+ */
+export async function dirtySessionBranches(
+  worktrees: readonly SessionWorktree[],
+): Promise<string[]> {
+  // 正常每个会话一个 worktree；同一个 cwd 只查一次，结果按分支记录。
+  const unique = new Map<string, string>();
+  for (const { branch, cwd } of worktrees) {
+    if (branch && cwd) unique.set(cwd, branch);
+  }
+  const queue = [...unique];
+  const dirty: string[] = [];
+  const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+    for (;;) {
+      const next = queue.shift();
+      if (!next) return;
+      const [cwd, branch] = next;
+      try {
+        if ((await readStatusEntries(cwd, DIRTY_PROBE_TIMEOUT_MS)).length > 0) dirty.push(branch);
+      } catch {
+        // 目录不存在或 git 不可用：按没有改动处理，下一次轮询再试。
+      }
+    }
+  });
+  await Promise.all(workers);
+  return dirty.sort();
 }
 
 export interface GitPushResult {
@@ -663,11 +706,11 @@ function parseStatusEntries(output: string): string[] {
   return files;
 }
 
-async function readStatusEntries(cwd: string): Promise<string[]> {
+async function readStatusEntries(cwd: string, timeoutMs = DIFF_TIMEOUT_MS): Promise<string[]> {
   try {
     const { stdout } = await exec("git", ["-C", cwd, "status", "--porcelain=v1", "-z"], {
       windowsHide: true,
-      timeout: DIFF_TIMEOUT_MS,
+      timeout: timeoutMs,
       maxBuffer: STATUS_MAX_BUFFER,
       // 只读查询不抢 index 锁。
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },

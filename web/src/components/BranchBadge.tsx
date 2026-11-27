@@ -1,3 +1,5 @@
+import type { BranchLamp } from "../branch-state";
+
 /**
  * 会话分支的小标签。工作区里的分支名是 `qubius/<完整 uuid>`，列表里只显示
  * 前缀和 uuid 前 8 位；完整名字放在 title 里，避免撑破一行。
@@ -9,41 +11,46 @@ export function shortBranch(branch: string | undefined): string {
   return branch;
 }
 
+/** 各状态对应的提示文案；合入状态带上基准分支名。 */
+function badgeTitle(branch: string, state: BranchLamp | undefined, base?: string): string {
+  switch (state) {
+    case "starting":
+      return `${branch} · 首轮答复中，还没有改动`;
+    case "dirty":
+      return `${branch} · 有未提交的改动`;
+    case "untouched":
+      return `${branch} · 从未改过代码`;
+    case "merged":
+      return `${branch} · 已合入 ${base || "main"}`;
+    case "unmerged":
+      return `${branch} · 未合入 ${base || "main"}`;
+    default:
+      return branch;
+  }
+}
+
 /**
- * 分支标签。列表拿到合入状态后传入 merged / base / untouched，用底色表示
- * 分支的状态：已合入为绿底，未合入保持默认；分支创建后从未改过代码时为
- * 蓝底（它停在基准分支上，没有可归档的改动）。
- * 不传 merged / untouched（详情页、总览页、状态未加载）时样式不变。
+ * 分支标签。底色由调用方传入的 state 决定：灰=首轮答复中且没有改动，
+ * 橙=有未提交改动，黄=有提交但没合入，绿=已合入，蓝=做过答复且没有改动。
+ * 不传 state（详情页、总览页、状态未加载）时样式不变。
  */
 export function BranchBadge({
   branch,
   className,
-  merged,
+  state,
   base,
-  untouched,
 }: {
   branch?: string;
   className?: string;
-  merged?: boolean;
+  state?: BranchLamp;
   base?: string;
-  untouched?: boolean;
 }) {
   if (!branch) return null;
-  const title = untouched
-    ? `${branch} · 从未改过代码`
-    : merged === undefined
-      ? branch
-      : `${branch} · ${merged ? "已合入" : "未合入"} ${base || "main"}`;
-  const state = untouched
-    ? "untouched"
-    : merged === undefined
-      ? undefined
-      : merged ? "merged" : "unmerged";
   return (
     <span
       className={className ? `branch-badge mono ${className}` : "branch-badge mono"}
       data-state={state}
-      title={title}
+      title={badgeTitle(branch, state, base)}
     >
       {shortBranch(branch)}
     </span>

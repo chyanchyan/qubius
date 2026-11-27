@@ -135,3 +135,24 @@ test("从未改过代码的分支算已合入，默认归档", () => {
     ["done", "never"],
   );
 });
+
+test("有未提交改动的分支默认跳过，取消勾选时归档", () => {
+  const dirty = "qubius/aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa";
+  const sessions = [
+    session("done", { branch: "qubius/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" }),
+    session("dirty", { branch: dirty }),
+  ];
+  const merged = new Set([sessions[0]?.branch ?? "", dirty]);
+  const dirtyBranches = new Set([dirty]);
+
+  // 橙灯分支虽然已合入，但未提交的改动会随归档删除，默认保留。
+  assert.deepEqual(
+    pickArchiveTargets(sessions, true, merged, dirtyBranches).map((item) => item.id),
+    ["done"],
+  );
+  // 取消勾选后按用户选择归档，包括有未提交改动的。
+  assert.deepEqual(
+    pickArchiveTargets(sessions, false, merged, dirtyBranches).map((item) => item.id),
+    ["done", "dirty"],
+  );
+});

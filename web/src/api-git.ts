@@ -13,7 +13,7 @@ export interface GitPushResult {
   output: string;
 }
 
-/** 项目里已合入基准分支的会话分支，用于列表里的分支标签和批量归档过滤。 */
+/** 项目里会话分支的状态，用于列表里的分支标签和批量归档过滤。 */
 export interface MergeStatus {
   /** 基准分支短名（main / master / origin/main…）；项目不是 git 或找不到时为 null。 */
   base: string | null;
@@ -21,6 +21,8 @@ export interface MergeStatus {
   merged: string[];
   /** 创建后从未提交过代码的会话分支名：分支没有带来任何改动。 */
   untouched: string[];
+  /** 有未提交改动（含未跟踪文件）的会话分支名；旧服务端不返回。 */
+  dirty?: string[];
 }
 
 export function getMergeStatus(projectId: string, signal?: AbortSignal): Promise<MergeStatus> {

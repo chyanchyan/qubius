@@ -657,19 +657,39 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
 }
 
 /* 分支的改动已经在基准分支（通常是 main）上：用绿色底提示可以安全归档。
-   未合入保持默认底色；合入状态未知（没有加载到 / 找不到 main）时不着色。 */
+   合入状态未知（没有加载到 / 找不到 main）时不着色。 */
 .branch-badge[data-state="merged"] {
   border-color: color-mix(in srgb, var(--green) 45%, var(--line));
   background: color-mix(in srgb, var(--green) 16%, transparent);
   color: var(--green);
 }
 
-/* 分支创建后从未改过代码：蓝灯。它停在基准分支上、没有可归档的改动，
-   归档不会丢掉任何代码，「全部归档」按已合入处理。 */
+/* 有提交但还没合入基准分支：黄灯。 */
+.branch-badge[data-state="unmerged"] {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+/* 有改动但还没有提交：橙灯。归档会连同这些文件一起删掉，颜色要比黄灯更醒目。 */
+.branch-badge[data-state="dirty"] {
+  border-color: color-mix(in srgb, var(--orange) 60%, var(--line));
+  background: color-mix(in srgb, var(--orange) 18%, transparent);
+  color: var(--orange);
+}
+
+/* 做了答复且没有任何代码改动：蓝灯。归档不会丢掉任何代码。 */
 .branch-badge[data-state="untouched"] {
   border-color: color-mix(in srgb, var(--blue) 45%, var(--line));
   background: color-mix(in srgb, var(--blue) 16%, transparent);
   color: var(--blue);
+}
+
+/* 已发言、当前还在首轮答复，且没有任何改动：灰灯，表示暂时没有结果可看。 */
+.branch-badge[data-state="starting"] {
+  border-color: color-mix(in srgb, var(--muted) 35%, var(--line));
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
 }
 
 /* 标题行：分支标签放在标题左侧，与标题同一行，不额外占一行高度。 */

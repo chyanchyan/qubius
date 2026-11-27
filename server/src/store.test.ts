@@ -5,8 +5,8 @@ import path from "node:path";
 import test, { mock } from "node:test";
 import { ROOT_FORK_POINT } from "./session-rewind.js";
 import { PROVISIONAL_TITLE } from "./session-title.js";
-import { Store, type CreateSessionInput, type SessionEvent } from "./store.js";
-import type { BackgroundTask, Effort, RoleTeam, SessionCore } from "./types.js";
+import { Store, toSummary, type CreateSessionInput, type SessionEvent } from "./store.js";
+import type { BackgroundTask, Effort, RoleTeam, SessionCore, TranscriptItem } from "./types.js";
 
 /**
  * 只测落盘的离散行为（flush / 删除 / 启动清理），不触碰 1 秒防抖和
@@ -75,8 +75,7 @@ function minimalSession(id: string): SessionCore {
   };
 }
 
-/** 直接把会话写进 sessions 目录，用来构造固定 createdAt 的旧数据。 */
-function writeSessionFile(dataDir: string, session: SessionCore): void {
+/** 直接把会话写进 sessions 目录，用来构造固定 createdAt 的旧数据。 */function writeSessionFile(dataDir: string, session: SessionCore): void {
   const dir = sessionsDir(dataDir);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, `${session.id}.json`), JSON.stringify(session));
@@ -2478,5 +2477,52 @@ test("updateRunConfig 切换接口后立即刷新 usageReport 归账", async () 
     await store.flush().catch(() => undefined);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test("摘要标记当前轮之前是否已有答复", () => {
+  const reply = (at: string, extra: Partial<TranscriptItem> = {}): TranscriptItem => ({
+    id: at,
+    role: "assistant",
+    text: "答复",
+    at,
+    ...extra,
+  });
+  const user = (at: string): TranscriptItem => ({ id: `u-${at}`, role: "user", text: "问题", at });
+
+  // 首轮进行中：只出现了本轮的部分输出和思考，都还不算「做过一轮答复」。
+  const firstRound: SessionCore = {
+    ...minimalSession("first-round"),
+    phase: "running",
+    runStartedAt: "2026-01-01T00:05:00.000Z",
+    messages: [
+      user("2026-01-01T00:04:00.000Z"),
+      reply("2026-01-01T00:06:00.000Z", { partial: true }),
+      reply("2026-01-01T00:06:30.000Z"),
+      reply("2026-01-01T00:05:30.000Z", { kind: "thinking" }),
+    ],
+  };
+  assert.equal(toSummary(firstRound, false).hasEarlierReply, false);
+
+  // 第二轮进行中：上一轮的正式答复早于本轮起点。
+  const secondRound: SessionCore = {
+    ...firstRound,
+    runStartedAt: "2026-01-01T00:10:00.000Z",
+    messages: [
+      user("2026-01-01T00:04:00.000Z"),
+      reply("2026-01-01T00:06:00.000Z"),
+      user("2026-01-01T00:09:00.000Z"),
+      reply("2026-01-01T00:11:00.000Z", { partial: true }),
+    ],
+  };
+  assert.equal(toSummary(secondRound, false).hasEarlierReply, true);
+
+  // 没有 runStartedAt 的旧会话：只要有正式答复就按已有答复处理。
+  const legacy: SessionCore = {
+    ...minimalSession("legacy"),
+    phase: "completed",
+    messages: [user("2026-01-01T00:00:00.000Z"), reply("2026-01-01T00:01:00.000Z")],
+  };
+  assert.equal(toSummary(legacy, false).hasEarlierReply, true);
+  assert.equal(toSummary(minimalSession("empty"), false).hasEarlierReply, false);
 });
 

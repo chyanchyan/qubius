@@ -818,10 +818,11 @@ test("设置页不能删除 config.yaml 项目和内置项目", async () => {
   }
 });
 
-test("合入状态接口返回基准分支和已合入的会话分支", async () => {
+test("合入状态接口返回基准分支、已合入分支和未提交改动", async () => {
+  type MergeStatusBody = { base: string | null; merged: string[]; untouched: string[]; dirty: string[] };
   const harness = await startHarness();
   try {
-    const empty = await call<{ base: string | null; merged: string[]; untouched: string[] }>(
+    const empty = await call<MergeStatusBody>(
       harness,
       "GET",
       "/api/projects/p2/merge-status",
@@ -832,11 +833,12 @@ test("合入状态接口返回基准分支和已合入的会话分支", async ()
     assert.ok(base === "main" || base === "master");
     assert.deepEqual(empty.data.merged, []);
     assert.deepEqual(empty.data.untouched, []);
+    assert.deepEqual(empty.data.dirty, []);
 
     // 新会话的分支从默认分支的 HEAD 建立，还没有自己的提交，因此已经算合入，
-    // 同时也被标记为从未改过代码。
+    // 同时也被标记为从未改过代码；工作区干净时不在 dirty 里。
     const id = await createSession(harness, "p2", "做点事");
-    const status = await call<{ base: string | null; merged: string[]; untouched: string[] }>(
+    const status = await call<MergeStatusBody>(
       harness,
       "GET",
       "/api/projects/p2/merge-status",
@@ -844,9 +846,22 @@ test("合入状态接口返回基准分支和已合入的会话分支", async ()
     assert.equal(status.data.base, base);
     assert.deepEqual(status.data.merged, [`qubius/${id}`]);
     assert.deepEqual(status.data.untouched, [`qubius/${id}`]);
+    assert.deepEqual(status.data.dirty, []);
+
+    // 会话 worktree 里出现未提交文件：分支进入 dirty，合入状态不变。
+    const detail = await call<{ session: { cwd: string } }>(harness, "GET", `/api/sessions/${id}`);
+    fs.writeFileSync(path.join(detail.data.session.cwd, "dirty.txt"), "dirty\n");
+    const dirtied = await call<MergeStatusBody>(
+      harness,
+      "GET",
+      "/api/projects/p2/merge-status",
+    );
+    assert.deepEqual(dirtied.data.merged, [`qubius/${id}`]);
+    assert.deepEqual(dirtied.data.untouched, [`qubius/${id}`]);
+    assert.deepEqual(dirtied.data.dirty, [`qubius/${id}`]);
 
     // 非 git 项目没有可比较的分支。
-    const plain = await call<{ base: string | null; merged: string[]; untouched: string[] }>(
+    const plain = await call<MergeStatusBody>(
       harness,
       "GET",
       "/api/projects/p1/merge-status",
@@ -854,6 +869,7 @@ test("合入状态接口返回基准分支和已合入的会话分支", async ()
     assert.equal(plain.data.base, null);
     assert.deepEqual(plain.data.merged, []);
     assert.deepEqual(plain.data.untouched, []);
+    assert.deepEqual(plain.data.dirty, []);
 
     const missing = await call(harness, "GET", "/api/projects/nope/merge-status");
     assert.equal(missing.status, 404);

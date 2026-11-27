@@ -1958,6 +1958,7 @@ export class Store {
       backgroundTasks: [],
       mainAgentRunning: false,
       pending: null,
+      hasEarlierReply: false,
       createdAt: "",
       updatedAt: "",
       removed: true,
@@ -2434,6 +2435,29 @@ function validWorkflow(value: unknown): WorkflowRun | undefined {
   };
 }
 
+/** 一条算作「agent 答复」的记录：有正文的助手消息，不含思考和流式增量。 */
+function isAssistantReply(item: TranscriptItem): boolean {
+  return item.role === "assistant"
+    && item.kind !== "thinking"
+    && !item.partial
+    && item.text.trim().length > 0;
+}
+
+/**
+ * 当前这一轮开始前是否已经有过答复。本轮产生的消息时间都在 runStartedAt
+ * 之后，只有更早的助手正文才算「做过一轮答复」。时间缺失的旧消息按更早
+ * 处理，避免老会话一直停在首轮状态。
+ */
+function earlierReplyExists(session: SessionCore): boolean {
+  const started = session.runStartedAt ? Date.parse(session.runStartedAt) : NaN;
+  return session.messages.some((item) => {
+    if (!isAssistantReply(item)) return false;
+    if (!Number.isFinite(started)) return true;
+    const at = item.at ? Date.parse(item.at) : NaN;
+    return !Number.isFinite(at) || at < started;
+  });
+}
+
 export function toSummary(session: SessionCore, detail: boolean): SessionSummary {
   const counts = subagentCounts(session.subagents);
   const summary: SessionSummary = {
@@ -2462,6 +2486,7 @@ export function toSummary(session: SessionCore, detail: boolean): SessionSummary
     pinned: session.pinned === true,
     runStartedAt: session.runStartedAt,
     runEndedAt: session.runEndedAt,
+    hasEarlierReply: earlierReplyExists(session),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };

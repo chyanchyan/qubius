@@ -131,6 +131,7 @@ import {
   commitAndPush,
   createWorktree,
   diffSummary,
+  dirtySessionBranches,
   gitStatus,
   isGitRepo,
   mergedSessionBranches,
@@ -1218,10 +1219,18 @@ export function createAppServer(options: {
       const project = findProject(config, projectMergeStatus[1] || "");
       const info = await describeProject(project);
       if (!info.git) {
-        sendJson(res, 200, { base: null, merged: [], untouched: [] });
+        sendJson(res, 200, { base: null, merged: [], untouched: [], dirty: [] });
         return;
       }
-      sendJson(res, 200, await mergedSessionBranches(project.path));
+      // 未提交改动按每个会话自己的 worktree 探测，和分支合入状态一起下发。
+      const worktrees = store.list(project.id).flatMap((session) => (
+        session.branch ? [{ branch: session.branch, cwd: session.cwd }] : []
+      ));
+      const [status, dirty] = await Promise.all([
+        mergedSessionBranches(project.path),
+        dirtySessionBranches(worktrees),
+      ]);
+      sendJson(res, 200, { ...status, dirty });
       return;
     }
     const projectSchedules = url.pathname.match(/^\/api\/projects\/([a-z0-9][a-z0-9-]{0,62})\/schedules$/);
