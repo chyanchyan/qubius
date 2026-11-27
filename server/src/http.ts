@@ -64,7 +64,7 @@ import {
 import { testProvider } from "./provider-test.js";
 import { PushError, type PushSendResult, type PushService } from "./push.js";
 import { redact, type Approval, type Runtime, type RuntimePrompt } from "./runtime.js";
-import { clip, detectWorkflowSkill } from "./status.js";
+import { clip, configureLimits, detectWorkflowSkill } from "./status.js";
 import { MAX_DISCUSSION_PARTICIPANTS } from "./discussion.js";
 import type { ScheduleRunner, ScheduleStore } from "./schedules.js";
 import type { ArchiveSweeper } from "./retention.js";
@@ -99,7 +99,14 @@ import {
   writeSkill,
 } from "./skills.js";
 import { isSessionBusy, tryLockSession, unlockSession } from "./session-lock.js";
-import { applySettingsPatch, findProvider, publicSettings, saveSettings, type StoredSettings } from "./settings.js";
+import {
+  applySettingsPatch,
+  findProvider,
+  publicSettings,
+  resolveSettings,
+  saveSettings,
+  type StoredSettings,
+} from "./settings.js";
 import { SseQueue } from "./sse.js";
 import type { SessionEvent, Store } from "./store.js";
 import { TerminalLimitError } from "./terminal.js";
@@ -467,10 +474,16 @@ export function createAppServer(options: {
     ...(skillConfigDir ? { configDir: skillConfigDir } : {}),
     disabled: skillStore.snapshot(),
   });
-  /** 配置未提供时退回默认上限；requestBodyBytes 供所有 JSON 请求体共用。 */
-  const limits = { ...DEFAULT_LIMITS, ...(config.limits ?? {}) };
-  const historyPage = limits.historyPage;
-  const readJson = (req: IncomingMessage): Promise<unknown> => readJsonBody(req, limits.requestBodyBytes);
+  /**
+   * 运行期上限以设置文件为准（首次启动时继承 config.yaml）；测试夹具没有这些字段时
+   * 退回配置或默认值。每次请求现读，设置页保存后立即生效。
+   */
+  const currentLimits = () => ({
+    ...DEFAULT_LIMITS,
+    ...(config.limits ?? {}),
+    ...(options.settings.current.limits ?? {}),
+  });
+  const readJson = (req: IncomingMessage): Promise<unknown> => readJsonBody(req, currentLimits().requestBodyBytes);
   /**
    * web/dist 构建产物就绪后不再回退，所以只缓存 true；false 继续重探，
    * 避免服务先启动、之后再构建前端时 /api/health 一直报 false。
@@ -819,8 +832,13 @@ export function createAppServer(options: {
         throw new HttpError(400, error instanceof Error ? error.message : "设置无效");
       }
       saveSettings(config.dataDir, ctx.settings.current);
-      // 并发上限即时生效：调高后立即启动排队中的对话。
-      ctx.runtime.setMaxConcurrent(ctx.settings.current.maxConcurrent);
+      // 运行参数即时生效：并发上限调高后立即启动排队中的对话；确认超时、
+      // 会话/请求上限和归档保留天数同样不需要重启。
+      const next = resolveSettings(ctx.settings.current);
+      ctx.runtime.setMaxConcurrent(next.maxConcurrent);
+      ctx.runtime.setApprovalTimeoutMinutes(next.approvalTimeoutMinutes);
+      configureLimits(next.limits);
+      ctx.sweeper?.setRetentionDays(next.archiveRetentionDays);
       sendJson(res, 200, publicSettings(ctx.settings.current));
       return;
     }
@@ -1130,7 +1148,7 @@ export function createAppServer(options: {
       const rawSession = url.searchParams.get("session");
       const session = rawSession === null ? null : rawSession.toLowerCase();
       if (session !== null && !ID_RE.test(session)) throw new HttpError(400, "对话 id 无效");
-      streamEvents(req, res, store, session, withQueue, historyPage);
+      streamEvents(req, res, store, session, withQueue, currentLimits().historyPage);
       return;
     }
     const projectSessions = url.pathname.match(/^\/api\/projects\/([a-z0-9][a-z0-9-]{0,62})\/sessions$/);
@@ -1248,7 +1266,14 @@ export function createAppServer(options: {
         sendJson(res, 200, { archive: { enabled: false } });
         return;
       }
-      sendJson(res, 200, { archive: await ctx.archive.status() });
+      const status = await ctx.archive.status();
+      // 保留天数以设置页为准（首次启动时继承部署配置），归档目录本身仍是部署配置。
+      sendJson(res, 200, {
+        archive: {
+          ...status,
+          retentionDays: ctx.settings.current.archiveRetentionDays ?? status.retentionDays,
+        },
+      });
       return;
     }
     if (url.pathname === "/api/archive/sessions") {
@@ -1666,6 +1691,7 @@ export function createAppServer(options: {
         }
         before = Math.max(0, Math.min(before, count));
         const limitRaw = url.searchParams.get("limit");
+        const historyPage = currentLimits().historyPage;
         const limit = Math.min(500, Math.max(1, limitRaw === null ? historyPage : parsePageIndex(limitRaw, "limit")));
         const start = Math.max(0, before - limit);
         const slice = store.detailSlice(id, start, before);

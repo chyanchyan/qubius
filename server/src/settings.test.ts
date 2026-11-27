@@ -11,6 +11,15 @@ function sample(): StoredSettings {
   return {
     effort: "high",
     maxConcurrent: 4,
+    approvalTimeoutMinutes: 10,
+    limits: {
+      transcriptBytes: 8 * 1024 * 1024,
+      transcriptMessages: 5_000,
+      messageText: 200_000,
+      requestBodyBytes: 28_000_000,
+      historyPage: 200,
+    },
+    archiveRetentionDays: 30,
     providers: [{
       id: "p1",
       name: "官方",
@@ -178,8 +187,7 @@ test("旧格式没有价格字段时加载为 undefined，也不会凭空写回"
 test("保存和重新加载会保留价格，0 也保留", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-pricing-"));
   const withPricing: StoredSettings = {
-    effort: "high",
-    maxConcurrent: 4,
+    ...sample(),
     providers: [{
       id: "p1",
       name: "官方",
@@ -495,4 +503,85 @@ test("旧的单密钥文件会变成一套接口配置", () => {
   const raw = JSON.parse(fs.readFileSync(path.join(dir, "secrets.json"), "utf8")) as Record<string, unknown>;
   assert.equal("apiKey" in raw, false);
   assert.equal(JSON.stringify(publicSettings(again)).includes("sk-legacy-secret"), false);
+});
+
+test("确认超时、限制和归档保留天数随设置保存、加载并出现在对外设置里", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-runtime-settings-"));
+  saveSettings(dir, {
+    ...sample(),
+    approvalTimeoutMinutes: 0,
+    limits: { ...sample().limits!, transcriptMessages: 8_000, historyPage: 500 },
+    archiveRetentionDays: 90,
+  });
+  const loaded = loadSettings(dir);
+  assert.equal(loaded.approvalTimeoutMinutes, 0);
+  assert.equal(loaded.limits.transcriptMessages, 8_000);
+  assert.equal(loaded.limits.historyPage, 500);
+  // 只改了两项，其余保留默认值。
+  assert.equal(loaded.limits.transcriptBytes, 8 * 1024 * 1024);
+  assert.equal(loaded.archiveRetentionDays, 90);
+  const view = publicSettings(loaded);
+  assert.equal(view.approvalTimeoutMinutes, 0);
+  assert.deepEqual(view.limits, loaded.limits);
+  assert.equal(view.archiveRetentionDays, 90);
+});
+
+test("旧文件没有运行参数时使用调用方给的初始默认值", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-runtime-defaults-"));
+  fs.writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({
+    effort: "high",
+    maxConcurrent: 4,
+    providers: [],
+  }));
+  const loaded = loadSettings(dir, {
+    approvalTimeoutMinutes: 60,
+    limits: { historyPage: 333 },
+    archiveRetentionDays: 7,
+  });
+  assert.equal(loaded.approvalTimeoutMinutes, 60);
+  assert.equal(loaded.limits.historyPage, 333);
+  // 没给的 limits 字段仍用内置默认值。
+  assert.equal(loaded.limits.transcriptBytes, 8 * 1024 * 1024);
+  assert.equal(loaded.archiveRetentionDays, 7);
+  // 没有注入时退回内置默认值。
+  const fallback = loadSettings(dir);
+  assert.equal(fallback.approvalTimeoutMinutes, 10);
+  assert.equal(fallback.archiveRetentionDays, 30);
+});
+
+test("确认超时、限制和归档保留天数只接受合法区间", () => {
+  for (const value of [0, 10, 1440]) {
+    assert.equal(applySettingsPatch(sample(), { approvalTimeoutMinutes: value }).approvalTimeoutMinutes, value);
+  }
+  for (const value of [-1, 1.5, 1441, "10", null]) {
+    assert.throws(() => applySettingsPatch(sample(), { approvalTimeoutMinutes: value }), /确认超时/);
+  }
+
+  for (const value of [1, 30, 3650]) {
+    assert.equal(applySettingsPatch(sample(), { archiveRetentionDays: value }).archiveRetentionDays, value);
+  }
+  for (const value of [0, -1, 2.5, 3651, "30", null]) {
+    assert.throws(() => applySettingsPatch(sample(), { archiveRetentionDays: value }), /归档保留天数/);
+  }
+
+  assert.equal(
+    applySettingsPatch(sample(), { limits: { historyPage: 500 } }).limits.historyPage,
+    500,
+  );
+  // 部分提交不会丢掉其他字段。
+  assert.equal(
+    applySettingsPatch(sample(), { limits: { historyPage: 500 } }).limits.transcriptBytes,
+    8 * 1024 * 1024,
+  );
+  for (const limits of [
+    { historyPage: 49 },
+    { transcriptBytes: 1024 },
+    { messageText: 1 },
+    { requestBodyBytes: 100 },
+    { transcriptMessages: 2.5 },
+    [],
+    null,
+  ]) {
+    assert.throws(() => applySettingsPatch(sample(), { limits }), /limits/);
+  }
 });

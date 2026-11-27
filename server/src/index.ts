@@ -165,10 +165,17 @@ if (projectsFile) {
     reloadProjects("项目文件变化");
   });
 }
-// 会话裁剪/截断上限来自配置；在加载会话前生效，旧文件也会按新上限收敛。
-configureLimits(config.limits);
-// config.yaml / env 的 maxConcurrent 只作为设置文件的初始默认；之后以设置页保存的值为准。
-const settings = { current: loadSettings(config.dataDir, { maxConcurrent: config.maxConcurrent }) };
+// config.yaml / env 的运行参数只作为设置文件的初始默认；之后以设置页保存的值为准。
+const settings = {
+  current: loadSettings(config.dataDir, {
+    maxConcurrent: config.maxConcurrent,
+    approvalTimeoutMinutes: config.approvalTimeoutMinutes,
+    limits: config.limits,
+    archiveRetentionDays: config.archive?.retentionDays,
+  }),
+};
+// 会话裁剪/截断上限来自设置（首次启动时继承配置）；在加载会话前生效，旧文件也会按新上限收敛。
+configureLimits(settings.current.limits);
 const permissions = { current: loadProjectPermissions(config.dataDir) };
 const store = new Store(config.dataDir);
 // 会话记录的是创建时的项目绝对路径；项目改名/搬移后按当前配置重新对齐，
@@ -222,7 +229,7 @@ const credential = (providerId: string) => {
 };
 const runtime = new Runtime(store, {
   maxConcurrent: settings.current.maxConcurrent,
-  approvalTimeoutMinutes: config.approvalTimeoutMinutes,
+  approvalTimeoutMinutes: settings.current.approvalTimeoutMinutes,
   fake,
   permission: (projectId) => {
     const project = config.projects.find((item) => item.id === projectId);
@@ -250,7 +257,7 @@ const archive = archiveConfig
     dir: archiveConfig.dir,
     instance: archiveConfig.instance,
     dataDir: config.dataDir,
-    retentionDays: archiveConfig.retentionDays,
+    retentionDays: settings.current.archiveRetentionDays,
     projects: config.projects,
   })
   : undefined;
@@ -259,12 +266,12 @@ const sweeper = archive && archiveConfig
     archive,
     store,
     runtime,
-    retentionDays: archiveConfig.retentionDays,
+    retentionDays: settings.current.archiveRetentionDays,
     dataDir: config.dataDir,
   })
   : undefined;
 if (archive) {
-  console.log(`归档目录：${archive.root}（列表保留 ${archiveConfig?.retentionDays ?? 0} 天）`);
+  console.log(`归档目录：${archive.root}（列表保留 ${settings.current.archiveRetentionDays} 天）`);
 } else {
   console.warn("未配置 archive：会话不会归档，也不会按 30 天自动清理");
 }

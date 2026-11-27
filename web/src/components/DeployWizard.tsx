@@ -173,7 +173,7 @@ function OptionalSettings({
           </label>
         )}
         <NumberField
-          label="并发上限"
+          label="并发上限（首次启动默认值）"
           value={form.maxConcurrent}
           min={1}
           max={256}
@@ -181,7 +181,7 @@ function OptionalSettings({
           onChange={(value) => onUpdate({ maxConcurrent: value })}
         />
         <NumberField
-          label="确认超时（分钟，0 不自动拒绝）"
+          label="确认超时（首次启动默认值，0 不自动拒绝）"
           value={form.approvalTimeoutMinutes}
           min={0}
           max={1440}
@@ -241,7 +241,7 @@ function OptionalSettings({
           onChange={(value) => onUpdate({ archiveDir: value })}
         />
         <NumberField
-          label="列表保留天数（到期归档到冷存储）"
+          label="列表保留天数（首次启动默认值）"
           value={form.archiveRetentionDays}
           min={1}
           max={3650}
@@ -259,6 +259,10 @@ function OptionalSettings({
           onChange={(value) => onUpdate({ primaryRepoUrl: value })}
         />
       </div>
+      <p className="wizard-hint">
+        并发上限、确认超时和归档保留天数只是首次启动的默认值（会话/请求上限在部署页的完整表单里）；
+        之后请到「设置」页修改，保存后立即生效，不需要重新部署。
+      </p>
       <p className="wizard-hint">额外项目可以在部署完成后到主页的「管理项目」里添加，不需要在这里填写。</p>
     </section>
   );

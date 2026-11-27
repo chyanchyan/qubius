@@ -56,10 +56,10 @@
 | `QUBIUS_PRIMARY_PORT` / `QUBIUS_SECONDARY_PORT` | 监听端口（只绑 `127.0.0.1`） | `8787` / `8788` |
 | `QUBIUS_PUBLIC_HOST` / `QUBIUS_PUBLIC_HOST_SECONDARY` | 公网域名，用于 `allowedHosts` 和 edgectl 片段 | `code.example.com` / `code-bak.example.com` |
 | `QUBIUS_ALLOWED_HOSTS` | 额外允许的 Host（逗号或空白分隔），启动时追加到 `allowedHosts`；公网域名由模板直接写进 config.yaml | 空 |
-| `QUBIUS_MAX_CONCURRENT` / `QUBIUS_APPROVAL_TIMEOUT_MINUTES` | 并发上限和确认超时（分钟，0 表示不自动拒绝） | `4` / `10` |
-| `QUBIUS_LIMIT_*` / `QUBIUS_HISTORY_PAGE` | 会话/请求上限；完整表单的「高级限制」折叠区也可以改 | 见 `docs/reference.md#配置` |
+| `QUBIUS_MAX_CONCURRENT` / `QUBIUS_APPROVAL_TIMEOUT_MINUTES` | 并发上限和确认超时的首次启动默认值（分钟，0 表示不自动拒绝）；之后以页面「设置」为准 | `4` / `10` |
+| `QUBIUS_LIMIT_*` / `QUBIUS_HISTORY_PAGE` | 会话/请求上限的首次启动默认值；之后在页面「设置 → 高级限制」修改 | 见 `docs/reference.md#配置` |
 | `QUBIUS_LAN_HOST` | 内网入口绑定地址（也接受 `LAN_PROXY_HOST`，后者优先）；留空时自动选择私有/链路本地/CGNAT IPv4，不会选公网或回环地址 | 空 |
-| `QUBIUS_ARCHIVE_DIR` / `QUBIUS_ARCHIVE_RETENTION_DAYS` | 归档根目录和列表保留天数（到期后会话归档到冷存储并永久保留）；目录留空不归档 | 空 / `30` |
+| `QUBIUS_ARCHIVE_DIR` / `QUBIUS_ARCHIVE_RETENTION_DAYS` | 归档根目录和列表保留天数的首次启动默认值（到期后会话归档到冷存储并永久保留）；目录留空不归档，保留天数之后在页面「设置」修改 | 空 / `30` |
 | `QUBIUS_PROJECTS_FILE` | 额外项目白名单 YAML；内置会加入另一实例的 checkout。主页的「管理项目」添加或删除仓库时写这里，文件变化会热加载 | 空 |
 | `QUBIUS_NODE_BIN` | Node.js 22+ 可执行文件；留空依次找 PATH 和 `~/.nvm` | 空 |
 | `QUBIUS_CLONE_PEER` | `install.sh` 是否自动克隆另一实例的 checkout（等同 `--clone-peer`） | `0` |

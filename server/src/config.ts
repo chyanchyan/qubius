@@ -83,7 +83,7 @@ export const DEFAULT_LIMITS: LimitsConfig = {
   historyPage: 200,
 };
 
-interface LimitRule {
+export interface LimitRule {
   env: string;
   key: keyof LimitsConfig;
   min: number;
@@ -91,8 +91,8 @@ interface LimitRule {
   unit: string;
 }
 
-/** 每项上限的合法区间与对应的环境变量。 */
-const LIMIT_RULES: LimitRule[] = [
+/** 每项上限的合法区间与对应的环境变量。设置页复用同一套区间做校验。 */
+export const LIMIT_RULES: LimitRule[] = [
   { env: "QUBIUS_LIMIT_TRANSCRIPT_BYTES", key: "transcriptBytes", min: 64 * 1024, max: 64 * 1024 * 1024, unit: "字节" },
   { env: "QUBIUS_LIMIT_TRANSCRIPT_MESSAGES", key: "transcriptMessages", min: 50, max: 20_000, unit: "条" },
   { env: "QUBIUS_LIMIT_MESSAGE_TEXT", key: "messageText", min: 1024, max: 1024 * 1024, unit: "字符" },

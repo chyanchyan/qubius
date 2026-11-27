@@ -1815,16 +1815,16 @@ export function DeployPage() {
               />
             )}
             <NumberField
-              label="并发上限"
+              label="并发上限（首次启动默认值）"
               min={1}
-              hint="同时进行的对话数初始值（1-256）；设置页保存的值优先。"
+              hint="只在首次启动、设置文件还没有该字段时生效（1-256）；之后以「设置」页保存的值为准，改这里不会覆盖已有设置。"
               value={form.maxConcurrent}
               onChange={(value) => update({ maxConcurrent: value })}
             />
             <NumberField
-              label="确认超时（分钟，0 不自动拒绝）"
+              label="确认超时（首次启动默认值，0 不自动拒绝）"
               min={0}
-              hint="等待提问/授权多久自动拒绝（0-1440）；0 表示一直等待，不显示倒计时。"
+              hint="首次启动的默认值（0-1440）；之后请在「设置」页修改，保存后立即生效。0 表示一直等待，不显示倒计时。"
               value={form.approvalTimeoutMinutes}
               onChange={(value) => update({ approvalTimeoutMinutes: value })}
             />
@@ -1879,7 +1879,10 @@ export function DeployPage() {
               关闭本页后不再显示；忘记时可在配置目录查看凭据文件。
             </p>
             <details className="field deploy-span-2 deploy-advanced">
-              <summary>高级限制（一般不用改）</summary>
+              <summary>高级限制（首次启动默认值，之后在设置页修改）</summary>
+              <p className="deploy-inline-hint deploy-span-2">
+                这些值只在首次启动、设置文件还没有该字段时生效；之后请到「设置 → 高级限制」修改，保存后立即生效，不需要重新部署。
+              </p>
               <div className="deploy-grid">
                 <NumberField
                   label="单会话总字节"
@@ -1926,9 +1929,9 @@ export function DeployPage() {
               onChange={(value) => update({ archiveDir: value })}
             />
             <NumberField
-              label="列表保留天数（到期归档到冷存储）"
+              label="列表保留天数（首次启动默认值）"
               min={1}
-              hint="会话在本机保留的天数，默认 30；范围 1-3650。"
+              hint="首次启动的默认天数（1-3650）；之后请在「设置」页修改，下一轮整理即按新值生效。"
               value={form.archiveRetentionDays}
               onChange={(value) => update({ archiveRetentionDays: value })}
             />

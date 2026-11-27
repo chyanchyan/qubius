@@ -16,11 +16,11 @@
 - 主页的「管理项目」可以在运行期添加或删除本机已有的 git 仓库：服务端校验目录后写入额外项目文件（`QUBIUS_PROJECTS_FILE`，未配置时是 `<configDir>/projects.yaml`），项目列表立即更新；之后手工修改该文件也会热加载，都不需要重启实例。也可以「新建仓库」：填仓库名称和母目录（不含仓库名），服务端在 `<母目录>/<仓库名称>` 建目录、`git init -b main` 并提交一个空初始提交（保证能直接建会话 worktree），再写入项目文件。仓库名称可按规则压成项目 id（小写字母、数字、连字符），压不出时（例如纯中文）生成 `repo-<8 位十六进制>` 兜底 id。母目录必须已存在，目标目录不能已存在。额外文件里的同 id 项目覆盖 `config.yaml` 里的定义；`config.yaml` 自带的项目和内置「普通对话」只能在配置文件里改，不能在这里删除。
 - 「普通对话」是内置项目 `chat`，始终排在项目列表第一位，目录为 `<dataDir>/chat`，每个对话在 `<dataDir>/chat/<对话 id>` 下运行，归档时只删该子目录。自己定义 `id: chat` 会覆盖内置入口。
 - `maxConcurrent`：同时进行的对话数，默认 4，超出排队。这里只作为设置文件的初始默认值；之后在页面「设置」里改「并发上限」，保存后立即生效，不需要重启或重新部署。
-- `limits`：`transcriptBytes`（单会话序列化总字节，默认 8388608）、`transcriptMessages`（消息条数，5000）、`messageText`（单条正文，200000）、`requestBodyBytes`（JSON 请求体，28000000）、`historyPage`（详情首帧/历史翻页条数，200）。可用 `QUBIUS_LIMIT_TRANSCRIPT_BYTES`、`QUBIUS_LIMIT_TRANSCRIPT_MESSAGES`、`QUBIUS_LIMIT_MESSAGE_TEXT`、`QUBIUS_LIMIT_REQUEST_BODY`、`QUBIUS_HISTORY_PAGE` 覆盖；超出范围或非正整数时启动报错。
-- `approvalTimeoutMinutes`：等待确认（提问/授权）的超时，默认 10 分钟，范围 0–1440，超时自动拒绝。户外使用可调大；设为 0 表示一直等待，不自动拒绝，界面上也不显示倒计时。部署向导会写进 `QUBIUS_APPROVAL_TIMEOUT_MINUTES`，配置文件没写时也生效。
+- `limits`：`transcriptBytes`（单会话序列化总字节，默认 8388608）、`transcriptMessages`（消息条数，5000）、`messageText`（单条正文，200000）、`requestBodyBytes`（JSON 请求体，28000000）、`historyPage`（详情首帧/历史翻页条数，200）。可用 `QUBIUS_LIMIT_TRANSCRIPT_BYTES`、`QUBIUS_LIMIT_TRANSCRIPT_MESSAGES`、`QUBIUS_LIMIT_MESSAGE_TEXT`、`QUBIUS_LIMIT_REQUEST_BODY`、`QUBIUS_HISTORY_PAGE` 覆盖；超出范围或非正整数时启动报错。这里只作为设置文件的初始默认值；之后在页面「设置 → 高级限制」修改，保存后立即生效，不需要重新部署。
+- `approvalTimeoutMinutes`：等待确认（提问/授权）的超时，默认 10 分钟，范围 0–1440，超时自动拒绝。户外使用可调大；设为 0 表示一直等待，不自动拒绝，界面上也不显示倒计时。部署向导会写进 `QUBIUS_APPROVAL_TIMEOUT_MINUTES`，配置文件没写时也生效。这里只作为初始默认值；之后在页面「设置」修改，保存后对新的确认立即生效。
 - 局域网入口：部署页的「启用局域网入口」写 `QUBIUS_START_LAN` / `QUBIUS_LAN_USER`，凭据写到 `<configDir>/lan-proxy.credentials`（一行 `user:password`，`0600`）。密码只在部署响应的 `oneTime.lan` 里返回一次；`GET /api/deploy` 只返回用户名和 `lanAuthPasswordSet`。命令行 `make deploy-lan` 缺凭据时会自动生成并在终端打印一次。
 - `role`：`primary`（默认）或 `secondary`。副实例需要 `secondary.primaryRepo`；`secondary.primaryRef` 默认 `main`。
-- `archive`：`dir` 是归档根目录，`retentionDays` 是会话列表的保留天数（作用于本机 SSD 副本），默认 30，到期后会话归档到这里（冷存储）并永久保留；`archive.instance` 默认主实例 `main`、副实例 `bak`。不配置则不归档、不自动删除旧会话。
+- `archive`：`dir` 是归档根目录，`retentionDays` 是会话列表的保留天数（作用于本机 SSD 副本），默认 30，到期后会话归档到这里（冷存储）并永久保留；`archive.instance` 默认主实例 `main`、副实例 `bak`。不配置则不归档、不自动删除旧会话。`retentionDays` 只作为初始默认值，之后可在页面「设置」修改；归档目录本身仍由部署配置决定。
 
 ### 访问令牌（可选）
 
@@ -50,6 +50,12 @@ curl -H "X-Qubius-Token: $(cat .qubius/data/auth-token)" http://127.0.0.1:8787/a
 每套接口可填四个可选价格（输入、输出、缓存读、缓存写，美元/百万 token）；填了之后「总览」按 token 估算成本，留空只显示 token。每套接口的「测试」按钮会发一条最小请求验证地址、密钥和模型名，不回显密钥。
 
 设置里可配「并发 / agent 上限」（1–256，默认取 `config.yaml` / `QUBIUS_MAX_CONCURRENT`，未配置时为 4）。同一个值控制两件事：同时进行的对话数，超出的对话排队；顶栏左上角「运行中 / 上限」里的 agent 上限。保存后立即生效，调高后排队中的对话马上开始，调低不会打断正在运行的对话。除了设置页，顶栏的这组数字本身也可以直接点击：点击后原地展开输入框，填 1–256 的整数，回车或「保存」立即生效，Esc 或「取消」收起；不需要进入设置页，也不会弹出对话框。
+
+设置里还可以修改以下运行参数，保存后都不需要重启或重新部署；`config.yaml` / 部署环境里的同名配置只作为首次启动的默认值：
+
+- 「确认超时」：等待提问/授权多久自动拒绝（0–1440 分钟，0 表示一直等待），对保存后新出现的确认生效，已经挂起的确认保留原时限。
+- 「归档保留天数」：会话在本机保留多少天后归档到冷存储（1–3650 天）；未配置归档目录时不生效，保存后下一轮整理（最多 1 小时）按新天数判断。
+- 「高级限制」：单会话总字节、单会话消息条数、单条消息字符数、请求体字节数、历史分页条数。新请求按新的请求体上限处理，旧会话在下次加载或保存时按新的条数/字节上限收敛。
 
 顶栏左上角显示所有对话里正在运行的 agent 总数/上限：运行中的主 agent 各算一个，运行中的子 agent 也各算一个；等待确认或只剩后台子 agent 的主 agent 不计入。超限用警告色提示（只用于显示，不阻止 agent 启动）。计数右侧显示所有 agent 当前输出速度的合计（tokens/s，按流式增量估算的最近 2 秒平均值），没有输出时隐藏。主 agent 按流式增量累加；SDK 不下发子 agent 的流式增量，子 agent 的正文、思考和工具输入只能整块到达，服务端按字符估算后摊到这一块生成的时间里再计入窗口，因此显示的是它这一块的平均速度。速度只在服务端估算，不扫描历史正文。
 
@@ -208,7 +214,7 @@ git 项目的每个对话是独立分支（新会话 `qubius/<对话 id>`，旧�
 
 价格只是按所填单价的算术，不含订阅额度、折扣或汇率。
 
-页面是 PWA，对话每轮结束（完成或失败）以及停下来「等待确认」时可给手机发系统推送；用户主动停止不推送。推送只跟「本轮结束」走，后台子 agent 稍后完成不会再单独推送。等待确认的标题是「项目名 · 等待确认」，正文是问题首行或需要授权的工具名和路径；默认 10 分钟不回会自动拒绝（可用 `approvalTimeoutMinutes` 调大，设为 0 则不自动拒绝、不显示倒计时）。
+页面是 PWA，对话每轮结束（完成或失败）以及停下来「等待确认」时可给手机发系统推送；用户主动停止不推送。推送只跟「本轮结束」走，后台子 agent 稍后完成不会再单独推送。等待确认的标题是「项目名 · 等待确认」，正文是问题首行或需要授权的工具名和路径；默认 10 分钟不回会自动拒绝（可在「设置 → 确认超时」调大，设为 0 则不自动拒绝、不显示倒计时）。
 
 - 「设置 → 推送通知」里开启并允许权限；订阅存在 `dataDir/push/subscriptions.json`，最多 20 台设备。
 - VAPID 密钥在首次打开设置页或首次推送时生成到 `dataDir/push/vapid.json`，备份 `dataDir` 时要一起备份；删掉后每台设备需重新开启。

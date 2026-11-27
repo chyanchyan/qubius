@@ -421,7 +421,8 @@ export class Runtime {
   private titleAborts = new Map<string, AbortController>();
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
-  private readonly approvalTimeoutMs: number;
+  /** 当前生效的确认超时（毫秒）；设置页保存后由 setApprovalTimeoutMinutes 即时更新。 */
+  private approvalTimeoutMs: number;
   /** 当前生效的并发对话上限；设置页保存后由 setMaxConcurrent 即时更新。 */
   private maxConcurrent: number;
 
@@ -465,6 +466,16 @@ export class Runtime {
     if (!Number.isInteger(value) || value < 1 || value === this.maxConcurrent) return;
     this.maxConcurrent = value;
     this.schedule();
+  }
+
+  /**
+   * 更新等待确认的超时（分钟，0 表示不自动拒绝）。
+   * 只影响之后新出现的确认：已经挂起的等待保留创建时的时限，避免保存设置时
+   * 把用户正在看的倒计时突然清零或延后。
+   */
+  setApprovalTimeoutMinutes(value: number): void {
+    if (!Number.isInteger(value) || value < 0) return;
+    this.approvalTimeoutMs = value * 60_000;
   }
 
   /** 这个会话是否正在跑一场多模型讨论。 */

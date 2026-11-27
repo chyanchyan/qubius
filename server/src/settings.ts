@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "./atomic-file.js";
+import { DEFAULT_LIMITS, LIMIT_RULES, type LimitsConfig } from "./config.js";
 import { isEffort, type Effort, type PublicProvider, type PublicSettings } from "./types.js";
 
 /** 每百万 token 的美元价格；缺失表示不计算这一项成本。 */
@@ -43,6 +44,31 @@ export interface StoredSettings {
    * 顶栏「运行中 / 上限」也用这个值作为 agent 上限，两者共用一个变量。
    */
   maxConcurrent: number;
+  /**
+   * 等待确认（提问/授权）超时，单位分钟；0 表示不自动拒绝。
+   * 老设置文件可能没有这些字段，读取时由 resolveSettings 补默认值。
+   */
+  approvalTimeoutMinutes?: number;
+  /** 会话裁剪与请求体/历史分页上限；可以只写部分字段。 */
+  limits?: Partial<LimitsConfig>;
+  /** 会话在本机保留多少天后归档；只有配置了归档目录时生效。 */
+  archiveRetentionDays?: number;
+}
+
+/** 补全默认值后的设置：落盘和运行期使用，三个新字段一定存在。 */
+export type ResolvedSettings = StoredSettings & {
+  approvalTimeoutMinutes: number;
+  limits: LimitsConfig;
+  archiveRetentionDays: number;
+};
+
+export function resolveSettings(settings: StoredSettings): ResolvedSettings {
+  return {
+    ...settings,
+    approvalTimeoutMinutes: settings.approvalTimeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES,
+    limits: { ...DEFAULT_LIMITS, ...(settings.limits ?? {}) },
+    archiveRetentionDays: settings.archiveRetentionDays ?? DEFAULT_ARCHIVE_RETENTION_DAYS,
+  };
 }
 
 /** 同时进行的对话数范围；与 config.yaml 的 maxConcurrent 校验保持一致。 */
@@ -50,11 +76,34 @@ export const MAX_CONCURRENT_MIN = 1;
 export const MAX_CONCURRENT_MAX = 256;
 export const DEFAULT_MAX_CONCURRENT = 4;
 
-const DEFAULTS: StoredSettings = {
-  providers: [],
-  effort: "high",
-  maxConcurrent: DEFAULT_MAX_CONCURRENT,
-};
+/** 确认超时范围与默认值；与 config.yaml 的 approvalTimeoutMinutes 保持一致。 */
+export const APPROVAL_TIMEOUT_MIN = 0;
+export const APPROVAL_TIMEOUT_MAX = 1440;
+export const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 10;
+
+/** 归档保留天数范围与默认值；与部署页 archiveRetentionDays 保持一致。 */
+export const ARCHIVE_RETENTION_MIN = 1;
+export const ARCHIVE_RETENTION_MAX = 3650;
+export const DEFAULT_ARCHIVE_RETENTION_DAYS = 30;
+
+/** 首次启动时 config.yaml / env 提供的初始默认值；之后以设置文件为准。 */
+export interface SettingsDefaults {
+  maxConcurrent?: number;
+  approvalTimeoutMinutes?: number;
+  limits?: Partial<LimitsConfig>;
+  archiveRetentionDays?: number;
+}
+
+function defaultSettings(defaults?: SettingsDefaults): ResolvedSettings {
+  return {
+    providers: [],
+    effort: "high",
+    maxConcurrent: defaults?.maxConcurrent ?? DEFAULT_MAX_CONCURRENT,
+    approvalTimeoutMinutes: defaults?.approvalTimeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES,
+    limits: { ...DEFAULT_LIMITS, ...(defaults?.limits ?? {}) },
+    archiveRetentionDays: defaults?.archiveRetentionDays ?? DEFAULT_ARCHIVE_RETENTION_DAYS,
+  };
+}
 
 export function settingsPath(dataDir: string): string {
   return path.join(dataDir, "secrets.json");
@@ -62,13 +111,12 @@ export function settingsPath(dataDir: string): string {
 
 export function loadSettings(
   dataDir: string,
-  defaults?: { maxConcurrent?: number },
-): StoredSettings {
+  defaults?: SettingsDefaults,
+): ResolvedSettings {
   const file = settingsPath(dataDir);
-  const defaultMax = defaults?.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
-  const fallback: StoredSettings = { ...DEFAULTS, maxConcurrent: defaultMax, providers: [] };
+  const fallback = defaultSettings(defaults);
   const mainExists = fs.existsSync(file);
-  const loaded = mainExists ? decodeSettingsFile(file, defaultMax) : undefined;
+  const loaded = mainExists ? decodeSettingsFile(file, fallback) : undefined;
   if (loaded) {
     if (loaded.migrated) saveSettings(dataDir, loaded.settings);
     return loaded.settings;
@@ -76,7 +124,7 @@ export function loadSettings(
 
   // 主文件读不出来（或已被删除）时先试同目录备份，避免把仍有密钥的旧配置直接丢掉。
   const backupFile = `${file}.bak`;
-  const backup = decodeSettingsFile(backupFile, defaultMax);
+  const backup = decodeSettingsFile(backupFile, fallback);
   if (backup) {
     // 必须先把损坏的主文件隔离掉：否则之后任意 saveSettings 的 backup=true
     // 会把损坏内容复制进 .bak，覆盖掉唯一的好备份。
@@ -135,8 +183,8 @@ function restoreFromBackup(file: string, backupFile: string): boolean {
 /** 读取单个设置文件；JSON 解析或字段校验失败都返回 undefined，交给调用方降级。 */
 function decodeSettingsFile(
   file: string,
-  defaultMaxConcurrent: number,
-): { settings: StoredSettings; migrated: boolean } | undefined {
+  defaults: ResolvedSettings,
+): { settings: ResolvedSettings; migrated: boolean } | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -145,18 +193,22 @@ function decodeSettingsFile(
   }
   if (!parsed || typeof parsed !== "object") return undefined;
   try {
-    return parseStored(parsed as Record<string, unknown>, defaultMaxConcurrent);
+    return parseStored(parsed as Record<string, unknown>, defaults);
   } catch {
     return undefined;
   }
 }
 
-export function saveSettings(dataDir: string, settings: StoredSettings): void {
+export function saveSettings(dataDir: string, stored: StoredSettings): void {
   const file = settingsPath(dataDir);
+  const settings = resolveSettings(stored);
   const body = JSON.stringify(
     {
       effort: settings.effort,
       maxConcurrent: settings.maxConcurrent,
+      approvalTimeoutMinutes: settings.approvalTimeoutMinutes,
+      limits: { ...settings.limits },
+      archiveRetentionDays: settings.archiveRetentionDays,
       providers: settings.providers.map((provider) => {
         const pricing = cleanPricing(provider.pricing);
         return {
@@ -175,14 +227,18 @@ export function saveSettings(dataDir: string, settings: StoredSettings): void {
   // 只有现有主文件仍能解析时才生成备份：损坏内容一旦复制进 .bak，
   // 会覆盖掉唯一的好备份。主文件不可解析时直接原子覆盖它，保留旧 .bak。
   const backup = fs.existsSync(file)
-    && decodeSettingsFile(file, settings.maxConcurrent) !== undefined;
+    && decodeSettingsFile(file, settings) !== undefined;
   writeFileAtomic(file, body, { mode: 0o600, backup });
 }
 
-export function publicSettings(settings: StoredSettings): PublicSettingsView {
+export function publicSettings(stored: StoredSettings): PublicSettingsView {
+  const settings = resolveSettings(stored);
   return {
     effort: settings.effort,
     maxConcurrent: settings.maxConcurrent,
+    approvalTimeoutMinutes: settings.approvalTimeoutMinutes,
+    limits: { ...settings.limits },
+    archiveRetentionDays: settings.archiveRetentionDays,
     providers: settings.providers.map((provider) => {
       const pricing = cleanPricing(provider.pricing);
       return {
@@ -201,13 +257,20 @@ export interface SettingsPatch {
   providers?: unknown;
   effort?: unknown;
   maxConcurrent?: unknown;
+  approvalTimeoutMinutes?: unknown;
+  limits?: unknown;
+  archiveRetentionDays?: unknown;
 }
 
-export function applySettingsPatch(current: StoredSettings, patch: SettingsPatch): StoredSettings {
-  const next: StoredSettings = {
-    effort: current.effort,
-    maxConcurrent: current.maxConcurrent,
-    providers: current.providers.map((provider) => ({ ...provider, models: [...provider.models] })),
+export function applySettingsPatch(current: StoredSettings, patch: SettingsPatch): ResolvedSettings {
+  const base = resolveSettings(current);
+  const next: ResolvedSettings = {
+    effort: base.effort,
+    maxConcurrent: base.maxConcurrent,
+    approvalTimeoutMinutes: base.approvalTimeoutMinutes,
+    limits: { ...base.limits },
+    archiveRetentionDays: base.archiveRetentionDays,
+    providers: base.providers.map((provider) => ({ ...provider, models: [...provider.models] })),
   };
   if (patch.effort !== undefined) {
     if (!isEffort(patch.effort)) throw new Error("effort 必须是 low、medium、high、xhigh 或 max");
@@ -215,6 +278,15 @@ export function applySettingsPatch(current: StoredSettings, patch: SettingsPatch
   }
   if (patch.maxConcurrent !== undefined) {
     next.maxConcurrent = readMaxConcurrent(patch.maxConcurrent);
+  }
+  if (patch.approvalTimeoutMinutes !== undefined) {
+    next.approvalTimeoutMinutes = readApprovalTimeout(patch.approvalTimeoutMinutes);
+  }
+  if (patch.limits !== undefined) {
+    next.limits = readLimits(patch.limits, base.limits);
+  }
+  if (patch.archiveRetentionDays !== undefined) {
+    next.archiveRetentionDays = readArchiveRetentionDays(patch.archiveRetentionDays);
   }
   if (patch.providers !== undefined) {
     next.providers = readProviderList(patch.providers, current.providers);
@@ -228,30 +300,39 @@ export function findProvider(settings: StoredSettings, id: string): ProviderConf
 
 function parseStored(
   record: Record<string, unknown>,
-  defaultMaxConcurrent: number,
-): { settings: StoredSettings; migrated: boolean } {
-  const effort = isEffort(record.effort) ? record.effort : DEFAULTS.effort;
-  // 老文件没有这个字段：按默认值加载，不会因为缺字段而报错。
+  defaults: ResolvedSettings,
+): { settings: ResolvedSettings; migrated: boolean } {
+  const effort = isEffort(record.effort) ? record.effort : defaults.effort;
+  // 老文件没有这些字段：按调用方给的初始默认值加载，不会因为缺字段而报错。
   // 旧版的 agentLimit 已并入 maxConcurrent，读取时直接忽略。
   const maxConcurrent = record.maxConcurrent === undefined
-    ? defaultMaxConcurrent
+    ? defaults.maxConcurrent
     : readMaxConcurrent(record.maxConcurrent);
+  const approvalTimeoutMinutes = record.approvalTimeoutMinutes === undefined
+    ? defaults.approvalTimeoutMinutes
+    : readApprovalTimeout(record.approvalTimeoutMinutes);
+  const limits = record.limits === undefined
+    ? { ...defaults.limits }
+    : readLimits(record.limits, defaults.limits);
+  const archiveRetentionDays = record.archiveRetentionDays === undefined
+    ? defaults.archiveRetentionDays
+    : readArchiveRetentionDays(record.archiveRetentionDays);
+  const common = { effort, maxConcurrent, approvalTimeoutMinutes, limits, archiveRetentionDays };
   if (Array.isArray(record.providers)) {
     return {
       migrated: false,
-      settings: { effort, maxConcurrent, providers: record.providers.map(readSavedProvider) },
+      settings: { ...common, providers: record.providers.map(readSavedProvider) },
     };
   }
   const apiKey = typeof record.apiKey === "string" ? record.apiKey : "";
   const model = typeof record.model === "string" ? record.model.trim() : "";
   if (!apiKey.trim() && !model) {
-    return { migrated: false, settings: { effort, maxConcurrent, providers: [] } };
+    return { migrated: false, settings: { ...common, providers: [] } };
   }
   return {
     migrated: true,
     settings: {
-      effort,
-      maxConcurrent,
+      ...common,
       providers: [{
         id: randomUUID(),
         name: "默认",
@@ -272,6 +353,54 @@ function readMaxConcurrent(value: unknown): number {
     || value > MAX_CONCURRENT_MAX
   ) {
     throw new Error(`并发上限必须是 ${MAX_CONCURRENT_MIN} 到 ${MAX_CONCURRENT_MAX} 之间的整数`);
+  }
+  return value;
+}
+
+/** 确认超时与 config.yaml / env 的范围一致：0 表示一直等待。 */
+function readApprovalTimeout(value: unknown): number {
+  if (
+    typeof value !== "number"
+    || !Number.isInteger(value)
+    || value < APPROVAL_TIMEOUT_MIN
+    || value > APPROVAL_TIMEOUT_MAX
+  ) {
+    throw new Error(
+      `确认超时必须是 ${APPROVAL_TIMEOUT_MIN} 到 ${APPROVAL_TIMEOUT_MAX} 之间的整数（0 表示不自动拒绝）`,
+    );
+  }
+  return value;
+}
+
+/** 合并式读取上限：只校验出现的字段，其余沿用当前值，方便前端部分提交。 */
+function readLimits(value: unknown, base: LimitsConfig): LimitsConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("limits 必须是对象");
+  }
+  const record = value as Record<string, unknown>;
+  const result = { ...base };
+  for (const rule of LIMIT_RULES) {
+    const raw = record[rule.key];
+    if (raw === undefined) continue;
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < rule.min || raw > rule.max) {
+      throw new Error(
+        `limits.${rule.key} 必须是 ${rule.min} 到 ${rule.max} 的整数${rule.unit ? `（${rule.unit}）` : ""}`,
+      );
+    }
+    result[rule.key] = raw;
+  }
+  return result;
+}
+
+/** 归档保留天数与部署页一致：1..3650 天。 */
+function readArchiveRetentionDays(value: unknown): number {
+  if (
+    typeof value !== "number"
+    || !Number.isInteger(value)
+    || value < ARCHIVE_RETENTION_MIN
+    || value > ARCHIVE_RETENTION_MAX
+  ) {
+    throw new Error(`归档保留天数必须是 ${ARCHIVE_RETENTION_MIN} 到 ${ARCHIVE_RETENTION_MAX} 之间的整数`);
   }
   return value;
 }

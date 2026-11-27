@@ -1,3 +1,4 @@
+import type { LimitsConfig } from "./config.js";
 import type { PermissionLevel } from "./permissions.js";
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -342,6 +343,12 @@ export interface PublicSettings {
    * 顶栏「运行中 / 上限」也用这个值作为 agent 上限。
    */
   maxConcurrent: number;
+  /** 等待确认（提问/授权）超时，单位分钟；0 表示不自动拒绝。 */
+  approvalTimeoutMinutes: number;
+  /** 会话裁剪与请求体/历史分页上限。 */
+  limits: LimitsConfig;
+  /** 会话在本机保留多少天后归档；只有配置了归档目录时生效。 */
+  archiveRetentionDays: number;
 }
 
 export interface SessionSummary {

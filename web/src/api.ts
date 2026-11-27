@@ -436,6 +436,15 @@ export interface Provider {
   models: string[];
 }
 
+/** 会话裁剪与请求体/历史分页上限；与服务端 LimitsConfig 保持一致。 */
+export interface Limits {
+  transcriptBytes: number;
+  transcriptMessages: number;
+  messageText: number;
+  requestBodyBytes: number;
+  historyPage: number;
+}
+
 export interface Settings {
   providers: Provider[];
   effort: Effort;
@@ -444,12 +453,44 @@ export interface Settings {
    * 顶栏「运行中 / 上限」也用这个值作为 agent 上限。
    */
   maxConcurrent: number;
+  /** 等待确认（提问/授权）超时，单位分钟；0 表示不自动拒绝。 */
+  approvalTimeoutMinutes: number;
+  /** 会话裁剪与请求体/历史分页上限。 */
+  limits: Limits;
+  /** 会话在本机保留多少天后归档；只有配置了归档目录时生效。 */
+  archiveRetentionDays: number;
 }
 
 /** 与服务端 settings.ts 的 MAX_CONCURRENT_MIN / MAX_CONCURRENT_MAX / DEFAULT_MAX_CONCURRENT 保持一致。 */
 export const MAX_CONCURRENT_MIN = 1;
 export const MAX_CONCURRENT_MAX = 256;
 export const DEFAULT_MAX_CONCURRENT = 4;
+
+/** 与服务端 settings.ts / config.ts 的校验区间保持一致。 */
+export const APPROVAL_TIMEOUT_MIN = 0;
+export const APPROVAL_TIMEOUT_MAX = 1440;
+export const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 10;
+
+export const ARCHIVE_RETENTION_MIN = 1;
+export const ARCHIVE_RETENTION_MAX = 3650;
+export const DEFAULT_ARCHIVE_RETENTION_DAYS = 30;
+
+export const DEFAULT_LIMITS: Limits = {
+  transcriptBytes: 8 * 1024 * 1024,
+  transcriptMessages: 5_000,
+  messageText: 200_000,
+  requestBodyBytes: 28_000_000,
+  historyPage: 200,
+};
+
+/** 各上限的合法区间；与 config.ts 的 LIMIT_RULES 保持一致。 */
+export const LIMIT_RANGES: Array<{ key: keyof Limits; min: number; max: number }> = [
+  { key: "transcriptBytes", min: 64 * 1024, max: 64 * 1024 * 1024 },
+  { key: "transcriptMessages", min: 50, max: 20_000 },
+  { key: "messageText", min: 1024, max: 1024 * 1024 },
+  { key: "requestBodyBytes", min: 1024 * 1024, max: 64 * 1024 * 1024 },
+  { key: "historyPage", min: 50, max: 2_000 },
+];
 
 /** 设置页保存成功后广播；顶栏据此立即更新并发 / agent 上限，不必重新请求。 */
 export const SETTINGS_SAVED_EVENT = "qubius:settings-saved";
@@ -836,6 +877,9 @@ export function saveSettings(body: {
   providers: ProviderDraft[];
   effort: Effort;
   maxConcurrent?: number;
+  approvalTimeoutMinutes?: number;
+  limits?: Limits;
+  archiveRetentionDays?: number;
 }, signal?: AbortSignal): Promise<Settings> {
   return request("/api/settings", { method: "PUT", body: JSON.stringify(body) }, signal);
 }

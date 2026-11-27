@@ -482,6 +482,37 @@ test("PUT /api/settings 保存并发上限，非法值返回 400", async () => {
   }
 });
 
+test("PUT /api/settings 保存确认超时、限制和归档保留天数，非法值返回 400", async () => {
+  const harness = await startHarness();
+  try {
+    const saved = await call<{
+      approvalTimeoutMinutes: number;
+      limits: { historyPage: number; transcriptMessages: number };
+      archiveRetentionDays: number;
+    }>(harness, "PUT", "/api/settings", {
+      approvalTimeoutMinutes: 0,
+      limits: { historyPage: 321, transcriptMessages: 6_000 },
+      archiveRetentionDays: 7,
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.approvalTimeoutMinutes, 0);
+    assert.equal(saved.data.limits.historyPage, 321);
+    assert.equal(saved.data.limits.transcriptMessages, 6_000);
+    assert.equal(saved.data.archiveRetentionDays, 7);
+    assert.equal(harness.settings.current.approvalTimeoutMinutes, 0);
+    assert.equal(harness.settings.current.limits?.historyPage, 321);
+    assert.equal(harness.settings.current.archiveRetentionDays, 7);
+
+    const invalid = await call(harness, "PUT", "/api/settings", { approvalTimeoutMinutes: 1441 });
+    assert.equal(invalid.status, 400);
+    assert.match(String(invalid.data.error), /确认超时/);
+    // 非法请求不能改掉已保存的值。
+    assert.equal(harness.settings.current.approvalTimeoutMinutes, 0);
+  } finally {
+    await harness.close();
+  }
+});
+
 test("requestBodyBytes 配置生效：超过上限的 JSON 请求返回 413", async () => {
   const harness = await startHarness({
     limits: { ...DEFAULT_LIMITS, requestBodyBytes: 512 },

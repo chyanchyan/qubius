@@ -39,6 +39,8 @@ const SNAPSHOT_SAFETY_DAYS = 7;
  */
 export class ArchiveSweeper {
   private running: Promise<SweepResult> | null = null;
+  /** 当前生效的保留天数；设置页保存后即时更新，下一轮整理按新值判断。 */
+  private retentionDays: number;
 
   constructor(
     private deps: {
@@ -51,7 +53,14 @@ export class ArchiveSweeper {
       now?: () => Date;
       log?: (message: string, error?: unknown) => void;
     },
-  ) {}
+  ) {
+    this.retentionDays = deps.retentionDays;
+  }
+
+  setRetentionDays(days: number): void {
+    if (!Number.isInteger(days) || days < 1) return;
+    this.retentionDays = days;
+  }
 
   run(): Promise<SweepResult> {
     if (!this.running) {
@@ -65,9 +74,11 @@ export class ArchiveSweeper {
   private async doSweep(): Promise<SweepResult> {
     const now = this.deps.now ?? (() => new Date());
     const startedAt = now().toISOString();
+    // 本轮固定用开始时读到的值，避免整理途中设置变更导致判断前后不一致。
+    const retentionDays = this.retentionDays;
     const result: SweepResult = {
       enabled: true,
-      retentionDays: this.deps.retentionDays,
+      retentionDays,
       checked: 0,
       archived: 0,
       removed: 0,
@@ -84,11 +95,11 @@ export class ArchiveSweeper {
         throw new Error(`归档目录不可写：${status.dir}`);
       }
       const nowMs = now().getTime();
-      const cutoff = nowMs - this.deps.retentionDays * DAY_MS;
+      const cutoff = nowMs - retentionDays * DAY_MS;
       // 快照时点与到期日解耦：无论 retentionDays 多大，都要在 Claude 的
       // 30 天 transcript 清理之前保存一份。短保留期则提前 1 天快照。
       const snapshotAgeDays = Math.min(
-        Math.max(1, this.deps.retentionDays - 1),
+        Math.max(1, retentionDays - 1),
         CLAUDE_CLEANUP_DAYS - SNAPSHOT_SAFETY_DAYS,
       );
       const snapshotCutoff = nowMs - snapshotAgeDays * DAY_MS;

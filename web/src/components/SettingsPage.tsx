@@ -1,9 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
+  APPROVAL_TIMEOUT_MAX,
+  APPROVAL_TIMEOUT_MIN,
+  ARCHIVE_RETENTION_MAX,
+  ARCHIVE_RETENTION_MIN,
   clampMaxConcurrent,
+  DEFAULT_APPROVAL_TIMEOUT_MINUTES,
+  DEFAULT_ARCHIVE_RETENTION_DAYS,
+  DEFAULT_LIMITS,
   DEFAULT_MAX_CONCURRENT,
   EFFORTS,
   getSettings,
+  LIMIT_RANGES,
   MAX_CONCURRENT_MAX,
   MAX_CONCURRENT_MIN,
   readApiToken,
@@ -11,6 +19,7 @@ import {
   SETTINGS_SAVED_EVENT,
   writeApiToken,
   type Effort,
+  type Limits,
   type ProviderDraft,
   type Settings,
 } from "../api";
@@ -27,6 +36,14 @@ const PRICING_FIELDS: Array<{ key: PricingKey; label: string }> = [
   { key: "output", label: "输出" },
   { key: "cacheRead", label: "缓存读" },
   { key: "cacheWrite", label: "缓存写" },
+];
+
+const LIMIT_FIELDS: Array<{ key: keyof Limits; label: string; hint: string }> = [
+  { key: "transcriptBytes", label: "单会话总字节", hint: "单个会话序列化后的最大字节数" },
+  { key: "transcriptMessages", label: "单会话消息条数", hint: "单个会话保留的消息条数" },
+  { key: "messageText", label: "单条消息字符数", hint: "单条消息正文的最大字符数" },
+  { key: "requestBodyBytes", label: "请求体字节数", hint: "单次 JSON 请求体的最大字节数" },
+  { key: "historyPage", label: "历史分页条数", hint: "首帧/翻页一次返回的历史消息条数" },
 ];
 
 const PRICING_GRID_STYLE = {
@@ -125,6 +142,13 @@ export function SettingsPage() {
   const fieldRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [effort, setEffort] = useState<Effort>("high");
   const [maxConcurrent, setMaxConcurrent] = useState(DEFAULT_MAX_CONCURRENT);
+  const [approvalTimeoutMinutes, setApprovalTimeoutMinutes] = useState(
+    DEFAULT_APPROVAL_TIMEOUT_MINUTES,
+  );
+  const [limits, setLimits] = useState<Limits>({ ...DEFAULT_LIMITS });
+  const [archiveRetentionDays, setArchiveRetentionDays] = useState(
+    DEFAULT_ARCHIVE_RETENTION_DAYS,
+  );
   /* 访问令牌只保存在本机浏览器，独立于上面的服务端设置表单。 */
   const [apiToken, setApiToken] = useState(() => readApiToken());
   const [tokenMessage, setTokenMessage] = useState("");
@@ -151,6 +175,10 @@ export function SettingsPage() {
       setProviders(fromSettings(data));
       setEffort(data.effort);
       setMaxConcurrent(clampMaxConcurrent(data.maxConcurrent));
+      // 旧服务端还没有这些字段时退回内置默认值，页面照常可用。
+      setApprovalTimeoutMinutes(data.approvalTimeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES);
+      setLimits({ ...DEFAULT_LIMITS, ...(data.limits ?? {}) });
+      setArchiveRetentionDays(data.archiveRetentionDays ?? DEFAULT_ARCHIVE_RETENTION_DAYS);
       setDirty(false);
     }).catch((reason: unknown) => {
       if (mounted.current) setError(readableError(reason, "读取设置失败"));
@@ -207,6 +235,34 @@ export function SettingsPage() {
       setError(`并发上限必须是 ${MAX_CONCURRENT_MIN} 到 ${MAX_CONCURRENT_MAX} 之间的整数。`);
       return;
     }
+    if (
+      !Number.isInteger(approvalTimeoutMinutes)
+      || approvalTimeoutMinutes < APPROVAL_TIMEOUT_MIN
+      || approvalTimeoutMinutes > APPROVAL_TIMEOUT_MAX
+    ) {
+      setError(
+        `确认超时必须是 ${APPROVAL_TIMEOUT_MIN} 到 ${APPROVAL_TIMEOUT_MAX} 之间的整数（0 表示不自动拒绝）。`,
+      );
+      return;
+    }
+    if (
+      !Number.isInteger(archiveRetentionDays)
+      || archiveRetentionDays < ARCHIVE_RETENTION_MIN
+      || archiveRetentionDays > ARCHIVE_RETENTION_MAX
+    ) {
+      setError(
+        `归档保留天数必须是 ${ARCHIVE_RETENTION_MIN} 到 ${ARCHIVE_RETENTION_MAX} 之间的整数。`,
+      );
+      return;
+    }
+    for (const range of LIMIT_RANGES) {
+      const value = limits[range.key];
+      if (!Number.isInteger(value) || value < range.min || value > range.max) {
+        const label = LIMIT_FIELDS.find((field) => field.key === range.key)?.label ?? range.key;
+        setError(`${label}必须是 ${range.min} 到 ${range.max} 之间的整数。`);
+        return;
+      }
+    }
     try {
       const previousProviders = providers;
       const body: ProviderDraftWithPricing[] = providers.map((provider) => {
@@ -221,11 +277,21 @@ export function SettingsPage() {
         if (pricing) draft.pricing = pricing;
         return draft;
       });
-      const saved = await saveSettings({ providers: body, effort, maxConcurrent }) as SettingsWithPricing;
+      const saved = await saveSettings({
+        providers: body,
+        effort,
+        maxConcurrent,
+        approvalTimeoutMinutes,
+        limits,
+        archiveRetentionDays,
+      }) as SettingsWithPricing;
       const nextProviders = fromSettings(saved);
       setProviders(nextProviders);
       setEffort(saved.effort);
       setMaxConcurrent(clampMaxConcurrent(saved.maxConcurrent));
+      setApprovalTimeoutMinutes(saved.approvalTimeoutMinutes ?? DEFAULT_APPROVAL_TIMEOUT_MINUTES);
+      setLimits({ ...DEFAULT_LIMITS, ...(saved.limits ?? {}) });
+      setArchiveRetentionDays(saved.archiveRetentionDays ?? DEFAULT_ARCHIVE_RETENTION_DAYS);
       setDirty(false);
       // 顶栏的「运行中 / 上限」跟着立即更新，不必等下次加载。
       window.dispatchEvent(new CustomEvent(SETTINGS_SAVED_EVENT, { detail: saved }));
@@ -548,6 +614,81 @@ export function SettingsPage() {
           同时进行的对话数上限（{MAX_CONCURRENT_MIN} 到 {MAX_CONCURRENT_MAX}），顶栏「运行中 / 上限」也用这个值作为 agent 上限。
           超出的对话会排队；保存后立即生效，调高后排队中的对话马上开始，调低不会打断正在运行的对话。
           config.yaml / 部署环境里的 maxConcurrent 只作为初始默认值。
+        </p>
+        <label className="field">
+          确认超时（分钟，0 不自动拒绝）
+          <input
+            type="number"
+            min={APPROVAL_TIMEOUT_MIN}
+            max={APPROVAL_TIMEOUT_MAX}
+            step={1}
+            inputMode="numeric"
+            value={Number.isFinite(approvalTimeoutMinutes) ? approvalTimeoutMinutes : ""}
+            onChange={(event) => {
+              const next = event.target.value === "" ? Number.NaN : Number(event.target.value);
+              setApprovalTimeoutMinutes(next);
+              setDirty(true);
+            }}
+          />
+        </label>
+        <p className="muted">
+          等待提问/授权多久没人回应就自动拒绝（{APPROVAL_TIMEOUT_MIN} 到 {APPROVAL_TIMEOUT_MAX}）；
+          0 表示一直等待、不显示倒计时。保存后立即生效，但已经挂起的确认保留原来的时限。
+          部署环境里的 approvalTimeoutMinutes 只作为初始默认值。
+        </p>
+        <label className="field">
+          归档保留天数
+          <input
+            type="number"
+            min={ARCHIVE_RETENTION_MIN}
+            max={ARCHIVE_RETENTION_MAX}
+            step={1}
+            inputMode="numeric"
+            value={Number.isFinite(archiveRetentionDays) ? archiveRetentionDays : ""}
+            onChange={(event) => {
+              const next = event.target.value === "" ? Number.NaN : Number(event.target.value);
+              setArchiveRetentionDays(next);
+              setDirty(true);
+            }}
+          />
+        </label>
+        <p className="muted">
+          会话在本机保留多少天后归档到冷存储（{ARCHIVE_RETENTION_MIN} 到 {ARCHIVE_RETENTION_MAX}）。
+          未配置归档目录时不生效；保存后下一轮整理（最多 1 小时）按新天数判断。
+          部署环境里的保留天数只作为初始默认值。
+        </p>
+        <details className="field">
+          <summary>高级限制（一般不用改）</summary>
+          <div style={PRICING_GRID_STYLE}>
+            {LIMIT_FIELDS.map((field) => {
+              const range = LIMIT_RANGES.find((item) => item.key === field.key);
+              if (!range) return null;
+              const value = limits[field.key];
+              return (
+                <label key={field.key} className="field">
+                  {field.label}
+                  <input
+                    type="number"
+                    min={range.min}
+                    max={range.max}
+                    step={1}
+                    inputMode="numeric"
+                    value={Number.isFinite(value) ? value : ""}
+                    onChange={(event) => {
+                      const next = event.target.value === "" ? Number.NaN : Number(event.target.value);
+                      setLimits((current) => ({ ...current, [field.key]: next }));
+                      setDirty(true);
+                    }}
+                  />
+                  <span className="muted">{field.hint}（{range.min}–{range.max}）</span>
+                </label>
+              );
+            })}
+          </div>
+        </details>
+        <p className="muted">
+          会话/请求上限保存后立即生效：新请求按新请求体上限处理，旧会话在下次加载或保存时按新条数/字节上限收敛。
+          部署环境里的 limits 只作为初始默认值。
         </p>
       </form>
       <article className="provider" aria-label="访问令牌">

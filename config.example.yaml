@@ -37,6 +37,7 @@ dataDir: ./data
 # dir 的相对路径相对于本文件所在目录解析。
 # archive:
 #   dir: /archive/qubius
+#   # 只作为首次启动的默认值；之后可在页面「设置」里修改，下一轮整理即生效。
 #   retentionDays: 30
 #   # 默认主实例 main、副实例 bak；多个实例共用一个 dir 时靠它区分。
 #   # instance: main
@@ -49,11 +50,13 @@ maxConcurrent: 4
 # 户外使用、手机可能很久才看到通知时，可以调大，例如 60。
 # 设为 0 表示不自动拒绝，界面上也不再显示倒计时。
 # 部署向导会写进 env 的 QUBIUS_APPROVAL_TIMEOUT_MINUTES，这里不写也会生效。
+# 这里只作为首次启动的默认值；之后在页面「设置」里修改，保存后立即生效。
 # approvalTimeoutMinutes: 10
 
 # 会话裁剪、请求体与历史分页上限；下面是默认值，可不写。
 # 也可用环境变量覆盖：QUBIUS_LIMIT_TRANSCRIPT_BYTES、QUBIUS_LIMIT_TRANSCRIPT_MESSAGES、
 # QUBIUS_LIMIT_MESSAGE_TEXT、QUBIUS_LIMIT_REQUEST_BODY、QUBIUS_HISTORY_PAGE。
+# 这里只作为首次启动的默认值；之后在页面「设置 → 高级限制」里修改。
 # limits:
 #   transcriptBytes: 8388608      # 64KB - 64MB
 #   transcriptMessages: 5000      # 50 - 20000
