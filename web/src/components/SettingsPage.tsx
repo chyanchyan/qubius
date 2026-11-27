@@ -68,6 +68,7 @@ interface EditableProvider {
   hasApiKey: boolean;
   models: string[];
   pricing: EditablePricing;
+  systemProxy: boolean;
 }
 
 /** 切换类型时只替换仍是当前类型默认值的地址，用户自己填过的保持不动。 */
@@ -114,6 +115,7 @@ function blankProvider(): EditableProvider {
     hasApiKey: false,
     models: [""],
     pricing: emptyPricing(),
+    systemProxy: false,
   };
 }
 
@@ -129,6 +131,7 @@ function fromSettings(data: SettingsWithPricing): EditableProvider[] {
     hasApiKey: provider.hasApiKey,
     models: provider.models.length > 0 ? [...provider.models] : [""],
     pricing: pricingToDraft(provider.pricing),
+    systemProxy: provider.systemProxy ?? false,
   }));
 }
 
@@ -283,6 +286,7 @@ export function SettingsPage() {
           kind: provider.kind,
           baseUrl: provider.baseUrl.trim(),
           models: provider.models.map((model) => model.trim()).filter(Boolean),
+          systemProxy: provider.systemProxy,
         };
         if (provider.apiKey.trim()) draft.apiKey = provider.apiKey.trim();
         const pricing = pricingFromDraft(provider.pricing);
@@ -435,6 +439,19 @@ export function SettingsPage() {
               <span className="settings-provider-key" data-on={hasKey}>
                 {hasKey ? "已配置密钥" : "未配置密钥"}
               </span>
+              <label
+                className="settings-provider-proxy"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+                title="勾选后，这套配置访问模型接口时通过本机系统代理发出；不勾选则直连。"
+              >
+                <input
+                  type="checkbox"
+                  checked={provider.systemProxy}
+                  onChange={(event) => update(provider.key, { systemProxy: event.target.checked })}
+                />
+                走系统代理
+              </label>
             </summary>
             <div className="settings-provider-body">
             <label className="field">
@@ -477,6 +494,9 @@ export function SettingsPage() {
               {provider.kind === "gemini"
                 ? "Gemini API 地址，会自动补 /v1beta；一般留默认值即可。"
                 : "兼容 Anthropic Messages 的地址，会作为 ANTHROPIC_BASE_URL 传给 Agent SDK。"}
+            </p>
+            <p className="muted">
+              Windows 上使用系统代理（Internet 选项）；其它平台可用 HTTPS_PROXY。勾选但未检测到代理时会退回直连。
             </p>
             <div className="field">
               <label htmlFor={`provider-key-${provider.key}`}>API key</label>

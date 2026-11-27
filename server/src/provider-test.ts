@@ -1,6 +1,8 @@
 import { claudeConnection } from "./endpoint.js";
 import { geminiApiBase, geminiModelId } from "./gemini.js";
+import { systemProxy } from "./system-proxy.js";
 import type { ProviderKind } from "./types.js";
+import { upstreamFetch } from "./upstream-fetch.js";
 
 export interface ProviderTestResult {
   ok: boolean;
@@ -14,6 +16,8 @@ export interface ProviderTestInput {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** 这套配置勾选了「走系统代理」时为 true。 */
+  systemProxy?: boolean;
 }
 
 /** 连接测试请求超时；避免设置页在失效地址上卡住。 */
@@ -36,11 +40,13 @@ export async function testProvider(
   input: ProviderTestInput,
   deps?: { fetch?: typeof fetch },
 ): Promise<ProviderTestResult> {
+  const missingProxy = missingProxyHint(input, deps);
+  if (missingProxy) return missingProxy;
   if (input.kind === "gemini") return testGeminiProvider(input, deps);
   // DeepSeek 等兼容接口需要先规范化 base 和模型名（例如加 [1m]）。
   const connection = claudeConnection(input.baseUrl, input.model);
   const url = `${connection.baseUrl}/v1/messages`;
-  const doFetch = deps?.fetch ?? fetch;
+  const doFetch = deps?.fetch ?? (input.systemProxy ? upstreamFetch : fetch);
   const timeout = timeoutSignal(TIMEOUT_MS);
 
   try {
@@ -119,8 +125,10 @@ async function testGeminiProvider(
   input: ProviderTestInput,
   deps?: { fetch?: typeof fetch },
 ): Promise<ProviderTestResult> {
+  const missingProxy = missingProxyHint(input, deps);
+  if (missingProxy) return missingProxy;
   const url = `${geminiApiBase(input.baseUrl)}/models/${encodeURIComponent(geminiModelId(input.model))}:generateContent`;
-  const doFetch = deps?.fetch ?? fetch;
+  const doFetch = deps?.fetch ?? (input.systemProxy ? upstreamFetch : fetch);
   const timeout = timeoutSignal(TIMEOUT_MS);
 
   try {
@@ -192,6 +200,21 @@ async function testGeminiProvider(
   } finally {
     timeout.cleanup();
   }
+}
+
+/**
+ * 勾选了「走系统代理」但本机没有检测到代理时提前给出可读提示，
+ * 避免最终只剩一句「网络连接失败」。注入 fetch 的测试不走代理，不检查。
+ */
+function missingProxyHint(
+  input: ProviderTestInput,
+  deps?: { fetch?: typeof fetch },
+): ProviderTestResult | undefined {
+  if (!input.systemProxy || deps?.fetch || systemProxy()) return undefined;
+  return {
+    ok: false,
+    detail: "已勾选走系统代理，但没有检测到系统代理（检查 Windows Internet 选项或 HTTPS_PROXY 环境变量）",
+  };
 }
 
 /** 上游错误体可能回显请求 key；详情展示前一律替换成 ***。 */

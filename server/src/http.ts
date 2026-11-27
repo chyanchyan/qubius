@@ -876,6 +876,7 @@ export function createAppServer(options: {
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         model,
+        systemProxy: provider.systemProxy === true,
       }));
       return;
     }

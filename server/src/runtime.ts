@@ -431,7 +431,7 @@ export class Runtime {
     private deps: {
       maxConcurrent: number;
       fake: boolean;
-      credential: (providerId: string) => { apiKey: string; baseUrl: string };
+      credential: (providerId: string) => { apiKey: string; baseUrl: string; proxyUrl?: string };
       permission: (projectId: string) => PermissionLevel;
       secrets: () => string[];
       /** 等待确认的超时时间，默认 10 分钟；0 表示一直等，不显示倒计时也不自动拒绝。 */
@@ -1271,7 +1271,7 @@ export class Runtime {
   private async runSdk(id: string, queue: PromptQueue, signal: AbortSignal): Promise<void> {
     const session = this.store.require(id);
     const permission = this.deps.permission(session.projectId);
-    const { apiKey, baseUrl } = this.deps.credential(session.providerId);
+    const { apiKey, baseUrl, proxyUrl } = this.deps.credential(session.providerId);
     const connection = claudeConnection(baseUrl, session.model);
     const abortController = new AbortController();
     const onAbort = () => abortController.abort();
@@ -1300,7 +1300,7 @@ export class Runtime {
         append: APPEND_PROMPT,
       },
       abortController,
-      env: claudeEnv(process.env, apiKey, connection),
+      env: claudeEnv(process.env, apiKey, connection, proxyUrl),
       stderr: (data) => {
         stderrTail = `${stderrTail}${data}`.slice(-2000);
       },

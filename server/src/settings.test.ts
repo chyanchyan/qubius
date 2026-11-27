@@ -609,6 +609,60 @@ test("接口类型缺省按 anthropic 处理，Gemini 类型会保存并对外�
   assert.equal(publicSettings(legacy).providers[0]?.kind, "anthropic");
 });
 
+test("走系统代理缺省为 false，保存后对外返回勾选状态", () => {
+  // 老配置没有该字段：对外返回明确的 false。
+  assert.equal(publicSettings(sample()).providers[0]?.systemProxy, false);
+
+  const withProxy = applySettingsPatch(sample(), {
+    providers: [{
+      id: "p1",
+      name: "官方",
+      baseUrl: "https://api.anthropic.com",
+      models: ["sonnet"],
+      systemProxy: true,
+    }],
+  });
+  assert.equal(withProxy.providers[0]?.systemProxy, true);
+  assert.equal(publicSettings(withProxy).providers[0]?.systemProxy, true);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-provider-proxy-"));
+  saveSettings(dir, withProxy);
+  const raw = JSON.parse(fs.readFileSync(path.join(dir, "secrets.json"), "utf8")) as {
+    providers: Array<Record<string, unknown>>;
+  };
+  assert.equal(raw.providers[0]?.systemProxy, true);
+  const loaded = loadSettings(dir);
+  assert.equal(loaded.providers[0]?.systemProxy, true);
+  assert.equal(publicSettings(loaded).providers[0]?.systemProxy, true);
+
+  // 取消勾选后同样落盘为 false，重新加载仍然是直连。
+  const withoutProxy = applySettingsPatch(loaded, {
+    providers: [{
+      id: "p1",
+      name: "官方",
+      baseUrl: "https://api.anthropic.com",
+      models: ["sonnet"],
+      systemProxy: false,
+    }],
+  });
+  assert.equal(withoutProxy.providers[0]?.systemProxy, false);
+  assert.equal(publicSettings(withoutProxy).providers[0]?.systemProxy, false);
+});
+
+test("走系统代理只接受布尔值", () => {
+  for (const systemProxy of ["true", 1, null, {}]) {
+    assert.throws(() => applySettingsPatch(sample(), {
+      providers: [{
+        id: "p1",
+        name: "官方",
+        baseUrl: "https://api.anthropic.com",
+        models: ["sonnet"],
+        systemProxy,
+      }],
+    }), /走系统代理选项无效/);
+  }
+});
+
 test("改接口类型且留空密钥时沿用旧密钥", () => {
   // 地址不变、只改类型也会沿用原来的密钥。
   const kept = applySettingsPatch(sample(), {

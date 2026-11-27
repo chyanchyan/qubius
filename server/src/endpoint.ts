@@ -95,6 +95,7 @@ export function claudeEnv(
   base: NodeJS.ProcessEnv,
   apiKey: string,
   connection: ClaudeConnection,
+  proxyUrl?: string,
 ): NodeJS.ProcessEnv {
   const filtered: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(base)) {
@@ -102,8 +103,20 @@ export function claudeEnv(
     if (isSecretEnv(name, value)) continue;
     filtered[name] = value;
   }
+  // 勾选了「走系统代理」的 Anthropic 兼容接口：把代理显式传给 SDK 子进程。
+  // 本机回环（Gemini 适配层等）始终直连，避免代理客户端把本地请求也拦走。
+  const proxyEnv: NodeJS.ProcessEnv = {};
+  if (proxyUrl) {
+    for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]) {
+      proxyEnv[name] = proxyUrl;
+    }
+    const noProxy = withLoopbackBypass(filtered.NO_PROXY ?? filtered.no_proxy);
+    proxyEnv.NO_PROXY = noProxy;
+    proxyEnv.no_proxy = noProxy;
+  }
   return {
     ...filtered,
+    ...proxyEnv,
     // 函数显式构造的 ANTHROPIC_* 放在最后，确保不被 base 里的同名变量覆盖。
     ANTHROPIC_API_KEY: apiKey,
     ANTHROPIC_AUTH_TOKEN: apiKey,
@@ -118,6 +131,18 @@ export function claudeEnv(
     CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
     CLAUDE_AGENT_SDK_CLIENT_APP: "qubius/0.1.0",
   };
+}
+
+/** 把回环地址合并进 NO_PROXY，保留用户原有的绕过项。 */
+function withLoopbackBypass(value: string | undefined): string {
+  const entries = (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  for (const host of ["127.0.0.1", "localhost", "::1"]) {
+    if (!entries.includes(host)) entries.push(host);
+  }
+  return entries.join(",");
 }
 
 function deepseekAnthropicBase(baseUrl: string): string {

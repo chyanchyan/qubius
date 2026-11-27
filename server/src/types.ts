@@ -348,6 +348,8 @@ export interface PublicProvider {
   apiKey: string;
   hasApiKey: boolean;
   models: string[];
+  /** 这套配置访问上游时是否走系统代理。 */
+  systemProxy: boolean;
 }
 
 export interface PublicSettings {

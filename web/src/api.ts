@@ -440,6 +440,8 @@ export interface Provider {
   apiKey?: string;
   hasApiKey: boolean;
   models: string[];
+  /** 这套配置访问上游时是否走系统代理；旧服务端可能没有。 */
+  systemProxy: boolean;
 }
 
 /** 会话裁剪与请求体/历史分页上限；与服务端 LimitsConfig 保持一致。 */
@@ -588,6 +590,7 @@ export interface ProviderDraft {
   baseUrl: string;
   apiKey?: string;
   models: string[];
+  systemProxy?: boolean;
 }
 
 export const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];

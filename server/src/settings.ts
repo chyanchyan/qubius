@@ -29,6 +29,8 @@ export interface ProviderConfig {
   apiKey: string;
   models: string[];
   pricing?: ProviderPricing;
+  /** 这套配置访问上游时是否走系统代理；缺省 false（直连）。 */
+  systemProxy?: boolean;
 }
 
 /** 读取接口类型；老设置文件没有 kind 字段时按 anthropic 处理。 */
@@ -232,6 +234,7 @@ export function saveSettings(dataDir: string, stored: StoredSettings): void {
           baseUrl: provider.baseUrl,
           apiKey: provider.apiKey,
           models: provider.models,
+          systemProxy: provider.systemProxy === true,
           ...(pricing ? { pricing } : {}),
         };
       }),
@@ -265,6 +268,7 @@ export function publicSettings(stored: StoredSettings): PublicSettingsView {
         apiKey: provider.apiKey,
         hasApiKey: provider.apiKey.trim().length > 0,
         models: [...provider.models],
+        systemProxy: provider.systemProxy === true,
         ...(pricing ? { pricing } : {}),
       };
     }),
@@ -444,8 +448,16 @@ function readSavedProvider(value: unknown): ProviderConfig {
     baseUrl: record.baseUrl.trim(),
     apiKey: record.apiKey,
     models,
+    systemProxy: readSystemProxy(record.systemProxy),
     ...(pricing ? { pricing } : {}),
   };
+}
+
+/** 「走系统代理」缺省 false；只在显式给出时要求是布尔值。 */
+function readSystemProxy(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") throw new Error("走系统代理选项无效");
+  return value;
 }
 
 /** 缺省按 anthropic 兼容接口读取；写入时始终落盘明确的类型。 */
@@ -478,7 +490,16 @@ function readProviderList(value: unknown, current: ProviderConfig[]): ProviderCo
     const pricing = readPricing(record.pricing);
     const id = existing?.id ?? randomUUID();
     ids.add(id);
-    return { id, name, kind, baseUrl, apiKey, models, ...(pricing ? { pricing } : {}) };
+    return {
+      id,
+      name,
+      kind,
+      baseUrl,
+      apiKey,
+      models,
+      systemProxy: readSystemProxy(record.systemProxy),
+      ...(pricing ? { pricing } : {}),
+    };
   });
 }
 

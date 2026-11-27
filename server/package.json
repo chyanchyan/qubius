@@ -14,6 +14,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.329",
     "node-pty": "^1.1.0",
+    "undici": "^7.30.2",
     "web-push": "^4.0.0",
     "yaml": "^2.8.0"
   },

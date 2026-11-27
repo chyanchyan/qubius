@@ -10,6 +10,7 @@ import {
   toAnthropicResponse,
   type GeminiResponse,
 } from "./gemini.js";
+import { upstreamFetch, type UpstreamFetch } from "./upstream-fetch.js";
 
 /**
  * 本地 Gemini 适配服务。
@@ -31,13 +32,15 @@ const PATH_PATTERN = /^\/gemini\/([^/]+)\/v1\/messages(\/count_tokens)?\/?$/;
 export interface GeminiBridgeProvider {
   baseUrl: string;
   apiKey: string;
+  /** 勾选「走系统代理」时为 true；每次请求时实时读取。 */
+  systemProxy?: boolean;
 }
 
 export interface GeminiBridgeDeps {
   /** 按接口配置 id 读取实时配置；不是 Gemini 类型时返回 undefined。 */
   provider: (providerId: string) => GeminiBridgeProvider | undefined;
-  /** 测试注入用；默认使用全局 fetch。 */
-  fetch?: typeof fetch;
+  /** 测试注入用；默认按配置选择直连或走系统代理。 */
+  fetch?: UpstreamFetch;
 }
 
 class BridgeHttpError extends Error {
@@ -271,7 +274,7 @@ export class GeminiBridge {
     const timer = setTimeout(() => controller.abort(), COUNT_TOKENS_TIMEOUT_MS);
     timer.unref();
     try {
-      const response = await this.doFetch(url, {
+      const response = await this.doFetch(provider, url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -306,7 +309,7 @@ export class GeminiBridge {
     const method = stream ? "streamGenerateContent" : "generateContent";
     const url = `${geminiApiBase(provider.baseUrl)}/models/${encodeURIComponent(geminiModelId(model))}:${method}`
       + (stream ? "?alt=sse" : "");
-    return this.doFetch(url, {
+    return this.doFetch(provider, url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -317,8 +320,13 @@ export class GeminiBridge {
     });
   }
 
-  private doFetch(url: string, init: RequestInit): Promise<Response> {
-    return (this.deps.fetch ?? fetch)(url, init);
+  private doFetch(
+    provider: GeminiBridgeProvider,
+    url: string,
+    init: RequestInit,
+  ): Promise<Response> {
+    const doFetch = this.deps.fetch ?? (provider.systemProxy ? upstreamFetch : fetch);
+    return doFetch(url, init);
   }
 }
 

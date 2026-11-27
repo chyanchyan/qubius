@@ -221,7 +221,9 @@ test("Gemini 连接测试走 generateContent 并带 x-goog-api-key", async () =>
     {
       fetch: async (input, init) => {
         captured = {
-          url: typeof input === "string" ? input : input.url,
+          url: typeof input === "string"
+            ? input
+            : input instanceof URL ? input.toString() : input.url,
           key: new Headers(init?.headers).get("x-goog-api-key") ?? undefined,
           body: String(init?.body ?? ""),
         };

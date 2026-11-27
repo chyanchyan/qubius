@@ -21,6 +21,7 @@ import { createSdkTitleSummarizer } from "./session-title.js";
 import { createSdkDiscussant } from "./discussion.js";
 import { GeminiBridge } from "./gemini-bridge.js";
 import { findProvider, loadSettings, providerKind } from "./settings.js";
+import { shouldBypassProxy, systemProxy } from "./system-proxy.js";
 import { enabledSkillFilter, SkillSettings } from "./skills.js";
 import { configureLimits } from "./status.js";
 import { Store } from "./store.js";
@@ -227,7 +228,11 @@ const geminiBridge = new GeminiBridge({
   provider: (providerId) => {
     const provider = findProvider(settings.current, providerId);
     if (!provider || providerKind(provider) !== "gemini") return undefined;
-    return { baseUrl: provider.baseUrl, apiKey: provider.apiKey.trim() };
+    return {
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey.trim(),
+      systemProxy: provider.systemProxy === true,
+    };
   },
 });
 void geminiBridge.start().catch((error) => {
@@ -238,10 +243,18 @@ const credential = (providerId: string) => {
   if (!provider) throw new Error("这个对话的接口配置已删除，请新开一个对话");
   const apiKey = provider.apiKey.trim();
   if (!apiKey) throw new Error("这个接口配置还没有 API key");
-  const baseUrl = providerKind(provider) === "gemini"
-    ? geminiBridge.baseUrl(provider.id)
-    : provider.baseUrl;
-  return { apiKey, baseUrl };
+  const gemini = providerKind(provider) === "gemini";
+  const baseUrl = gemini ? geminiBridge.baseUrl(provider.id) : provider.baseUrl;
+  // Gemini 的上游请求由本机适配层发出，代理由适配层处理；Anthropic 兼容接口
+  // 由 SDK 子进程直连，只能把代理环境变量传给它（是否识别取决于 CLI）。
+  const detected = provider.systemProxy === true ? systemProxy() : undefined;
+  return {
+    apiKey,
+    baseUrl,
+    proxyUrl: !gemini && detected && !shouldBypassProxy(provider.baseUrl, detected.bypass)
+      ? detected.url
+      : undefined,
+  };
 };
 const runtime = new Runtime(store, {
   maxConcurrent: settings.current.maxConcurrent,

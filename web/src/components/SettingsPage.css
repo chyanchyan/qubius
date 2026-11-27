@@ -106,6 +106,15 @@
   color: var(--green);
 }
 
+.settings-provider-proxy {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4px * var(--control-scale));
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
 .settings-provider-body {
   display: flex;
   flex-direction: column;
