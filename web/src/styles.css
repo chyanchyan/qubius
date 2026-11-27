@@ -859,8 +859,8 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
 /* 用户消息框限高并在框内滚动：整条用户消息会吸顶固定在记录区顶部，
    附件说明较多时也可能变高，不限高就会把下面的对话全挡住。上限
    再砍 65%，吸顶时只占一条窄带（14vh / 11.2rem），把对话区留给当前回复。
-   正文本身在非编辑态只有一行，编辑态由 textarea 自己控制高度，不套用这个
-   上限。 */
+   正文在非编辑态只有一行（触屏两行，见下方 @media），编辑态由 textarea
+   自己控制高度，不套用这个上限。 */
 .user-msg {
   display: inline-block;
   max-width: 100%;
@@ -888,15 +888,95 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
   border-color: var(--blue);
 }
 
-/* 发送后的正文只保留一行摘要（参考 Cursor）：省略号截断，鼠标悬停可通过
-   title 看全文；完整内容进入编辑态再看。附件说明是独立块，不参与这一行
-   截断；图片缩略图在气泡外上方单独渲染。 */
+/* 发送后的正文只保留一行摘要（参考 Cursor）：省略号截断，鼠标悬停时由
+   .user-peek 浮出全文；完整内容也可进入编辑态再看。附件说明是独立块，
+   不参与这一行截断；图片缩略图在气泡外上方单独渲染。 */
 .user-msg:not(.user-msg-editing) .user-text {
   display: block;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 触屏没有悬停，摘要放宽到两行：大部分消息直接看全，只有更长的才需要
+   长按。line-clamp 保留第二行末尾的省略号；max-height 给不支持行数限制
+   的浏览器兜底。行高沿用全局 1.45，两行即 2.9em。 */
+@media (pointer: coarse) {
+  .user-msg:not(.user-msg-editing) .user-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    max-height: 2.9em;
+  }
+
+  /* 长按已经分配给「看全文」，摘要不再触发系统选词和长按菜单，否则两个
+     手势会抢；需要复制时点开编辑，在输入框里选择。 */
+  .user-msg:not(.user-msg-editing) {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+/* 悬停气泡时浮出的完整正文：fixed 到视口，避开记录区的滚动裁切；长消息
+   在浮层内滚动。不接收指针事件，不会挡住气泡的点击编辑和文字选择。
+   z-index 在对话框遮罩（50）之下。 */
+.user-peek {
+  position: fixed;
+  z-index: 45;
+  left: var(--peek-left);
+  max-width: var(--peek-max-width);
+  max-height: var(--peek-max-height);
+  overflow-y: auto;
+  padding: calc(7px * var(--control-scale)) calc(9px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--elev);
+  color: var(--fg);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 8px 22px #00000066;
+  pointer-events: none;
+}
+
+.user-peek[data-side="up"] { bottom: var(--peek-offset); }
+.user-peek[data-side="down"] { top: var(--peek-offset); }
+
+/* 触屏长按钉住的浮层接住手指：超过 60vh 的长消息能在浮层里滚动，也能
+   直接选词复制；点空白处的遮罩才收起。悬停版保持 pointer-events: none，
+   不打断气泡的点击编辑。 */
+.user-peek[data-pinned="true"] {
+  pointer-events: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 触屏长按钉住全文时铺在页面上的透明遮罩：只负责接住下一次点按来收起
+   浮层，手指落下不会再触发气泡的点击编辑。 */
+.user-peek-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+}
+
+.user-peek-text { display: block; }
+
+.user-peek-files {
+  display: block;
+  margin-top: calc(4px * var(--control-scale));
+  color: var(--muted);
+  font-size: 0.92em;
+}
+
+.user-peek-hint {
+  display: block;
+  margin-top: calc(5px * var(--control-scale));
+  color: var(--muted);
+  font-size: var(--fs-11);
 }
 
 /* 发送中的用户消息：先本地渲染，虚线边框 + 下方状态表示尚未收到服务端确认。 */

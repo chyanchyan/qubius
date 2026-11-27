@@ -10,13 +10,16 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
   type RefObject,
   type UIEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   backgroundTask,
   getSubagentTranscript,
@@ -56,6 +59,15 @@ import {
   hasTokenUsage,
 } from "../format";
 import { splitTextAttachments } from "../text-attachments";
+import {
+  isContentTruncated,
+  LONG_PRESS_MOVE_PX,
+  LONG_PRESS_MS,
+  PEEK_DELAY_MS,
+  peekPlacement,
+  touchPeekPlacement,
+  type PeekPlacement,
+} from "../user-peek";
 import { pinnedPushOffset } from "../sticky-push";
 import { canOfferMessageActions, canSubmitMessageEdit, rewindCheckboxState } from "../message-actions";
 import { Lightbox, Menu, type LightboxImage } from "../ui";
@@ -801,6 +813,45 @@ type InlinePrompt = "rewind" | "fork" | "edit-send";
 /** 编辑重发面板的三个按钮，对应 EditSendOptions 里的 fork/files 两种开关。 */
 type EditAction = "fork" | "resend" | "resend-code";
 
+/** 气泡浮出的全文：桌面跟随悬停，触屏长按后钉住到下一次点击。 */
+interface PeekState {
+  placement: PeekPlacement;
+  pinned: boolean;
+}
+
+/** 触屏的两行摘要是 line-clamp：有的浏览器只按被保留的两行算 scrollHeight，
+ *  直接量不出来。克隆一份去掉行数限制的元素，按同样宽度量完整高度兜底。 */
+function isLineClamped(text: HTMLElement): boolean {
+  const clamp = window.getComputedStyle(text).webkitLineClamp;
+  if (!clamp || clamp === "none" || !text.clientWidth) return false;
+  const probe = text.cloneNode(true) as HTMLElement;
+  probe.style.position = "fixed";
+  probe.style.left = "-9999px";
+  probe.style.top = "0";
+  probe.style.width = `${text.clientWidth}px`;
+  probe.style.maxHeight = "none";
+  probe.style.height = "auto";
+  probe.style.overflow = "visible";
+  probe.style.display = "block";
+  probe.style.whiteSpace = "normal";
+  probe.style.webkitLineClamp = "unset";
+  /* 挂在气泡里而不是 body 下：字体、行高、word-break 都从原位置继承，
+     量出来的换行才和可见文本一致。 */
+  (text.parentElement ?? document.body).appendChild(probe);
+  const fullHeight = probe.scrollHeight;
+  probe.remove();
+  return fullHeight > text.clientHeight + 1;
+}
+
+/** 气泡正文桌面压成一行、触屏最多两行，附件说明多时整条气泡还会纵向
+ *  限高；任一方向被裁切才值得浮出全文，短消息不弹多余浮层。 */
+function isBubbleTruncated(node: HTMLElement): boolean {
+  if (isContentTruncated(node)) return true;
+  const text = node.querySelector<HTMLElement>(".user-text");
+  if (!text) return false;
+  return isContentTruncated(text) || isLineClamped(text);
+}
+
 /**
  * 用户消息；图片作为独立缩略图显示在气泡外上方，保留原始链接（新标签/键盘
  * 打开），单击则进共享 Lightbox，不触发气泡的点击编辑。
@@ -839,6 +890,13 @@ const UserRow = memo(function UserRow({
   const [pendingEdit, setPendingEdit] = useState<EditAction | null>(null);
   const [prompt, setPrompt] = useState<InlinePrompt | null>(null);
   const [rewindFiles, setRewindFiles] = useState(false);
+  /* 悬停/长按气泡时浮出的全文；placement 是视口坐标，渲染时走 portal。 */
+  const [peek, setPeek] = useState<PeekState | null>(null);
+  const peekTimer = useRef<number | null>(null);
+  const pressTimer = useRef<number | null>(null);
+  const pressStart = useRef<{ x: number; y: number } | null>(null);
+  /* 长按抬手后浏览器还会补一次 click，用它吞掉，避免直接进入编辑。 */
+  const suppressClick = useRef(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<HTMLDivElement>(null);
@@ -941,6 +999,116 @@ const UserRow = memo(function UserRow({
     setPrompt(null);
   }, [composerSending, continuing, editing, item.text]);
 
+  /* 全文浮层只在需要时存在：悬停离开、点击、滚动、改窗口大小时收起，
+     卸载时清掉还没到点的悬停/长按定时器。 */
+  useEffect(() => () => {
+    if (peekTimer.current !== null) window.clearTimeout(peekTimer.current);
+    if (pressTimer.current !== null) window.clearTimeout(pressTimer.current);
+  }, []);
+
+  useEffect(() => {
+    if (editing) stopPeek();
+  }, [editing]);
+
+  useEffect(() => {
+    if (!peek) return;
+    function dismiss() {
+      setPeek(null);
+    }
+    /* 页面滚动后锚点失效就收起；浮层内部滚动（长消息）不算。 */
+    function onScroll(event: Event) {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".user-peek")) return;
+      dismiss();
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") dismiss();
+    }
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", dismiss);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", dismiss);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [peek]);
+
+  function cancelPress() {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+    pressStart.current = null;
+  }
+
+  function stopPeek() {
+    if (peekTimer.current !== null) {
+      window.clearTimeout(peekTimer.current);
+      peekTimer.current = null;
+    }
+    cancelPress();
+    setPeek(null);
+  }
+
+  /* 触屏长按：500ms 内没有移动、没有进入编辑、也没被系统选词接管，就在
+     触点旁钉住全文浮层；手指抬起后保留，点任意处收起。 */
+  function onBubblePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    suppressClick.current = false;
+    stopPeek();
+    if (event.pointerType !== "touch" || editing) return;
+    pressStart.current = { x: event.clientX, y: event.clientY };
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      const start = pressStart.current;
+      pressStart.current = null;
+      if (!start || editing || !splitTextAttachments(item.text).text) return;
+      const node = bubbleRef.current;
+      if (!node || !isBubbleTruncated(node)) return;
+      /* 系统已经开始选词时把长按让给「复制」，不再弹浮层。 */
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      suppressClick.current = true;
+      setPeek({
+        placement: touchPeekPlacement(start, { width: window.innerWidth, height: window.innerHeight }),
+        pinned: true,
+      });
+    }, LONG_PRESS_MS);
+  }
+
+  function onBubblePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = pressStart.current;
+    if (!start) return;
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > LONG_PRESS_MOVE_PX) {
+      cancelPress();
+    }
+  }
+
+  /* 悬停：延迟期间鼠标已经离开就什么也不弹；到点时再量一次，期间进入
+     编辑态也放弃。touch 的 pointerenter 交给长按逻辑。 */
+  function onBubblePointerEnter(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.pointerType === "touch" || editing || peekTimer.current !== null) return;
+    if (!splitTextAttachments(item.text).text) return;
+    peekTimer.current = window.setTimeout(() => {
+      peekTimer.current = null;
+      const node = bubbleRef.current;
+      if (!node || !isBubbleTruncated(node)) return;
+      setPeek({
+        placement: peekPlacement(
+          node.getBoundingClientRect(),
+          { width: window.innerWidth, height: window.innerHeight },
+        ),
+        pinned: false,
+      });
+    }, PEEK_DELAY_MS);
+  }
+
+  function onBubblePointerLeave(event: ReactPointerEvent<HTMLDivElement>) {
+    /* 触屏抬手后也会补一个 pointerleave，不能把长按钉住的浮层收掉。 */
+    if (event.pointerType === "touch") return;
+    stopPeek();
+  }
+
   function openPreview(event: ReactMouseEvent<HTMLAnchorElement>, index: number) {
     /* 带修饰键/中键仍然走浏览器默认行为（新标签打开原图）。 */
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -956,6 +1124,11 @@ const UserRow = memo(function UserRow({
 
   /* 点气泡直接进入编辑；图片链接和拖选文字不触发，避免误伤预览/复制。 */
   function onBubbleClick(event: ReactMouseEvent<HTMLDivElement>) {
+    /* 长按看全文抬手后补的那次 click 只吞掉，不进编辑。 */
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
     if (editing || prompt || !canOffer) return;
     if ((event.target as HTMLElement).closest("a, button, textarea, input")) return;
     const selection = window.getSelection();
@@ -1071,8 +1244,13 @@ const UserRow = memo(function UserRow({
           className={editing ? "user-msg user-msg-editing" : "user-msg"}
           aria-busy={sending || undefined}
           data-editable={canOffer && !editing && !prompt ? "true" : undefined}
-          title={canOffer && !editing && !prompt ? "点击编辑这条消息" : undefined}
           onClick={onBubbleClick}
+          onPointerEnter={onBubblePointerEnter}
+          onPointerLeave={onBubblePointerLeave}
+          onPointerDown={onBubblePointerDown}
+          onPointerMove={onBubblePointerMove}
+          onPointerUp={cancelPress}
+          onPointerCancel={cancelPress}
         >
           {editing ? (
             <div className="msg-editor">
@@ -1231,6 +1409,22 @@ const UserRow = memo(function UserRow({
           发送中…
         </span>
       )}
+      {peek && (
+        <>
+          {/* 触屏长按钉住时盖一层透明遮罩：下一次点按只负责收起浮层，
+              不会顺手把气泡点进编辑。 */}
+          {peek.pinned && createPortal(
+            <div className="user-peek-scrim" aria-hidden="true" onPointerDown={stopPeek} />,
+            document.body,
+          )}
+          <UserTextPeek
+            text={item.text}
+            placement={peek.placement}
+            editable={canOffer && !editing && !prompt}
+            pinned={peek.pinned}
+          />
+        </>
+      )}
       {preview !== null && lightboxImages.length > 0 && (
         <Lightbox
           images={lightboxImages}
@@ -1319,9 +1513,53 @@ const UserMessageText = memo(function UserMessageText({ text }: { text: string }
           附件 ×{files.length}：{files.join("、")}
         </span>
       )}
-      {/* 非编辑态由 CSS 压成一行，悬停时用 title 看全文。 */}
-      {visible && <span className="user-text" title={visible}>{visible}</span>}
+      {/* 非编辑态由 CSS 压成一行；悬停气泡时由 UserTextPeek 浮出全文。 */}
+      {visible && <span className="user-text">{visible}</span>}
     </>
+  );
+});
+
+/** 悬停气泡时浮出的全文。fixed 定位挂到 body 下，避开记录区的滚动裁切；
+ *  pointer-events: none，鼠标移到浮层上不会打断气泡本身的点击编辑。 */
+const UserTextPeek = memo(function UserTextPeek({
+  text,
+  placement,
+  editable,
+  pinned,
+}: {
+  text: string;
+  placement: PeekPlacement;
+  /** 气泡此刻可点进编辑；不可用时（运行中/已有面板）不显示这行提示。 */
+  editable: boolean;
+  /** 触屏长按钉住：浮层接住手指以便滚动长文本，点空白处收起。 */
+  pinned: boolean;
+}) {
+  const { text: visible, files } = splitTextAttachments(text);
+  if (!visible) return null;
+  return createPortal(
+    <div
+      className="user-peek"
+      data-side={placement.side}
+      data-pinned={pinned || undefined}
+      aria-hidden="true"
+      style={{
+        "--peek-left": `${placement.left}px`,
+        "--peek-offset": `${placement.offset}px`,
+        "--peek-max-width": `${placement.maxWidth}px`,
+        "--peek-max-height": `${placement.maxHeight}px`,
+      } as CSSProperties}
+    >
+      <span className="user-peek-text">{visible}</span>
+      {files.length > 0 && (
+        <span className="user-peek-files">附件 ×{files.length}：{files.join("、")}</span>
+      )}
+      {pinned ? (
+        <span className="user-peek-hint">点空白处关闭</span>
+      ) : (
+        editable && <span className="user-peek-hint">点击气泡可编辑</span>
+      )}
+    </div>,
+    document.body,
   );
 });
 
