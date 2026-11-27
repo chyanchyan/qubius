@@ -113,7 +113,6 @@ function resultApiError(text: string): SDKMessage {
 const credential: RoleAgentDeps["credential"] = () => ({
   apiKey: "sk-test",
   baseUrl: "https://api.example.com",
-  proxyUrl: "http://127.0.0.1:7890",
 });
 
 function binding(overrides: Partial<RoleBinding> = {}): RoleBinding {

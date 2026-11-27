@@ -510,16 +510,6 @@ export interface Provider {
   models: string[];
 }
 
-/** 全局代理设置：只有白名单里的域名走代理。 */
-export interface ProxySettings {
-  /** 域名白名单，支持 `example.com` 和 `*.example.com`。 */
-  domains: string[];
-  /** 自定义代理地址；留空时使用系统代理。 */
-  url?: string;
-  /** 服务端当前实际生效的代理地址；没有时省略。 */
-  detected?: string;
-}
-
 /** 会话裁剪与请求体/历史分页上限；与服务端 LimitsConfig 保持一致。 */
 export interface Limits {
   transcriptBytes: number;
@@ -531,8 +521,6 @@ export interface Limits {
 
 export interface Settings {
   providers: Provider[];
-  /** 全局代理白名单；旧服务端可能没有。 */
-  proxy?: ProxySettings;
   effort: Effort;
   /**
    * 同时进行的对话数上限；超出的对话排队，修改后立即生效。
@@ -670,12 +658,6 @@ export interface ProviderDraft {
   baseUrl: string;
   apiKey?: string;
   models: string[];
-}
-
-/** 代理页提交的补丁；`url` 传空串表示回到系统代理。 */
-export interface ProxyDraft {
-  domains: string[];
-  url?: string;
 }
 
 export const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
@@ -980,16 +962,10 @@ export function saveSettings(body: {
   approvalTimeoutMinutes?: number;
   limits?: Limits;
   archiveRetentionDays?: number;
-  proxy?: ProxyDraft;
   /** null 表示清除默认团队，弹窗退回会话当前模型。 */
   roleTeam?: RoleTeam | null;
 }, signal?: AbortSignal): Promise<Settings> {
   return request("/api/settings", { method: "PUT", body: JSON.stringify(body) }, signal);
-}
-
-/** 只更新代理白名单；服务端按补丁合并，接口配置和其它设置保持不变。 */
-export function saveProxySettings(proxy: ProxyDraft, signal?: AbortSignal): Promise<Settings> {
-  return request("/api/settings", { method: "PUT", body: JSON.stringify({ proxy }) }, signal);
 }
 
 /**

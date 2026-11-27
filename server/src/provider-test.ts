@@ -1,7 +1,6 @@
 import { claudeConnection } from "./endpoint.js";
 import { geminiApiBase, geminiModelId } from "./gemini.js";
-import { proxyUrlForTarget, resolveProxy, targetMatchesProxyDomains } from "./proxy.js";
-import type { ProviderKind, ProxySettings } from "./types.js";
+import type { ProviderKind } from "./types.js";
 import { fetchUpstream, type UpstreamFetch } from "./upstream-fetch.js";
 
 export interface ProviderTestResult {
@@ -16,8 +15,6 @@ export interface ProviderTestInput {
   baseUrl: string;
   apiKey: string;
   model: string;
-  /** 全局代理设置；目标域名在代理白名单里时才走代理。 */
-  proxy?: ProxySettings;
 }
 
 /** 连接测试请求超时；避免设置页在失效地址上卡住。 */
@@ -44,9 +41,6 @@ export async function testProvider(
   // DeepSeek 等兼容接口需要先规范化 base 和模型名（例如加 [1m]）。
   const connection = claudeConnection(input.baseUrl, input.model);
   const url = `${connection.baseUrl}/v1/messages`;
-  const missingProxy = missingProxyHint(input, url, deps);
-  if (missingProxy) return missingProxy;
-  const proxyUrl = proxyUrlForTarget(url, input.proxy);
   const doFetch = deps?.fetch ?? fetchUpstream;
   const timeout = timeoutSignal(TIMEOUT_MS);
 
@@ -68,7 +62,7 @@ export async function testProvider(
         // 不跟随重定向：登录页/网关跳转后的 200 页面并不代表接口可用。
         redirect: "manual",
         signal: timeout.signal,
-      }, proxyUrl);
+      });
     } catch (reason) {
       const name = reason instanceof Error ? reason.name : "";
       if (timeout.signal.aborted || name === "TimeoutError" || name === "AbortError") {
@@ -127,9 +121,6 @@ async function testGeminiProvider(
   deps?: { fetch?: UpstreamFetch },
 ): Promise<ProviderTestResult> {
   const url = `${geminiApiBase(input.baseUrl)}/models/${encodeURIComponent(geminiModelId(input.model))}:generateContent`;
-  const missingProxy = missingProxyHint(input, url, deps);
-  if (missingProxy) return missingProxy;
-  const proxyUrl = proxyUrlForTarget(url, input.proxy);
   const doFetch = deps?.fetch ?? fetchUpstream;
   const timeout = timeoutSignal(TIMEOUT_MS);
 
@@ -149,7 +140,7 @@ async function testGeminiProvider(
         }),
         redirect: "manual",
         signal: timeout.signal,
-      }, proxyUrl);
+      });
     } catch (reason) {
       const name = reason instanceof Error ? reason.name : "";
       if (timeout.signal.aborted || name === "TimeoutError" || name === "AbortError") {
@@ -202,25 +193,6 @@ async function testGeminiProvider(
   } finally {
     timeout.cleanup();
   }
-}
-
-/**
- * 目标域名在代理白名单里、但既没填代理地址也没检测到系统代理时，
- * 提前给出可读提示，避免最终只剩一句「网络连接失败」。
- * 注入 fetch 的测试不经过真实网络，不检查。
- */
-function missingProxyHint(
-  input: ProviderTestInput,
-  target: string,
-  deps?: { fetch?: UpstreamFetch },
-): ProviderTestResult | undefined {
-  if (deps?.fetch) return undefined;
-  if (!targetMatchesProxyDomains(target, input.proxy)) return undefined;
-  if (resolveProxy(input.proxy)) return undefined;
-  return {
-    ok: false,
-    detail: "这个域名在代理白名单里，但没有检测到可用的代理：请在「代理」页填写代理地址，或设置 HTTPS_PROXY 环境变量",
-  };
 }
 
 /** 上游错误体可能回显请求 key；详情展示前一律替换成 ***。 */

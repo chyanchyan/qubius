@@ -220,10 +220,10 @@ export function parseAgreement(text: string): boolean {
 
 /** 用 SDK 起一次性 agent 做一次讨论发言：和标题总结一样不带工具、不落盘。 */
 export function createSdkDiscussant(deps: {
-  credential: (providerId: string) => { apiKey: string; baseUrl: string; proxyUrl?: string };
+  credential: (providerId: string) => { apiKey: string; baseUrl: string };
 }): Discussant {
   return async (input) => {
-    const { apiKey, baseUrl, proxyUrl } = deps.credential(input.participant.providerId);
+    const { apiKey, baseUrl } = deps.credential(input.participant.providerId);
     const connection = claudeConnection(baseUrl, input.participant.model);
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), DISCUSSION_CALL_TIMEOUT_MS);
@@ -243,7 +243,7 @@ export function createSdkDiscussant(deps: {
       strictMcpConfig: true,
       systemPrompt: { type: "custom", prompt: input.systemPrompt },
       abortController: abort,
-      env: claudeEnv(process.env, apiKey, connection, proxyUrl),
+      env: claudeEnv(process.env, apiKey, connection),
       stderr: () => {},
     };
     let stream: Query | undefined;

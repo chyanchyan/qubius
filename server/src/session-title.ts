@@ -145,10 +145,10 @@ export function resultText(message: {
  * 但不加载项目设置、不启用内置工具、不落盘 session。
  */
 export function createSdkTitleSummarizer(deps: {
-  credential: (providerId: string) => { apiKey: string; baseUrl: string; proxyUrl?: string };
+  credential: (providerId: string) => { apiKey: string; baseUrl: string };
 }): TitleSummarizer {
   return async (input) => {
-    const { apiKey, baseUrl, proxyUrl } = deps.credential(input.providerId);
+    const { apiKey, baseUrl } = deps.credential(input.providerId);
     const connection = claudeConnection(baseUrl, input.model);
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), TITLE_TIMEOUT_MS);
@@ -170,7 +170,7 @@ export function createSdkTitleSummarizer(deps: {
       strictMcpConfig: true,
       systemPrompt: { type: "custom", prompt: TITLE_SYSTEM_PROMPT },
       abortController: abort,
-      env: claudeEnv(process.env, apiKey, connection, proxyUrl),
+      env: claudeEnv(process.env, apiKey, connection),
       stderr: () => {},
     };
     let stream: Query | undefined;

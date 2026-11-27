@@ -22,7 +22,6 @@ import { createSdkDiscussant } from "./discussion.js";
 import { createSdkRoleAgent } from "./role-agent.js";
 import { GeminiBridge } from "./gemini-bridge.js";
 import { findProvider, loadSettings, providerKind } from "./settings.js";
-import { proxyUrlForTarget } from "./proxy.js";
 import { enabledSkillFilter, SkillSettings } from "./skills.js";
 import { configureLimits } from "./status.js";
 import { Store } from "./store.js";
@@ -47,6 +46,11 @@ if (!process.env.QUBIUS_ENV) {
     }
   }
 }
+
+// Node 的内置 fetch 默认不读代理环境变量；打开这个开关后，服务端请求（Gemini
+// 适配层、测试、余额）才跟随机器/部署环境的 HTTP(S)_PROXY，和子进程里的
+// git/curl 保持一致。部署方显式设为 "0" 时不覆盖；Node 22.21 以下会忽略它。
+if (!process.env.NODE_USE_ENV_PROXY) process.env.NODE_USE_ENV_PROXY = "1";
 
 function configPath(): string {
   const args = process.argv.slice(2);
@@ -232,7 +236,6 @@ const geminiBridge = new GeminiBridge({
     return {
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey.trim(),
-      proxy: settings.current.proxy,
     };
   },
 });
@@ -246,13 +249,7 @@ const credential = (providerId: string) => {
   if (!apiKey) throw new Error("这个接口配置还没有 API key");
   const gemini = providerKind(provider) === "gemini";
   const baseUrl = gemini ? geminiBridge.baseUrl(provider.id) : provider.baseUrl;
-  // Gemini 的上游请求由本机适配层发出，代理由适配层按同一份白名单处理；
-  // Anthropic 兼容接口由 SDK 子进程直连，命中白名单时把代理环境变量传给它。
-  return {
-    apiKey,
-    baseUrl,
-    proxyUrl: gemini ? undefined : proxyUrlForTarget(provider.baseUrl, settings.current.proxy),
-  };
+  return { apiKey, baseUrl };
 };
 const runtime = new Runtime(store, {
   maxConcurrent: settings.current.maxConcurrent,

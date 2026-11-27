@@ -10,8 +10,6 @@ import {
   toAnthropicResponse,
   type GeminiResponse,
 } from "./gemini.js";
-import { proxyUrlForTarget } from "./proxy.js";
-import type { ProxySettings } from "./types.js";
 import { fetchUpstream, type UpstreamFetch } from "./upstream-fetch.js";
 
 /**
@@ -34,8 +32,6 @@ const PATH_PATTERN = /^\/gemini\/([^/]+)\/v1\/messages(\/count_tokens)?\/?$/;
 export interface GeminiBridgeProvider {
   baseUrl: string;
   apiKey: string;
-  /** 全局代理白名单；每次请求时实时读取。 */
-  proxy?: ProxySettings;
 }
 
 export interface GeminiBridgeDeps {
@@ -276,7 +272,7 @@ export class GeminiBridge {
     const timer = setTimeout(() => controller.abort(), COUNT_TOKENS_TIMEOUT_MS);
     timer.unref();
     try {
-      const response = await this.doFetch(provider, url, {
+      const response = await this.doFetch(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -311,7 +307,7 @@ export class GeminiBridge {
     const method = stream ? "streamGenerateContent" : "generateContent";
     const url = `${geminiApiBase(provider.baseUrl)}/models/${encodeURIComponent(geminiModelId(model))}:${method}`
       + (stream ? "?alt=sse" : "");
-    return this.doFetch(provider, url, {
+    return this.doFetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -323,12 +319,11 @@ export class GeminiBridge {
   }
 
   private doFetch(
-    provider: GeminiBridgeProvider,
     url: string,
     init: RequestInit,
   ): Promise<Response> {
     const doFetch = this.deps.fetch ?? fetchUpstream;
-    return doFetch(url, init, proxyUrlForTarget(url, provider.proxy));
+    return doFetch(url, init);
   }
 }
 

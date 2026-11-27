@@ -707,7 +707,7 @@ export function SettingsPage() {
   return (
     <section className="page settings-page">
       <h1 tabIndex={-1}>设置</h1>
-      <p className="lead">每套配置选择协议类型（Anthropic 兼容或 Gemini），填地址、密钥和多个模型名。密钥只保存在这台开发机上，输入框默认隐藏，点右侧眼睛可以查看明文。上游请求走不走代理在「代理」页按域名白名单配置。</p>
+      <p className="lead">每套配置选择协议类型（Anthropic 兼容或 Gemini），填地址、密钥和多个模型名。密钥只保存在这台开发机上，输入框默认隐藏，点右侧眼睛可以查看明文。出站代理由机器或部署环境的 HTTP(S)_PROXY 等环境变量统一决定，这里不单独配置。</p>
       <form id="settings-form" className="stack settings-form" onSubmit={onSave} noValidate>
         {providers.map((provider, index) => {
           const result = testResults[provider.key];
@@ -775,9 +775,6 @@ export function SettingsPage() {
               {provider.kind === "gemini"
                 ? "Gemini API 地址，会自动补 /v1beta；一般留默认值即可。"
                 : "兼容 Anthropic Messages 的地址，会作为 ANTHROPIC_BASE_URL 传给 Agent SDK。"}
-            </p>
-            <p className="muted">
-              Windows 上使用系统代理（Internet 选项）；其它平台可用 HTTPS_PROXY。勾选但未检测到代理时会退回直连。
             </p>
             <div className="field">
               <label htmlFor={`provider-key-${provider.key}`}>API key</label>

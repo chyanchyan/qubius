@@ -79,8 +79,8 @@ test("环境过滤剔除密钥类变量，但保留运行所需变量", () => {
   assert.equal(env.TERM, "xterm-256color");
   assert.equal(env.SHELL, "/bin/bash");
   assert.equal(env.TMPDIR, "/tmp");
-  // 继承的代理变量会被清掉：是否走代理只由设置页的白名单决定。
-  assert.equal(env.HTTPS_PROXY, undefined);
+  // 代理变量原样继承：出站路由由机器/部署环境统一决定。
+  assert.equal(env.HTTPS_PROXY, "http://proxy.internal:3128");
   assert.equal(env.NODE_EXTRA_CA_CERTS, "/etc/ssl/private-ca.pem");
 
   // 非密钥的 AWS 配置要保留，否则 agent 里的 aws/gcloud 会跑错区域或配置。
@@ -122,54 +122,23 @@ test("环境过滤剔除密钥类变量，但保留运行所需变量", () => {
   assert.equal(env.EDITOR, "vim");
 });
 
-test("命中白名单时把代理地址显式传给子进程", () => {
+test("代理变量原样继承，带 user:pass 的代理地址也不会被当成密钥剔除", () => {
   const connection = claudeConnection("https://api.deepseek.com", "deepseek-flash");
-  const env = claudeEnv({
+  const base = {
     PATH: "/usr/bin",
-    HTTPS_PROXY: "http://old.lan:3128",
-    https_proxy: "http://old.lan:3128",
-    NODE_USE_ENV_PROXY: "1",
-    NO_PROXY: "example.com",
-  }, "sk-test", connection, "http://127.0.0.1:7899");
-
-  for (const name of [
-    "HTTPS_PROXY",
-    "https_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-  ]) {
-    assert.equal(env[name], "http://127.0.0.1:7899", name);
-  }
-  // Node 的 fetch 需要这个开关才会读代理环境变量。
-  assert.equal(env.NODE_USE_ENV_PROXY, "1");
-  assert.equal(env.NO_PROXY, "example.com,127.0.0.1,localhost,::1");
-  assert.equal(env.no_proxy, "example.com,127.0.0.1,localhost,::1");
-});
-
-test("没有代理时清掉继承的代理变量，保证直连", () => {
-  const connection = claudeConnection("https://api.deepseek.com", "deepseek-flash");
-  const env = claudeEnv({
-    PATH: "/usr/bin",
-    HTTPS_PROXY: "http://proxy.lan:3128",
-    https_proxy: "http://proxy.lan:3128",
+    HTTPS_PROXY: "http://user:pa%40ss@proxy.lan:3128",
+    https_proxy: "http://user:pa%40ss@proxy.lan:3128",
     HTTP_PROXY: "http://proxy.lan:3128",
-    http_proxy: "http://proxy.lan:3128",
     ALL_PROXY: "socks5://proxy.lan:1080",
-    all_proxy: "socks5://proxy.lan:1080",
+    NO_PROXY: "127.0.0.1,localhost,::1",
     NODE_USE_ENV_PROXY: "1",
-  }, "sk-test", connection);
+  };
+  const env = claudeEnv(base, "sk-test", connection);
 
-  for (const name of [
-    "HTTPS_PROXY",
-    "https_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-    "NODE_USE_ENV_PROXY",
-  ]) {
-    assert.equal(env[name], undefined, `${name} 应该被清掉`);
-  }
+  assert.equal(env.HTTPS_PROXY, base.HTTPS_PROXY);
+  assert.equal(env.https_proxy, base.https_proxy);
+  assert.equal(env.HTTP_PROXY, base.HTTP_PROXY);
+  assert.equal(env.ALL_PROXY, base.ALL_PROXY);
+  assert.equal(env.NO_PROXY, base.NO_PROXY);
+  assert.equal(env.NODE_USE_ENV_PROXY, "1");
 });

@@ -609,91 +609,12 @@ test("接口类型缺省按 anthropic 处理，Gemini 类型会保存并对外�
   assert.equal(publicSettings(legacy).providers[0]?.kind, "anthropic");
 });
 
-test("代理白名单缺省为空，保存后规范化并对外返回", () => {
-  assert.deepEqual(publicSettings(sample()).proxy, { domains: [] });
-
-  const withProxy = applySettingsPatch(sample(), {
-    proxy: {
-      domains: ["API.DeepSeek.com", "*.anthropic.com", "*.anthropic.com", " api.deepseek.com "],
-      url: "127.0.0.1:7890",
-    },
-  });
-  assert.deepEqual(withProxy.proxy, {
-    domains: ["api.deepseek.com", "*.anthropic.com"],
-    url: "http://127.0.0.1:7890",
-  });
-  assert.deepEqual(publicSettings(withProxy).proxy, {
-    domains: ["api.deepseek.com", "*.anthropic.com"],
-    url: "http://127.0.0.1:7890",
-  });
-
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-proxy-settings-"));
-  saveSettings(dir, withProxy);
-  const raw = JSON.parse(fs.readFileSync(path.join(dir, "secrets.json"), "utf8")) as {
-    proxy?: unknown;
-  };
-  assert.deepEqual(raw.proxy, {
-    domains: ["api.deepseek.com", "*.anthropic.com"],
-    url: "http://127.0.0.1:7890",
-  });
-  const loaded = loadSettings(dir);
-  assert.deepEqual(loaded.proxy, {
-    domains: ["api.deepseek.com", "*.anthropic.com"],
-    url: "http://127.0.0.1:7890",
-  });
-
-  // 只改白名单时保留代理地址；url 传空串清除地址、回到系统代理。
-  const domainsOnly = applySettingsPatch(loaded, { proxy: { domains: ["example.com"] } });
-  assert.deepEqual(domainsOnly.proxy, {
-    domains: ["example.com"],
-    url: "http://127.0.0.1:7890",
-  });
-  const cleared = applySettingsPatch(loaded, { proxy: { url: "" } });
-  assert.deepEqual(cleared.proxy, { domains: ["api.deepseek.com", "*.anthropic.com"] });
-});
-
-test("代理白名单校验域名和代理地址", () => {
-  for (const bad of [
-    "http://example.com",
-    "example.com:8080",
-    "example.com/path",
-    "bad_domain",
-    ".example.com",
-    "*.",
-    "",
-  ]) {
-    assert.throws(
-      () => applySettingsPatch(sample(), { proxy: { domains: [bad] } }),
-      /代理域名/,
-      bad,
-    );
-  }
-  assert.throws(
-    () => applySettingsPatch(sample(), { proxy: { domains: "example.com" } }),
-    /代理域名/,
-  );
-  assert.throws(
-    () => applySettingsPatch(sample(), { proxy: { url: "socks5://127.0.0.1:1080" } }),
-    /代理地址/,
-  );
-  assert.throws(
-    () => applySettingsPatch(sample(), { proxy: "example.com" }),
-    /代理设置/,
-  );
-  // 通配和 IP 都合法；空列表表示全部直连。
-  const wildcard = applySettingsPatch(sample(), {
-    proxy: { domains: ["*", "192.168.1.10", "localhost"] },
-  });
-  assert.deepEqual(wildcard.proxy.domains, ["*", "192.168.1.10", "localhost"]);
-  const empty = applySettingsPatch(wildcard, { proxy: { domains: [] } });
-  assert.deepEqual(empty.proxy.domains, []);
-});
-
-test("旧版按接口勾选的代理迁移成全局域名白名单", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-proxy-migrate-"));
+test("旧版代理字段被忽略，保存时不再写回", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rc-proxy-drop-"));
   fs.writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({
     effort: "high",
     maxConcurrent: 4,
+    proxy: { domains: ["api.deepseek.com"], url: "http://127.0.0.1:7890" },
     providers: [
       {
         id: "p1",
@@ -701,28 +622,20 @@ test("旧版按接口勾选的代理迁移成全局域名白名单", () => {
         baseUrl: "https://api.deepseek.com/anthropic",
         apiKey: secret,
         models: ["deepseek-flash"],
-        systemProxy: false,
-      },
-      {
-        id: "p2",
-        name: "Gemini",
-        kind: "gemini",
-        baseUrl: "https://generativelanguage.googleapis.com",
-        apiKey: "gemini-key",
-        models: ["gemini-4-neon"],
         systemProxy: true,
       },
     ],
   }));
 
   const loaded = loadSettings(dir);
-  assert.deepEqual(loaded.proxy, { domains: ["generativelanguage.googleapis.com"] });
-  // 迁移结果写回磁盘，旧的 systemProxy 字段被清掉。
+  assert.equal("proxy" in loaded, false);
+  // 保存后旧字段从文件里消失，代理路由完全交给机器/部署环境。
+  saveSettings(dir, loaded);
   const raw = JSON.parse(fs.readFileSync(path.join(dir, "secrets.json"), "utf8")) as {
     proxy?: unknown;
     providers: Array<Record<string, unknown>>;
   };
-  assert.deepEqual(raw.proxy, { domains: ["generativelanguage.googleapis.com"] });
+  assert.equal("proxy" in raw, false);
   assert.equal("systemProxy" in (raw.providers[0] ?? {}), false);
 });
 

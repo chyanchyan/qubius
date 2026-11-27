@@ -171,9 +171,6 @@ const OverviewPage = lazy(() =>
 const SkillsPage = lazy(() =>
   import("./components/SkillsPage").then((module) => ({ default: module.SkillsPage })),
 );
-const ProxyPage = lazy(() =>
-  import("./components/ProxyPage").then((module) => ({ default: module.ProxyPage })),
-);
 const TerminalPage = lazy(() =>
   import("./components/TerminalPage").then((module) => ({ default: module.TerminalPage })),
 );
@@ -723,7 +720,6 @@ export function App() {
     else if (path === "/terminal") setBaseTitle(`命令行 · ${brand}`, 0, force);
     else if (path === "/deploy") setBaseTitle(`部署 · ${brand}`, 0, force);
     else if (path === "/settings") setBaseTitle(`设置 · ${brand}`, 0, force);
-    else if (path === "/proxy") setBaseTitle(`代理 · ${brand}`, 0, force);
     else if (path === "/skills") setBaseTitle(`技能 · ${brand}`, 0, force);
     else if (project) setBaseTitle(`${project[1]} · ${brand}`, 0, force);
     else if (session) setBaseTitle(`对话 · ${brand}`, 0, force);
@@ -742,7 +738,6 @@ export function App() {
     );
   } else if (path === "/deploy") page = <DeployPage />;
   else if (path === "/settings") page = <SettingsPage />;
-  else if (path === "/proxy") page = <ProxyPage />;
   else if (path === "/skills") page = <SkillsPage />;
   else if (path === "/terminal") {
     /* 明确关闭时不加载 TerminalPage（它一挂载就会请求 /api/terminal 并 404）；
@@ -757,7 +752,7 @@ export function App() {
   /* 只有低频页面是异步 chunk；error boundary 也只包它们。key 随 path 变化，
      切到别的路由时不会把旧的失败状态带过去；真正恢复仍靠刷新重新拿 index.html。 */
   const lazyRoute = path === "/overview" || path === "/deploy" || path === "/settings"
-    || path === "/proxy" || path === "/skills" || path === "/terminal";
+    || path === "/skills" || path === "/terminal";
 
   /* 窄屏或字号放大时，次要导航入口收进这个菜单；字号按钮常驻顶栏，不在这里。 */
   const moreItems = [
@@ -765,7 +760,6 @@ export function App() {
     ...(terminalEnabled === true ? [{ id: "terminal", label: "命令行", onSelect: openTerminal }] : []),
     { id: "skills", label: "技能", onSelect: () => go("/skills") },
     { id: "deploy", label: "部署", onSelect: () => go("/deploy") },
-    { id: "proxy", label: "代理", onSelect: () => go("/proxy") },
     { id: "settings", label: "设置", onSelect: () => go("/settings") },
   ];
 
@@ -830,7 +824,6 @@ export function App() {
             )}
             <button className="nav-btn bar-secondary" data-on={path === "/skills"} aria-current={path === "/skills" ? "page" : undefined} onClick={() => go("/skills")}>技能</button>
             <button className="nav-btn bar-secondary" data-on={path === "/deploy"} aria-current={path === "/deploy" ? "page" : undefined} onClick={() => go("/deploy")}>部署</button>
-            <button className="nav-btn bar-secondary" data-on={path === "/proxy"} aria-current={path === "/proxy" ? "page" : undefined} onClick={() => go("/proxy")}>代理</button>
             <button className="nav-btn bar-secondary" data-on={path === "/settings"} aria-current={path === "/settings" ? "page" : undefined} onClick={() => go("/settings")}>设置</button>
           </div>
           {/* 字号按钮常驻在滚动层外：任何宽度/字号下都不隐藏，也不随导航横向滚动。

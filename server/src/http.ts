@@ -102,7 +102,6 @@ import {
   writeSkill,
 } from "./skills.js";
 import { isSessionBusy, tryLockSession, unlockSession } from "./session-lock.js";
-import { resolveProxy } from "./proxy.js";
 import {
   applySettingsPatch,
   findProvider,
@@ -421,13 +420,8 @@ function memoryMb(): {
   };
 }
 
-/** 设置页视图：在保存的代理配置上附带当前检测到的系统代理，便于页面提示。 */
 function settingsView(current: StoredSettings) {
-  const view = publicSettings(current);
-  const detected = resolveProxy(current.proxy)?.url;
-  return detected
-    ? { ...view, proxy: { ...view.proxy, detected } }
-    : view;
+  return publicSettings(current);
 }
 
 export function createAppServer(options: {
@@ -889,7 +883,6 @@ export function createAppServer(options: {
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         model,
-        proxy: ctx.settings.current.proxy,
       }));
       return;
     }
@@ -912,7 +905,6 @@ export function createAppServer(options: {
         kind,
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
-        proxy: ctx.settings.current.proxy,
       }));
       return;
     }

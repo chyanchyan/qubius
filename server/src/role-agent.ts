@@ -77,7 +77,7 @@ export interface RoleAgentResult {
 export type RoleAgent = (request: RoleAgentRequest) => Promise<RoleAgentResult>;
 
 export interface RoleAgentDeps {
-  credential: (providerId: string) => { apiKey: string; baseUrl: string; proxyUrl?: string };
+  credential: (providerId: string) => { apiKey: string; baseUrl: string };
   /** 便于测试注入假的 query；缺省使用 SDK 的真实实现。 */
   queryFn?: typeof query;
 }
@@ -145,7 +145,7 @@ export function createSdkRoleAgent(deps: RoleAgentDeps): RoleAgent {
     // 已经停止的请求不要再起子进程；尽早给出明确错误。
     if (request.signal.aborted) throw new Error("角色调用已停止");
 
-    const { apiKey, baseUrl, proxyUrl } = deps.credential(request.binding.providerId);
+    const { apiKey, baseUrl } = deps.credential(request.binding.providerId);
     const connection = claudeConnection(baseUrl, request.binding.model);
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), request.timeoutMs ?? ROLE_AGENT_TIMEOUT_MS);
@@ -172,7 +172,7 @@ export function createSdkRoleAgent(deps: RoleAgentDeps): RoleAgent {
         persistSession: false,
         strictMcpConfig: true,
         abortController: abort,
-        env: claudeEnv(process.env, apiKey, connection, proxyUrl),
+        env: claudeEnv(process.env, apiKey, connection),
         stderr: (data) => {
           stderrTail = `${stderrTail}${data}`.slice(-2000);
         },
