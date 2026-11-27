@@ -492,3 +492,26 @@ fieldset.deploy-section { padding: calc(8px * var(--control-scale)) calc(12px * 
   outline: 2px solid var(--accent, var(--fg));
   outline-offset: 1px;
 }
+
+/* 旧版配置目录：列表卡片 + 迁移按钮，冲突项用警示色说明。 */
+.deploy-legacy-card .deploy-card-head { justify-content: space-between; }
+
+.deploy-legacy-origin {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.deploy-legacy-warn { color: var(--warn); }
+
+.deploy-legacy-actions {
+  display: flex;
+  gap: calc(8px * var(--control-scale));
+}
+
+.deploy-legacy-ignored {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
+  margin-left: calc(8px * var(--control-scale));
+}

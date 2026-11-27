@@ -173,18 +173,46 @@ export class ArchiveStore {
     } catch {
       // 读不到目录时按 0 展示，writable 会说明问题。
     }
-    const probe = fs.existsSync(this.root) ? this.root : this.options.dir;
     return {
       enabled: true,
       dir: this.root,
       instance: this.options.instance,
       retentionDays: this.options.retentionDays,
-      writable: isWritable(probe),
+      writable: await this.probeWritable(),
       archived,
       sweeping: this.sweeping,
       lastSweepAt: this.lastSweepAt,
       lastSweepError: this.lastSweepError,
     };
+  }
+
+  /**
+   * 归档根目录是否真的可写。
+   *
+   * 首次部署到新目录时根目录还不存在，这里先按需创建，否则定期整理会在
+   * 建目录之前就被判成「不可写」而永远不启动。判断改用实际写入探针：
+   * Windows 上 access(W_OK) 只看目录的只读属性，会把能正常写入的目录
+   * 误报成不可写，而 ACL 拒绝时它又测不出来。父目录不可写时 mkdir 失败，
+   * 仍然 fail-closed，不会留下半截目录。
+   */
+  private async probeWritable(): Promise<boolean> {
+    try {
+      await this.ensureRoot();
+    } catch {
+      return false;
+    }
+    const probe = path.join(
+      this.root,
+      `.write-probe-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    );
+    try {
+      await fs.promises.writeFile(probe, "", { flag: "wx", mode: 0o600 });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      await fs.promises.rm(probe, { force: true }).catch(() => {});
+    }
   }
 
   async list(projectId?: string): Promise<ArchivedSessionSummary[]> {
@@ -776,15 +804,6 @@ function isSafeArchivePath(rel: unknown): rel is string {
 function archivePath(root: string, rel: string): string {
   if (!isSafeArchivePath(rel)) throw new ArchiveError("归档路径无效");
   return path.join(root, ...rel.split("/"));
-}
-
-function isWritable(dir: string): boolean {
-  try {
-    fs.accessSync(dir, fs.constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function readdir(dir: string): Promise<string[]> {

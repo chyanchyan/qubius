@@ -331,6 +331,17 @@ git -C "$QUBIUS_SECONDARY_DIR" push -u origin main
 - 已有会话分支 `qoder/<id>` 和 `remote-coder/<id>` 继续兼容，不需要重命名。
 - edgectl 注册表里把 `qoder`/`co-qoder` 站点的 `name` 改成 `qubius`/`co-qubius`（domains、upstream 不变），否则部署页的「公网入口」会因为同名域名冲突无法 apply。
 
+### 旧版默认配置目录
+
+新布局把配置放在 `<checkout>/.qubius/`。启动时和部署页会扫描旧版本的默认配置目录：Windows 是 `%APPDATA%` 下的 `qubius`、`qoder`、`remote-coder`；Linux/macOS 是 `~/.config`（或 `$XDG_CONFIG_HOME`）下的同名目录。检测到可迁移文件时，启动日志打印 `[legacy] 检测到旧版配置目录…`，部署页出现「旧版配置目录」卡片。
+
+- 「迁移并清理」把 `config.yaml`、`config-secondary.yaml`、`env`、`projects.yaml`、`lan-proxy.credentials`、`secondary.sh`、`run.sh` 复制到当前配置目录，逐文件校验后删除旧文件；旧目录里其它内容（`data/`、日志等）不搬也不删，结果里会列出。
+- 迁移目标就是当前部署页使用的配置目录；正在使用的配置目录本身不会被当成迁移来源，所以要把旧布局切到新默认目录，需要先按新路径启动一次（运行中的服务不能改配置目录）。
+- `config.yaml` 缺省的 `dataDir` 和相对路径（`dataDir`、`archive.dir`、`secondary.*`、`projects[].path`、`projects.yaml`）会改写成基于旧目录的绝对路径，避免换基准目录后会话看起来消失；数据目录和归档不移动。
+- `env` 里的 `QUBIUS_CONFIG_DIR`/`QUBIUS_ENV` 改到新目录，早期的 `QODER_*`/`REMOTE_CODER_*` 变量名统一成 `QUBIUS_*`。
+- 目标目录已有内容不同的同名文件时拒绝迁移并列出冲突文件，需要先手工合并；「忽略」会把路径记到 `<configDir>/.legacy-config-ignored.json`，卡片底部可以「重新提示」。
+- 迁移完成后重新部署或重启服务才会生效；迁移接口要求 `confirm: true`，页面在删除前还有一次确认。
+
 迁移到新机器或分享：
 
 1. 准备仓库：用 `./deploy/create-repos.sh --apply` 创建共用的 `qubius` 仓库；

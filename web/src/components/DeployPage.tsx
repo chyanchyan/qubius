@@ -11,9 +11,11 @@ import {
   isDataDirChangeError,
   isDeployBusyError,
   isDeployResidualError,
+  migrateLegacyConfig as migrateLegacyConfigApi,
   resetAuthToken as resetAuthTokenApi,
   resetLanPassword as resetLanPasswordApi,
   saveGithubRepo,
+  setLegacyConfigIgnored as setLegacyConfigIgnoredApi,
   updateDeploy,
   type DeployForm,
   type DeployJob,
@@ -22,6 +24,7 @@ import {
   type DeployProject,
   type DeployState,
   type GithubVersionState,
+  type LegacyConfigCandidate,
 } from "../api-deploy";
 import {
   DEFAULT_PUBLIC_HOST,
@@ -49,6 +52,13 @@ function readableError(reason: unknown, fallback: string): string {
   if (!message) return fallback;
   if (NETWORK_ERROR_PATTERN.test(message)) return "网络连接失败，请检查网络后重试。";
   return message;
+}
+
+/** 旧配置文件的体积展示；迁移的都是小文件，只分 B/KB/MB。 */
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 const ROLE_LABEL: Record<DeployState["role"], string> = {
@@ -522,6 +532,10 @@ export function DeployPage() {
   const [savingGithubRepo, setSavingGithubRepo] = useState(false);
   const [githubRepoError, setGithubRepoError] = useState("");
   const [githubRepoNotice, setGithubRepoNotice] = useState("");
+  /** 正在迁移/忽略的旧配置目录；空串表示没有操作在进行。 */
+  const [legacyBusy, setLegacyBusy] = useState("");
+  const [legacyError, setLegacyError] = useState("");
+  const [legacyNotice, setLegacyNotice] = useState("");
   const [form, setForm] = useState<DeployForm | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -1234,6 +1248,77 @@ export function DeployPage() {
     }
   }
 
+  /** 迁移旧版默认配置目录：复制、校验，再删除旧目录里的配置文件。 */
+  async function onMigrateLegacy(item: LegacyConfigCandidate) {
+    if (legacyBusy || !deployState) return;
+    const names = item.files.map((file) => file.name).join("、");
+    const confirmed = await dialogs.confirm({
+      title: "迁移旧配置",
+      message: (
+        <>
+          <p>
+            把 <span className="mono">{item.path}</span> 里的 {names} 复制到
+            {" "}<span className="mono">{deployState.configDir}</span>，
+            逐个校验内容后再删除旧目录里的这些文件。
+          </p>
+          <p>数据目录和归档不会被移动；迁移完成后需要重新部署或重启服务才会生效，页面会重新加载。</p>
+        </>
+      ),
+      confirmLabel: "迁移并清理",
+      danger: true,
+    });
+    if (!confirmed) return;
+    setLegacyBusy(item.path);
+    setLegacyError("");
+    setLegacyNotice("");
+    try {
+      const { result } = await migrateLegacyConfigApi(item.path);
+      if (!mounted.current) return;
+      const moved = [...result.copied, ...result.unchanged];
+      const cleanup = result.removedDir
+        ? "旧目录已清空并删除"
+        : `旧目录里保留：${result.leftovers.join("、") || "（空）"}`;
+      setLegacyNotice(
+        `已迁移 ${moved.join("、") || "（无）"}；${cleanup}。重新部署或重启服务后生效。`,
+      );
+      setLegacyBusy("");
+      setReloadKey((key) => key + 1);
+    } catch (reason) {
+      if (!mounted.current) return;
+      setLegacyError(readableError(reason, "迁移旧配置失败"));
+      setLegacyBusy("");
+    }
+  }
+
+  /** 忽略/重新显示一个旧配置目录的迁移提示。 */
+  async function onIgnoreLegacy(path: string, ignored: boolean) {
+    if (legacyBusy) return;
+    setLegacyBusy(path);
+    setLegacyError("");
+    try {
+      await setLegacyConfigIgnoredApi(path, ignored);
+      if (!mounted.current) return;
+      setLegacyBusy("");
+      if (ignored) {
+        // 只更新本地列表，避免重新加载把未保存的表单改动冲掉。
+        setDeployState((current) => current
+          ? {
+            ...current,
+            legacyConfigs: (current.legacyConfigs ?? []).filter((item) => item.path !== path),
+            legacyConfigsIgnored: [...(current.legacyConfigsIgnored ?? []), path],
+          }
+          : current);
+      } else {
+        // 恢复提示需要重新扫描，直接刷新页面状态。
+        setReloadKey((key) => key + 1);
+      }
+    } catch (reason) {
+      if (!mounted.current) return;
+      setLegacyError(readableError(reason, "更新旧配置提示失败"));
+      setLegacyBusy("");
+    }
+  }
+
   if (!loaded) {
     return (
       <section className="page">
@@ -1506,6 +1591,91 @@ export function DeployPage() {
           <span className="mono">deploy.log</span>
           {"，同时也会打到窗口里。开机自启请用「任务计划程序」自行登记。"}
         </div>
+      )}
+
+      {((deployState.legacyConfigs?.length ?? 0) > 0
+        || (deployState.legacyConfigsIgnored?.length ?? 0) > 0) && (
+        <section className="deploy-section deploy-legacy" aria-labelledby="deploy-legacy-title">
+          <h2 id="deploy-legacy-title">旧版配置目录</h2>
+          <p className="deploy-inline-hint">
+            检测到旧版本使用过的默认配置目录。可以把配置、env 和凭据迁移到当前配置目录
+            {" "}<span className="mono">{deployState.configDir}</span>，校验通过后删除旧目录里的这些文件；
+            数据目录和归档保持原位。
+          </p>
+          {legacyNotice && (
+            <Notice tone="success" onDismiss={() => setLegacyNotice("")}>{legacyNotice}</Notice>
+          )}
+          {legacyError && (
+            <Notice tone="error" onDismiss={() => setLegacyError("")}>{legacyError}</Notice>
+          )}
+          {(deployState.legacyConfigs ?? []).map((item) => (
+            <article className="deploy-card deploy-legacy-card" key={item.path}>
+              <div className="deploy-card-head">
+                <strong className="mono">{item.path}</strong>
+                <span className="deploy-legacy-origin">{item.origin}</span>
+              </div>
+              <dl className="deploy-card-info">
+                <div>
+                  <dt>可迁移文件</dt>
+                  <dd>
+                    {item.files.map((file) => `${file.name}（${formatBytes(file.size)}）`).join("、")}
+                  </dd>
+                </div>
+                {!item.hasConfig && (
+                  <div>
+                    <dt>提示</dt>
+                    <dd>没有 config.yaml，只迁移 env 和凭据；配置文件可以在部署后重新生成。</dd>
+                  </div>
+                )}
+                {item.conflicts.length > 0 && (
+                  <div>
+                    <dt>冲突</dt>
+                    <dd className="deploy-legacy-warn">
+                      当前配置目录已有内容不同的同名文件：{item.conflicts.join("、")}。
+                      请先手工合并，或选择忽略。
+                    </dd>
+                  </div>
+                )}
+              </dl>
+              <div className="deploy-legacy-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy || legacyBusy !== "" || item.conflicts.length > 0}
+                  onClick={() => void onMigrateLegacy(item)}
+                >
+                  {legacyBusy === item.path ? "迁移中…" : "迁移并清理"}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy || legacyBusy !== ""}
+                  onClick={() => void onIgnoreLegacy(item.path, true)}
+                >
+                  忽略
+                </button>
+              </div>
+            </article>
+          ))}
+          {(deployState.legacyConfigsIgnored ?? []).length > 0 && (
+            <p className="deploy-inline-hint">
+              已忽略：
+              {(deployState.legacyConfigsIgnored ?? []).map((item) => (
+                <span key={item} className="deploy-legacy-ignored">
+                  <span className="mono">{item}</span>
+                  <button
+                    type="button"
+                    className="text-btn"
+                    disabled={legacyBusy !== ""}
+                    onClick={() => void onIgnoreLegacy(item, false)}
+                  >
+                    重新提示
+                  </button>
+                </span>
+              ))}
+            </p>
+          )}
+        </section>
       )}
 
       <section className="deploy-section" aria-labelledby="deploy-env-title">

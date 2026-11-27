@@ -814,3 +814,51 @@ test("POST /api/deploy/auth-token/reset 立即切换令牌，旧令牌短暂宽�
     await harness.close();
   }
 });
+
+test("扫描旧配置目录：忽略持久化，迁移需要确认并清理旧文件", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "qubius-legacy-home-"));
+  const legacy = path.join(home, ".config", "qubius");
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, "config.yaml"), "role: primary\n");
+  const savedHome = process.env.HOME;
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  process.env.HOME = home;
+  process.env.XDG_CONFIG_HOME = path.join(home, ".config");
+  const harness = await startHarness();
+  try {
+    const state = await call<DeployState>(harness, "GET", "/api/deploy");
+    assert.equal(state.status, 200);
+    assert.deepEqual(state.data.legacyConfigs?.map((item) => item.path), [legacy]);
+
+    // 迁移是删除操作，必须带 confirm。
+    const refused = await call(harness, "POST", "/api/deploy/legacy-migrate", { path: legacy });
+    assert.equal(refused.status, 400);
+
+    const ignored = await call(harness, "POST", "/api/deploy/legacy-ignore", { path: legacy });
+    assert.equal(ignored.status, 200);
+    const afterIgnore = await call<DeployState>(harness, "GET", "/api/deploy");
+    assert.equal(afterIgnore.data.legacyConfigs, undefined);
+    assert.deepEqual(afterIgnore.data.legacyConfigsIgnored, [legacy]);
+
+    // 恢复提示后可以迁移。
+    const shown = await call(harness, "POST", "/api/deploy/legacy-ignore", { path: legacy, ignored: false });
+    assert.equal(shown.status, 200);
+    const migrated = await call<{ ok: boolean; result: { copied: string[] } }>(
+      harness,
+      "POST",
+      "/api/deploy/legacy-migrate",
+      { path: legacy, confirm: true },
+    );
+    assert.equal(migrated.status, 200);
+    assert.deepEqual(migrated.data.result.copied, ["config.yaml"]);
+    assert.ok(fs.existsSync(path.join(harness.configDir, "config.yaml")));
+    assert.equal(fs.existsSync(legacy), false);
+  } finally {
+    await harness.close();
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = savedXdg;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

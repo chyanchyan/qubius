@@ -30,6 +30,12 @@ import {
   type ApplyDeployResult,
 } from "./deploy.js";
 import {
+  LegacyMigrationError,
+  findLegacyConfig,
+  migrateLegacyConfig,
+  setLegacyConfigIgnored,
+} from "./legacy-config.js";
+import {
   resetAuthToken,
   resetLanPassword,
   restartLanProxy,
@@ -684,6 +690,45 @@ export function createAppServer(options: {
       } catch (error) {
         throw new HttpError(400, error instanceof Error ? error.message : "重置令牌失败");
       }
+      return;
+    }
+    if (url.pathname === "/api/deploy/legacy-migrate" && method === "POST") {
+      const configDir = deployConfigDir(process.env, process.platform, repoRoot);
+      if (deployBusy(configDir)) throw new HttpError(409, "已有部署任务在运行");
+      const body = await readJson(req);
+      const record = body && typeof body === "object" && !Array.isArray(body)
+        ? body as Record<string, unknown>
+        : {};
+      const requested = record.path;
+      if (typeof requested !== "string" || !requested.trim()) {
+        throw new HttpError(400, "缺少旧配置目录路径");
+      }
+      if (record.confirm !== true) {
+        throw new HttpError(400, "迁移会删除旧目录里的配置文件，需要确认后执行");
+      }
+      try {
+        const result = migrateLegacyConfig({ requestedPath: requested, currentConfigDir: configDir });
+        sendJson(res, 200, { ok: true, result });
+      } catch (error) {
+        if (error instanceof LegacyMigrationError) throw new HttpError(error.status, error.message);
+        throw error;
+      }
+      return;
+    }
+    if (url.pathname === "/api/deploy/legacy-ignore" && method === "POST") {
+      const configDir = deployConfigDir(process.env, process.platform, repoRoot);
+      const body = await readJson(req);
+      const record = body && typeof body === "object" && !Array.isArray(body)
+        ? body as Record<string, unknown>
+        : {};
+      const requested = record.path;
+      if (typeof requested !== "string" || !requested.trim()) {
+        throw new HttpError(400, "缺少旧配置目录路径");
+      }
+      const candidate = findLegacyConfig(requested, { currentConfigDir: configDir });
+      if (!candidate) throw new HttpError(404, "没有找到这个旧配置目录");
+      setLegacyConfigIgnored(configDir, candidate.path, record.ignored !== false);
+      sendJson(res, 200, { ok: true, path: candidate.path, ignored: record.ignored !== false });
       return;
     }
     if (url.pathname === "/api/deploy/apply" && method === "POST") {

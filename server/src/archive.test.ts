@@ -322,6 +322,43 @@ test("归档目录不可写时保留 SSD 上的会话并报告失败", async () 
   assert.ok(fs.existsSync(path.join(dataDir, "sessions", `${ID}.json`)));
 });
 
+test("归档目录还不存在时先建目录再整理，不误报不可写", async () => {
+  const { base, dataDir, sdkDir } = setup();
+  const archiveDir = path.join(base, "fresh-hdd");
+  assert.equal(fs.existsSync(archiveDir), false);
+  writeSession(dataDir, makeSession(ID, "2026-01-01T00:00:00.000Z"));
+  writeSdkFiles(sdkDir, ID);
+  const store = new Store(dataDir);
+  const archive = new ArchiveStore({
+    dir: archiveDir,
+    instance: "main",
+    dataDir,
+    retentionDays: 30,
+    sdkConfigDir: sdkDir,
+  });
+
+  // 预检本身就会创建根目录，并留下一个可写的空目录（探针文件已删除）。
+  const status = await archive.status();
+  assert.equal(status.writable, true);
+  assert.ok(fs.statSync(archive.root).isDirectory());
+  assert.deepEqual(fs.readdirSync(archive.root), []);
+
+  const runtime = { stop: async () => {} } as unknown as Runtime;
+  const sweeper = new ArchiveSweeper({
+    archive,
+    store,
+    runtime,
+    retentionDays: 30,
+    now: () => new Date("2026-03-05T00:00:00.000Z"),
+  });
+  const result = await sweeper.run();
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.archived, 1);
+  assert.equal(result.removed, 1);
+  assert.equal(store.get(ID), undefined);
+  assert.equal((await archive.list()).length, 1);
+});
+
 test("长保留期也会在 Claude 30 天清理前做快照", async () => {
   const { dataDir, archiveDir, sdkDir } = setup();
   writeSession(dataDir, makeSession(ID, "2026-01-01T00:00:00.000Z"));

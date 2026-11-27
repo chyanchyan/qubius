@@ -132,10 +132,63 @@ export interface DeployState {
   job: DeployJob | null;
   /** QUBIUS_PROJECTS_FILE 读取/解析失败时的说明；此时 form.projects 不可信。 */
   projectsError?: string;
+  /** 检测到的旧版默认配置目录。 */
+  legacyConfigs?: LegacyConfigCandidate[];
+  /** 用户已忽略的旧配置目录（绝对路径）。 */
+  legacyConfigsIgnored?: string[];
+}
+
+/** 旧版默认配置目录里可迁移的一个文件。 */
+export interface LegacyConfigFileInfo {
+  name: string;
+  size: number;
+}
+
+export interface LegacyConfigCandidate {
+  path: string;
+  origin: string;
+  files: LegacyConfigFileInfo[];
+  hasConfig: boolean;
+  /** 当前配置目录已有同名但内容不同的文件；非空时不能迁移。 */
+  conflicts: string[];
+}
+
+export interface LegacyMigrationResult {
+  path: string;
+  copied: string[];
+  unchanged: string[];
+  deleted: string[];
+  leftovers: string[];
+  removedDir: boolean;
 }
 
 export function getDeployState(signal?: AbortSignal): Promise<DeployState> {
   return request("/api/deploy", undefined, signal);
+}
+
+/** 把旧配置目录的文件迁移到当前配置目录；服务端会校验后删除旧文件。 */
+export function migrateLegacyConfig(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ ok: true; result: LegacyMigrationResult }> {
+  return request(
+    "/api/deploy/legacy-migrate",
+    { method: "POST", body: JSON.stringify({ path, confirm: true }) },
+    signal,
+  );
+}
+
+/** 忽略/恢复旧配置目录的迁移提示。 */
+export function setLegacyConfigIgnored(
+  path: string,
+  ignored: boolean,
+  signal?: AbortSignal,
+): Promise<{ ok: true; path: string; ignored: boolean }> {
+  return request(
+    "/api/deploy/legacy-ignore",
+    { method: "POST", body: JSON.stringify({ path, ignored }) },
+    signal,
+  );
 }
 
 /** GitHub 公开镜像 main 分支的版本与当前运行版本的对照。 */

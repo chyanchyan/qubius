@@ -9,6 +9,7 @@ import { BatchWatchManager, BatchWatchStore } from "./batch-watch.js";
 import { bootstrapConfig, DEFAULT_ALLOWED_HOSTS, loadConfig, type AppConfig } from "./config.js";
 import { envCompat, envFlag } from "./env.js";
 import { deployConfigDir, parseEnvFile } from "./deploy.js";
+import { scanLegacyConfigs } from "./legacy-config.js";
 import { createAppServer, createSession } from "./http.js";
 import { loadProjectPermissions, resolvePermission } from "./project-permissions.js";
 import { PushService } from "./push.js";
@@ -127,6 +128,15 @@ console.log(
   `[config] 访问令牌：${authToken ? `已启用（来源：${authTokenSource}${authTokenFile ? `，文件：${authTokenFile}` : ""}）` : "未启用"}`
     + `；归档：${config.archive ? config.archive.dir : "未启用"}`,
 );
+// 旧版默认配置目录（%APPDATA%\qubius、~/.config/qubius 等）只提示，不自动迁移：
+// 迁移会删除旧目录里的配置文件，必须由用户在部署页确认。
+for (const legacy of scanLegacyConfigs({
+  currentConfigDir: deployConfigDir(process.env, process.platform, repoRoot),
+})) {
+  console.log(
+    `[legacy] 检测到旧版配置目录：${legacy.path}（${legacy.files.length} 个配置文件）；可在部署页迁移`,
+  );
+}
 // 隔离项目按对话建子目录，根目录可能还没创建；失败时项目会显示为不可用。
 for (const project of config.projects) {
   if (!project.isolated) continue;

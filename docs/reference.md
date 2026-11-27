@@ -20,7 +20,7 @@
 - `approvalTimeoutMinutes`：等待确认（提问/授权）的超时，默认 0（一直等待，不自动拒绝，界面上也不显示倒计时），范围 0–1440，大于 0 时超时自动拒绝。部署向导会写进 `QUBIUS_APPROVAL_TIMEOUT_MINUTES`，配置文件没写时也生效。这里只作为初始默认值；之后在页面「设置」修改，保存后对新的确认立即生效。
 - 局域网入口：部署页的「启用局域网入口」写 `QUBIUS_START_LAN` / `QUBIUS_LAN_USER`，凭据写到 `<configDir>/lan-proxy.credentials`（一行 `user:password`，`0600`）。密码只在部署响应的 `oneTime.lan` 里返回一次；`GET /api/deploy` 只返回用户名和 `lanAuthPasswordSet`。命令行 `make deploy-lan` 缺凭据时会自动生成并在终端打印一次。
 - `role`：`primary`（默认）或 `secondary`。副实例需要 `secondary.primaryRepo`；`secondary.primaryRef` 默认 `main`。
-- `archive`：`dir` 是归档根目录，`retentionDays` 是会话列表的保留天数（作用于本机 SSD 副本），默认 30，到期后会话归档到这里（冷存储）并永久保留；`archive.instance` 默认主实例 `main`、副实例 `bak`。不配置则不归档、不自动删除旧会话。`retentionDays` 只作为初始默认值，之后可在页面「设置」修改；归档目录本身仍由部署配置决定。
+- `archive`：`dir` 是归档根目录，`retentionDays` 是会话列表的保留天数（作用于本机 SSD 副本），默认 30，到期后会话归档到这里（冷存储）并永久保留；`archive.instance` 默认主实例 `main`、副实例 `bak`。不配置则不归档、不自动删除旧会话。`retentionDays` 只作为初始默认值，之后可在页面「设置」修改；归档目录本身仍由部署配置决定。归档目录不存在时首次整理会自动创建，创建工作目录或写入探针失败才判为不可写，此时保留本机 SSD 上的会话并报告失败。
 
 ### 访问令牌（可选）
 
@@ -126,7 +126,9 @@ agent 用 Bash 的 `run_in_background` 启动下载、安装等耗时命令后�
 - `GET /api/sessions/<id>/subagents/<taskId>`：子任务的 sidechain transcript，返回 `entries`（提示、正文、思考、工具调用与结果）和 `truncated`；记录不存在时 404。
 - `POST /api/projects`：body `{ id, name, path, permission? }`，加入本机已有的 git 仓库；立即生效并写入额外项目文件，不需要重启。
 - `POST /api/projects/new`：body `{ name, parent, permission? }`，在母目录 `parent` 下新建 `<parent>/<name>` 目录，`git init -b main` 并提交空初始提交后加入项目列表；母目录不存在、目标目录已存在或项目 id 冲突时返回 4xx。
-- `GET /api/deploy`：部署表单、实际配置文件/env 路径，以及 `current`（当前生效的 `dataDir`、`allowedHosts`、令牌来源/文件、归档、终端开关、局域网入口状态）。表单里的 `lanAuthPassword` 永远为空，只用 `lanAuthPasswordSet` 表示已设置。`POST /api/deploy/apply` 成功时返回 `{jobId, oneTime}`：`oneTime.lan` 含局域网用户名、密码和访问地址，`oneTime.authToken` 是部署后生效的令牌，只在这次响应里出现一次。
+- `GET /api/deploy`：部署表单、实际配置文件/env 路径，以及 `current`（当前生效的 `dataDir`、`allowedHosts`、令牌来源/文件、归档、终端开关、局域网入口状态）。`legacyConfigs` 列出检测到的旧版默认配置目录（Windows `%APPDATA%` 下的 `qubius`/`qoder`/`remote-coder`，Linux/macOS `~/.config` 下的同名目录），`legacyConfigsIgnored` 是用户选择忽略的路径。表单里的 `lanAuthPassword` 永远为空，只用 `lanAuthPasswordSet` 表示已设置。`POST /api/deploy/apply` 成功时返回 `{jobId, oneTime}`：`oneTime.lan` 含局域网用户名、密码和访问地址，`oneTime.authToken` 是部署后生效的令牌，只在这次响应里出现一次。
+- `POST /api/deploy/legacy-migrate`：body `{ path, confirm: true }`，把旧配置目录里的 `config.yaml`、`config-secondary.yaml`、`env`、`projects.yaml`、`lan-proxy.credentials`、`secondary.sh`、`run.sh` 复制到当前配置目录，逐文件校验后删除旧文件；`config.yaml`/`projects.yaml` 里的相对路径改写为绝对路径，env 里的 `QUBIUS_CONFIG_DIR`/`QUBIUS_ENV` 指向新目录，早期的 `QODER_*`/`REMOTE_CODER_*` 变量名统一成 `QUBIUS_*`。目标目录已有内容不同的同名文件时返回 409；目录必须来自扫描结果，任意路径返回 404。
+- `POST /api/deploy/legacy-ignore`：body `{ path, ignored? }`，忽略（`ignored` 不为 false）或重新显示某个旧配置目录的迁移提示，记录在 `<configDir>/.legacy-config-ignored.json`。
 - `POST /api/deploy/update`：不需要 body。按当前已保存的 env/配置重新部署，只在本次任务强制构建前拉取最新代码（依次尝试 github 远端、配置的 GitHub 仓库、`origin`），不会把强制开关写回 env。成功返回 `{jobId, oneTime?}`，busy/residual 与 `apply` 相同的结构化 409；还没有部署配置时返回 400。
 - `POST /api/deploy/github-repo`：body `{ repo }`，把 GitHub 镜像地址（`owner/repo` 或完整 GitHub URL，空串表示自动识别）写入实际生效的 env 文件，只改这一个键，不重启服务；保存后版本对照立即使用新值。返回 `{ ok, repo }`（归一化后的 `owner/repo` 或空串）；格式不正确返回 400，部署任务运行中返回 409。
 - `POST /api/deploy/lan-credentials/reset`：body `{ user? }`，立即生成新密码并写 `<configDir>/lan-proxy.credentials`；如果当前实例的局域网入口在运行，响应发出后会自动重启它（systemd unit 或 pidfile 进程）。返回 `{ ok, lan: { user, password, urls, restart: "scheduled"|"none", restartMethod, restartNote } }`，`restartNote` 会说明是否已重启、是否需要重新登录。

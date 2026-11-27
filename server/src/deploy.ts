@@ -17,6 +17,7 @@ import { resolveDeployEnvFile, type DeployEnvSource } from "./deploy-env.js";
 import { normalizeGithubRepo } from "./github-version.js";
 import { jobTimestamp } from "./job-state.js";
 import { tryLanAddress } from "./lan-address.js";
+import { scanLegacyConfigs, ignoredLegacyConfigs, type LegacyConfigCandidate } from "./legacy-config.js";
 import {
   claim as claimOpsLock,
   clear as clearOpsLock,
@@ -189,6 +190,10 @@ export interface DeployState {
   job: DeployJobStatus | null;
   /** QUBIUS_PROJECTS_FILE 存在但读取/解析失败时提示；前端只读展示即可。 */
   projectsError?: string;
+  /** 检测到的旧版默认配置目录；部署页据此提示迁移。 */
+  legacyConfigs?: LegacyConfigCandidate[];
+  /** 用户选择忽略的旧配置目录（绝对路径）。 */
+  legacyConfigsIgnored?: string[];
 }
 
 export const DEFAULT_PRIMARY_REPO_URL = "http://gitea.example.com/example/qubius.git";
@@ -2258,6 +2263,13 @@ export async function readDeployState(options: ReadDeployStateOptions): Promise<
       role: options.config.role,
     }
     : undefined;
+  // 旧版默认配置目录只在存在时列出；迁移目标就是当前部署页写的配置目录。
+  const legacyConfigs = scanLegacyConfigs({
+    currentConfigDir: configDir,
+    env: options.env ?? process.env,
+    platform: process.platform,
+  });
+  const legacyConfigsIgnored = ignoredLegacyConfigs(configDir);
   return {
     setupRequired: options.setupRequired === true,
     repoDir: path.resolve(options.repoRoot),
@@ -2276,5 +2288,7 @@ export async function readDeployState(options: ReadDeployStateOptions): Promise<
     instances: await probeInstances(form),
     job: readDeployJob(configDir),
     ...(projectsError ? { projectsError } : {}),
+    ...(legacyConfigs.length > 0 ? { legacyConfigs } : {}),
+    ...(legacyConfigsIgnored.length > 0 ? { legacyConfigsIgnored } : {}),
   };
 }
