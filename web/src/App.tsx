@@ -588,10 +588,24 @@ export function App() {
         <button
           className="brand"
           title={instanceVersion ? `返回首页 · v${instanceVersion}` : "返回首页"}
+          aria-label={`返回首页（${brand}）`}
           onClick={() => go("/")}
         >
-          <span className="brand-name">{brand}</span>
-          {instanceVersion && <span className="brand-version">v{instanceVersion}</span>}
+          {/* 品牌名左侧的主页图标：提示整个品牌区都可点击回到首页。 */}
+          <svg className="brand-home" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path
+              d="M2.9 7.1 8 2.8l5.1 4.3V13a.7.7 0 0 1-.7.7H9.7V9.9H6.3v3.8H3.6a.7.7 0 0 1-.7-.7z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="brand-text">
+            <span className="brand-name">{brand}</span>
+            {instanceVersion && <span className="brand-version">v{instanceVersion}</span>}
+          </span>
         </button>
         <AgentBadge
           running={attention.runningAgents}

@@ -154,8 +154,9 @@ summary:focus-visible {
 
 .brand {
   display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
+  flex-direction: row;
+  align-items: center;
+  gap: calc(6px * var(--control-scale));
   justify-content: center;
   line-height: 1.1;
   min-width: 0;
@@ -166,6 +167,24 @@ summary:focus-visible {
   min-height: 0;
   font-weight: 600;
   color: var(--fg);
+}
+
+/* 主页图标跟着顶栏控件一起缩放，颜色比品牌名淡，悬停时与文字同色。 */
+.brand-home {
+  width: calc(15px * var(--control-scale));
+  height: calc(15px * var(--control-scale));
+  flex: none;
+  color: var(--muted);
+}
+
+.brand:hover .brand-home { color: var(--fg); }
+
+/* 品牌名和版本号仍是上下两行，作为整体跟在主页图标后面。 */
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
 }
 
 /* 两行内容各自截断，避免 flex 容器上的 text-overflow 失效。 */
