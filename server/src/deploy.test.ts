@@ -20,6 +20,7 @@ import {
   readDeployState,
   mergeEnvText,
   readDeployJob,
+  redeployWithPull,
   renderProjectsYaml,
   startDeployJob,
   validateDeployForm,
@@ -713,6 +714,86 @@ test("pullLatest 写入 env、从 env 读回；旧表单缺字段按 false 处�
   delete legacy.pullLatest;
   assert.equal(validateDeployForm(legacy).pullLatest, false);
   assert.throws(() => validateDeployForm({ ...form, pullLatest: "1" }), /pullLatest/);
+});
+
+test("redeployWithPull 使用当前配置，只在本次任务强制拉取 GitHub", async () => {
+  const base = tmp();
+  const configDir = path.join(base, "config");
+  fs.mkdirSync(configDir, { recursive: true });
+  makeRepo(base);
+  const dataPrimary = path.join(base, ".qubius", "data");
+  fs.writeFileSync(
+    path.join(configDir, "config.yaml"),
+    `role: primary\ndataDir: '${dataPrimary}'\n`,
+  );
+  fs.writeFileSync(path.join(configDir, "env"), [
+    "QUBIUS_PULL_LATEST=0",
+    `QUBIUS_PRIMARY_DIR=${base}`,
+    `QUBIUS_DATA_PRIMARY=${dataPrimary}`,
+    "QUBIUS_START_PRIMARY=1",
+    "QUBIUS_START_SECONDARY=0",
+    "",
+  ].join("\n"));
+
+  const recorded = path.join(base, "recorded-pull.json");
+  writeJob(
+    base,
+    "#!/bin/bash\nexit 1\n",
+    `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(recorded)}, JSON.stringify({\n`
+      + "  pullLatest: process.env.QUBIUS_PULL_LATEST ?? \"\",\n"
+      + "  preferGithub: process.env.QUBIUS_PULL_PREFER_GITHUB ?? \"\",\n"
+      + "  configDir: process.env.QUBIUS_CONFIG_DIR ?? \"\",\n"
+      + "  primaryDir: process.env.QUBIUS_PRIMARY_DIR ?? \"\",\n"
+      + "}));\n",
+  );
+
+  const result = redeployWithPull({
+    repoRoot: base,
+    env: { HOME: base, QUBIUS_CONFIG_DIR: configDir },
+    platform: "darwin",
+  });
+  assert.ok("jobId" in result, `期望启动部署任务，实际：${JSON.stringify(result)}`);
+
+  const job = JSON.parse(await waitForFile(recorded)) as {
+    pullLatest: string;
+    preferGithub: string;
+    configDir: string;
+    primaryDir: string;
+  };
+  // 本次任务强制拉取并优先 GitHub。
+  assert.equal(job.pullLatest, "1");
+  assert.equal(job.preferGithub, "1");
+  // 其它配置来自当前 env。
+  assert.equal(job.configDir, configDir);
+  assert.equal(job.primaryDir, base);
+
+  // env 文件里保存的配置不变；强制开关不会持久化。
+  const envText = fs.readFileSync(path.join(configDir, "env"), "utf8");
+  assert.match(envText, /^QUBIUS_PULL_LATEST=0$/m);
+  assert.doesNotMatch(envText, /QUBIUS_PULL_PREFER_GITHUB/);
+});
+
+test("redeployWithPull 在没有部署配置或项目文件损坏时拒绝", () => {
+  const base = tmp();
+  const configDir = path.join(base, "config");
+  fs.mkdirSync(configDir, { recursive: true });
+  makeRepo(base);
+  const env = { HOME: base, QUBIUS_CONFIG_DIR: configDir };
+
+  assert.throws(
+    () => redeployWithPull({ repoRoot: base, env, platform: "linux" }),
+    /还没有部署配置/,
+  );
+
+  const configFile = path.join(configDir, "config.yaml");
+  fs.writeFileSync(configFile, `role: primary\ndataDir: '${path.join(base, "data")}'\n`);
+  const projectsFile = path.join(base, "broken.yaml");
+  fs.writeFileSync(projectsFile, "- id: [\n");
+  fs.writeFileSync(path.join(configDir, "env"), `QUBIUS_PROJECTS_FILE=${projectsFile}\n`);
+  assert.throws(
+    () => redeployWithPull({ repoRoot: base, env, platform: "linux" }),
+    /projects 文件无法读取/,
+  );
 });
 
 test("已配置的 projects 文件损坏时 GET 暴露错误、apply 拒绝覆盖", () => {

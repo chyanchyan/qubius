@@ -47,7 +47,7 @@ export interface DeployForm {
   startPrimary: boolean;
   startSecondary: boolean;
   clonePeer: boolean;
-  /** 构建前从各 checkout 的 origin 快进拉取当前分支；默认 false。 */
+  /** 构建前从各 checkout 的远端（默认 origin）快进拉取当前分支；默认 false。 */
   pullLatest: boolean;
   primaryPort: number;
   secondaryPort: number;
@@ -1825,6 +1825,13 @@ export interface ApplyDeployOptions {
   port?: number;
   /** 目标平台；默认 process.platform，测试可显式指定。 */
   platform?: NodeJS.Platform;
+  /**
+   * 只对本次任务强制构建前拉取，不写回 env。
+   * 用于部署页的一次性「更新并部署」，避免顺手改掉用户保存的 pullLatest。
+   */
+  forcePullLatest?: boolean;
+  /** 本次任务优先从 GitHub 远端拉取（没有时回落到 origin）；不写回 env。 */
+  preferGithubRemote?: boolean;
 }
 
 /**
@@ -1989,10 +1996,15 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
       removeProjectsFile(projectsFile);
     }
     writeDeployEnv(envFile, form, projectsFile);
+    // 一次性开关只进本次任务的进程环境：env 文件保持用户保存的配置不变。
+    // QUBIUS_PULL_PREFER_GITHUB 不在 MANAGED_KEYS 里，不会被写回。
+    const values = deployEnvValues(form, projectsFile);
+    if (options.forcePullLatest) values.QUBIUS_PULL_LATEST = "1";
+    if (options.preferGithubRemote) values.QUBIUS_PULL_PREFER_GITHUB = "1";
     const result = startDeployJob({
       configDir,
       repoRoot: options.repoRoot,
-      values: deployEnvValues(form, projectsFile),
+      values,
       envFile,
       jobId,
       token,
@@ -2018,6 +2030,54 @@ export function applyDeploy(options: ApplyDeployOptions): ApplyDeployResult {
     }
     release();
   }
+}
+
+export interface RedeployWithPullOptions {
+  repoRoot: string;
+  configFile?: string;
+  env?: NodeJS.ProcessEnv;
+  role?: Role;
+  dataDir?: string;
+  port?: number;
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * 部署页的「从 GitHub 更新并部署」：读取当前已保存的配置，原样提交给部署任务，
+ * 只在本次任务里强制构建前拉取，并优先使用 GitHub 远端。
+ *
+ * 与手填表单不同，这里不接收页面传来的表单：页面只表达“更新”这个动作，
+ * 配置以服务端实际读到的 env/配置文件为准，避免把浏览器里未保存的改动带进来。
+ */
+export function redeployWithPull(options: RedeployWithPullOptions): ApplyDeployResult {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const role = options.role ?? "primary";
+  const configDir = deployConfigDir(env, platform, options.repoRoot);
+  const configFile = options.configFile
+    ? path.resolve(options.configFile)
+    : path.join(configDir, role === "secondary" ? "config-secondary.yaml" : "config.yaml");
+  if (!fs.existsSync(configFile)) {
+    throw new DeployValidationError("还没有部署配置，请先完成首次部署");
+  }
+  const derived = deriveDeployForm(env, role, options.repoRoot, platform);
+  // 项目文件损坏时 deriveDeployForm 会退回空列表，直接 apply 会把文件删掉；
+  // 一键更新不应替用户做这种“自愈”，拒绝并要求先修复。
+  if (derived.projectsError) {
+    throw new DeployValidationError(`现有 projects 文件无法读取：${derived.projectsError}`);
+  }
+  return applyDeploy({
+    body: derived.form,
+    repoRoot: options.repoRoot,
+    ...(options.configFile ? { configFile: options.configFile } : {}),
+    env,
+    role,
+    ...(options.dataDir ? { dataDir: options.dataDir } : {}),
+    ...(options.port ? { port: options.port } : {}),
+    platform,
+    forcePullLatest: true,
+    preferGithubRemote: true,
+  });
 }
 
 export interface ReadDeployStateOptions {

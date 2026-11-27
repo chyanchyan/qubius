@@ -11,6 +11,7 @@ import {
   backupNodeModules,
   buildDirtyStatus,
   busyDecision,
+  choosePullRemote,
   classifyIPv4,
   cleanupNodeModulesPrev,
   deployDecision,
@@ -660,6 +661,31 @@ test("backupNodeModules / restoreNodeModules / cleanup", () => {
   fs.writeFileSync(path.join(repo2, "node_modules.prev", "keep.txt"), "keep\n");
   assert.equal(backupNodeModules(repo2), false);
   assert.equal(fs.readFileSync(path.join(repo2, "node_modules.prev", "keep.txt"), "utf8"), "keep\n");
+});
+
+test("choosePullRemote：显式 > github 远端 > github.com 的 origin > origin", () => {
+  // 显式远端优先，即使开了 GitHub 偏好。
+  assert.equal(
+    choosePullRemote({ override: "upstream", preferGithub: true, hasGithub: true }),
+    "upstream",
+  );
+  // 有名为 github 的远端时直接用它。
+  assert.equal(
+    choosePullRemote({ preferGithub: true, hasGithub: true, originUrl: "https://gitlab.example/x.git" }),
+    "github",
+  );
+  // 没有 github 远端，但 origin 就是 GitHub：用 origin。
+  assert.equal(
+    choosePullRemote({ preferGithub: true, hasGithub: false, originUrl: "git@github.com:owner/repo.git" }),
+    "origin",
+  );
+  // 没有 GitHub 远端：回落到 origin（即使它指向私有仓库）。
+  assert.equal(
+    choosePullRemote({ preferGithub: true, hasGithub: false, originUrl: "https://gitlab.example/x.git" }),
+    "origin",
+  );
+  // 没开偏好时始终 origin。
+  assert.equal(choosePullRemote({ hasGithub: true }), "origin");
 });
 
 test("buildDirtyStatus 排除构建 staging 的 dist.next/dist.prev", () => {

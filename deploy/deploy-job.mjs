@@ -22,6 +22,7 @@ import {
   activeSessionsFromHealth,
   backupNodeModules,
   busyDecision,
+  choosePullRemote,
   cleanupNodeModulesPrev,
   deployDecision,
   deployPorts,
@@ -386,6 +387,8 @@ const startSecondary = envBool("QUBIUS_START_SECONDARY", false);
 const startLan = envBool("QUBIUS_START_LAN", true);
 const clonePeer = envBool("QUBIUS_CLONE_PEER", false);
 const pullLatest = envBool("QUBIUS_PULL_LATEST", false);
+const pullPreferGithub = envBool("QUBIUS_PULL_PREFER_GITHUB", false);
+const pullRemoteOverride = envValue("QUBIUS_PULL_REMOTE");
 const primaryRepo = envValue("QUBIUS_PRIMARY_DIR") ? abs(envValue("QUBIUS_PRIMARY_DIR")) : "";
 const secondaryRepo = envValue("QUBIUS_SECONDARY_DIR") ? abs(envValue("QUBIUS_SECONDARY_DIR")) : "";
 const secondaryRepoUrl = envValue("QUBIUS_SECONDARY_REPO_URL") || envValue("QUBIUS_PRIMARY_REPO_URL") || "";
@@ -520,7 +523,22 @@ function gitResult(repo, args) {
 }
 
 /**
- * 从 origin 快进拉取当前分支；与 deploy/pull-latest.sh 语义一致：
+ * 与 deploy/pull-latest.sh 一致地选择远端：显式 QUBIUS_PULL_REMOTE 优先；
+ * QUBIUS_PULL_PREFER_GITHUB=1 时优先名为 github 的远端，其次 origin 指向
+ * github.com；都没有时回落到 origin。
+ */
+function resolvePullRemote(repo) {
+  if (pullRemoteOverride) return pullRemoteOverride;
+  if (!pullPreferGithub) return "origin";
+  return choosePullRemote({
+    preferGithub: true,
+    hasGithub: gitResult(repo, ["remote", "get-url", "github"]).status === 0,
+    originUrl: (gitResult(repo, ["remote", "get-url", "origin"]).stdout ?? "").trim(),
+  });
+}
+
+/**
+ * 从远端快进拉取当前分支；与 deploy/pull-latest.sh 语义一致：
  * 工作区有改动或已分叉时失败，绝不 reset --hard。
  */
 function pullLatestCode(entry) {
@@ -528,7 +546,10 @@ function pullLatestCode(entry) {
   if (!gitHead(entry.repo)) {
     fail(step, `${entry.label}不是 git 仓库：${entry.repo}`);
   }
-  const remote = "origin";
+  const remote = resolvePullRemote(entry.repo);
+  if (!/^[A-Za-z0-9._/-]+$/.test(remote) || remote.startsWith("-") || remote.includes("..")) {
+    fail(step, `远端名非法：${remote}`);
+  }
   if (gitResult(entry.repo, ["remote", "get-url", remote]).status !== 0) {
     fail(step, `${entry.label}没有 ${remote} 远端，无法拉取最新代码`);
   }

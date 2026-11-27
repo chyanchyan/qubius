@@ -21,6 +21,8 @@ import {
   deployConfigDir,
   readDeployJob,
   readDeployState,
+  redeployWithPull,
+  type ApplyDeployResult,
 } from "./deploy.js";
 import {
   resetAuthToken,
@@ -164,6 +166,40 @@ export class HttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
   }
+}
+
+/** 部署提交的统一响应：202 表示任务已启动，409 区分 busy 与残留进程。 */
+function sendDeployResult(res: ServerResponse, result: ApplyDeployResult): void {
+  if ("jobId" in result) {
+    sendJson(res, 202, {
+      ok: true,
+      jobId: result.jobId,
+      // 局域网密码和 API 令牌只在这次响应里出现一次。
+      ...(result.oneTime ? { oneTime: result.oneTime } : {}),
+    });
+    return;
+  }
+  // busy 保持旧文案兼容；residual 用独立文案，避免前端按 busy 误判。
+  sendJson(res, 409, {
+    error:
+      result.code === "residual"
+        ? "部署锁空闲但存在残留进程，请先回收"
+        : "已有部署任务在运行",
+    code: result.code,
+    ...(result.kind ? { kind: result.kind } : {}),
+    ...(result.remainingPids ? { remainingPids: result.remainingPids } : {}),
+  });
+}
+
+/** 数据目录变化且旧目录有会话：结构化 409，前端据此弹二次确认。 */
+function sendDataDirConflict(res: ServerResponse, error: DeployDataDirChangeError): void {
+  sendJson(res, 409, {
+    error: error.message,
+    code: "data-dir-change",
+    currentDataDir: error.currentDataDir,
+    targetDataDir: error.targetDataDir,
+    sessions: error.sessions,
+  });
 }
 
 function isApiPath(pathname: string): boolean {
@@ -621,38 +657,39 @@ export function createAppServer(options: {
         });
       } catch (error) {
         if (error instanceof DeployDataDirChangeError) {
-          // 409 + 结构化字段：前端据此弹二次确认，而不是把整段文案塞进错误条。
-          sendJson(res, 409, {
-            error: error.message,
-            code: "data-dir-change",
-            currentDataDir: error.currentDataDir,
-            targetDataDir: error.targetDataDir,
-            sessions: error.sessions,
-          });
+          sendDataDirConflict(res, error);
           return;
         }
         if (error instanceof DeployValidationError) throw new HttpError(400, error.message);
         throw error;
       }
-      if ("jobId" in result) {
-        sendJson(res, 202, {
-          ok: true,
-          jobId: result.jobId,
-          // 局域网密码和 API 令牌只在这次响应里出现一次。
-          ...(result.oneTime ? { oneTime: result.oneTime } : {}),
+      sendDeployResult(res, result);
+      return;
+    }
+    if (url.pathname === "/api/deploy/update" && method === "POST") {
+      // 「从 GitHub 更新并部署」：按服务端当前保存的配置重新部署，构建前拉取。
+      // 不接受页面表单，避免把未保存的改动或客户端伪造的配置写进 env。
+      if (options.setupRequired) throw new HttpError(400, "还没有部署配置，请先完成首次部署");
+      // 动作本身不需要参数；读掉请求体，保持与其它 POST 接口一致的连接语义。
+      await readJson(req);
+      let result;
+      try {
+        result = redeployWithPull({
+          repoRoot,
+          ...(options.configFile ? { configFile: options.configFile } : {}),
+          role: config.role,
+          dataDir: config.dataDir,
+          port: config.port,
         });
-        return;
+      } catch (error) {
+        if (error instanceof DeployDataDirChangeError) {
+          sendDataDirConflict(res, error);
+          return;
+        }
+        if (error instanceof DeployValidationError) throw new HttpError(400, error.message);
+        throw error;
       }
-      // busy 保持旧文案兼容；residual 用独立文案，避免前端按 busy 误判。
-      sendJson(res, 409, {
-        error:
-          result.code === "residual"
-            ? "部署锁空闲但存在残留进程，请先回收"
-            : "已有部署任务在运行",
-        code: result.code,
-        ...(result.kind ? { kind: result.kind } : {}),
-        ...(result.remainingPids ? { remainingPids: result.remainingPids } : {}),
-      });
+      sendDeployResult(res, result);
       return;
     }
     if (url.pathname === "/api/edge" || url.pathname.startsWith("/api/edge/")) {

@@ -63,7 +63,7 @@
 | `QUBIUS_PROJECTS_FILE` | 额外项目白名单 YAML；内置会加入另一实例的 checkout。主页的「管理项目」添加或删除仓库时写这里，文件变化会热加载 | 空 |
 | `QUBIUS_NODE_BIN` | Node.js 22+ 可执行文件；留空依次找 PATH 和 `~/.nvm` | 空 |
 | `QUBIUS_CLONE_PEER` | `install.sh` 是否自动克隆另一实例的 checkout（等同 `--clone-peer`） | `0` |
-| `QUBIUS_PULL_LATEST` | 部署任务构建前是否从各 checkout 的 `origin` 快进拉取当前分支（对应部署页「部署前从远端拉取最新代码」） | `0` |
+| `QUBIUS_PULL_LATEST` | 部署任务构建前是否从各 checkout 的远端快进拉取当前分支（对应部署页「部署前从远端拉取最新代码」；一键「更新并部署」只在本次任务强制打开） | `0` |
 | `QUBIUS_START_PRIMARY` / `QUBIUS_START_SECONDARY` | `start-all.sh` 是否启动对应实例 | `1` |
 | `QUBIUS_START_LAN` | `start-all.sh` 是否启动/重启局域网入口；`0` 只做本机部署（不停止已在运行的代理） | `1` |
 | `QUBIUS_GITEA_URL` / `QUBIUS_GITEA_OWNER` / `QUBIUS_GITEA_TOKEN` | `create-repos.sh` 的 Gitea 地址、所属用户或组织、token | `http://gitea.example.com` / `example` / 空 |
@@ -207,9 +207,9 @@ Windows/macOS 上，`make start`、`make restart`、`make deploy`、`make deploy
 
 无论是向导还是完整表单，服务端都会写入实际生效的 env 文件和 `<configDir>/projects.yaml`（`configDir` 默认是当前 checkout 的 `.qubius/`）。Linux 按角色执行一次 `deploy/install.sh --force-config`，最后执行 `deploy/start-all.sh --restart`；Windows 和 macOS 由纯 Node 任务 `deploy/deploy-job.mjs` 完成等价的配置渲染、构建、停旧进程和启动，不依赖 bash/systemd/flock，见下面的平台章节。部署成功后向导会给出「进入 qubius」和「填写模型 API Key」两个下一步。任务日志在 `<configDir>/deploy.log`，状态在 `deploy.json`。
 
-正常运行后也可回 `/deploy` 改配置并重新部署；部署页顶部的「重新部署」按钮会从向导第一步开始重新确认使用方式、目录和端口，当前配置作为预填值。`--force-config` 仅在内容有差异时用页面生成的内容覆盖已有配置，并备份 `*.bak.<时间戳>`；内容一致时保持原文件。
+正常运行后也可回 `/deploy` 改配置并重新部署；部署页顶部的「重新部署」按钮会从向导第一步开始重新确认使用方式、目录和端口，当前配置作为预填值。「从 GitHub 更新并部署」则是不需要逐项确认的一键更新：服务端读取当前已保存的 env/配置，按原样重新部署，并在构建前拉取最新代码（`POST /api/deploy/update`）。拉取优先使用名为 `github` 的远端；没有时如果 `origin` 指向 github.com 就用 `origin`，否则回落到 `origin`。这个强制拉取只作用于本次任务，不会改动 env 里保存的 `QUBIUS_PULL_LATEST`。GitHub 版本比当前新时，按钮会显示目标版本号；进行中的会话会导致更新中止（不会打断会话），工作区有未提交改动或与远端分叉时更新也会失败并保留本地内容。`--force-config` 仅在内容有差异时用页面生成的内容覆盖已有配置，并备份 `*.bak.<时间戳>`；内容一致时保持原文件。
 
-完整表单的「仓库」区块还有「部署前从远端拉取最新代码」选项（写进 `QUBIUS_PULL_LATEST`）。勾选后，部署任务会在构建前对每个启用的 checkout 执行 `deploy/pull-latest.sh`：从该 checkout 的 `origin` fetch 当前分支并只做 fast-forward 合并。工作区有未提交改动、当前分支与远端分叉、或处于 detached HEAD 时部署会中止并保留本地内容，不会 `reset --hard`；需要手动合并后再重新部署。该选项拉取的是 checkout 配置的 `origin`，不读取表单里的仓库 URL，也不使用其中的凭据。
+完整表单的「仓库」区块还有「部署前从远端拉取最新代码」选项（写进 `QUBIUS_PULL_LATEST`）。勾选后，部署任务会在构建前对每个启用的 checkout 执行 `deploy/pull-latest.sh`：从该 checkout 的远端 fetch 当前分支并只做 fast-forward 合并。默认远端是 `origin`；设置 `QUBIUS_PULL_PREFER_GITHUB=1`（一键更新会自动带上）时优先名为 `github` 的远端，其次 `origin` 指向 github.com 的情况，最后仍回落到 `origin`；也可以用 `QUBIUS_PULL_REMOTE` 显式指定远端名。工作区有未提交改动、当前分支与远端分叉、或处于 detached HEAD 时部署会中止并保留本地内容，不会 `reset --hard`；需要手动合并后再重新部署。该选项拉取的是 checkout 配置的远端，不读取表单里的仓库 URL，也不使用其中的凭据。
 
 首次冷启动可先按仓库方式跑起来，再打开 `/deploy`：
 
@@ -240,7 +240,7 @@ Windows 没有 bash/systemd/flock，部署页改走 Node 任务 `deploy/deploy-j
 
 1. 读取 `<configDir>/env` 和 `projects.yaml`，为每个启用的角色渲染 `config.yaml` / `config-secondary.yaml`（旧文件内容不同时备份 `*.bak.<时间戳>`）。
 2. 副实例目录缺失且启用了 `clonePeer` 时 `git clone`。
-3. 勾选「部署前从远端拉取最新代码」时，从各 checkout 的 `origin` 快进拉取当前分支（与 Linux 的 `deploy/pull-latest.sh` 语义一致）。
+3. 勾选「部署前从远端拉取最新代码」或走一键「更新并部署」时，从各 checkout 的远端快进拉取当前分支：默认 `origin`，一键更新优先 GitHub 远端（与 Linux 的 `deploy/pull-latest.sh` 语义一致）。
 4. 与 Linux 一样用 staging 构建：需要安装依赖时先停旧进程并把 `node_modules` 备份为 `node_modules.prev`，再 `npm ci`；随后 server 用 `tsc --outDir dist.next`、web 先 `tsc --noEmit` 再 `vite build --outDir dist.next`，写 `server/dist.next/build.json`。不需要安装依赖时旧服务继续运行，live 完全不动。
 5. 停止前再检查一次会话；停掉旧的服务进程（当前服务根据 server 传入的 PID 和 `process.argv[1]` 判断，其它实例按 `<dataDir>/qubius.pid`）。Windows 上 `process.kill` 是硬杀，所以 server 启动时会在 `<dataDir>/shutdown-token` 写一个随机令牌；部署任务先请求 `POST /api/internal/shutdown` 让它 flush 会话并优雅退出，15 秒未退出才强制结束。等端口释放后把 `dist.next` 原子切换为 live（旧产物留作 `.prev`），再启动 `node server/dist/index.js`。
 6. 用 `/api/health` 校验端口、pid 和 `head`；失败时停止新进程、用 `.prev` 回滚、恢复 `node_modules.prev`，再启动旧版本。只有成功后才写部署 stamp。`QUBIUS_START_LAN=1` 且配置目录里有 `lan-proxy.credentials` 时顺带重启 `deploy/lan-proxy.mjs`。部署页勾选局域网入口会自动写入凭据，并在部署响应里一次性返回用户名/密码/访问令牌。

@@ -6,7 +6,8 @@
 #
 # 用法：deploy/pull-latest.sh <checkout-dir>
 # 环境变量：
-#   QUBIUS_PULL_REMOTE  远端名，默认 origin
+#   QUBIUS_PULL_REMOTE         显式指定远端名，默认按下面的规则选
+#   QUBIUS_PULL_PREFER_GITHUB  1 时优先从 GitHub 远端拉取（部署页「更新并部署」）
 set -euo pipefail
 
 die() { printf 'pull-latest: %s\n' "$*" >&2; exit 1; }
@@ -17,14 +18,39 @@ DIR=${1:-}
 [[ -d $DIR ]] || die "目录不存在：$DIR"
 command -v git >/dev/null 2>&1 || die "找不到 git"
 
-REMOTE=${QUBIUS_PULL_REMOTE:-origin}
-[[ $REMOTE =~ ^[A-Za-z0-9._/-]+$ ]] || die "远端名非法：$REMOTE"
-
 # 无人值守时不要卡在用户名/密码提示上；私有仓库请提前配置凭据。
 export GIT_TERMINAL_PROMPT=0
 
 git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || die "不是 git 仓库：$DIR"
+
+# 选择远端：显式配置优先；QUBIUS_PULL_PREFER_GITHUB=1 时优先名为 github 的远端，
+# 其次 origin 指向 github.com 的情况；都没有时回落到 origin（常见于从私有仓库克隆）。
+resolve_remote() {
+  local dir=$1 origin_url prefer=${QUBIUS_PULL_PREFER_GITHUB:-0}
+  if [[ -n ${QUBIUS_PULL_REMOTE:-} ]]; then
+    printf '%s' "$QUBIUS_PULL_REMOTE"
+    return 0
+  fi
+  prefer=${prefer,,}
+  case $prefer in
+    1 | true | yes | on) ;;
+    *) printf 'origin'; return 0 ;;
+  esac
+  if git -C "$dir" remote get-url github >/dev/null 2>&1; then
+    printf 'github'
+    return 0
+  fi
+  origin_url=$(git -C "$dir" remote get-url origin 2>/dev/null) || origin_url=""
+  case $origin_url in
+    *github.com[:/]*) printf 'origin'; return 0 ;;
+  esac
+  printf 'origin'
+}
+
+REMOTE=$(resolve_remote "$DIR")
+[[ $REMOTE =~ ^[A-Za-z0-9._/-]+$ && $REMOTE != -* && $REMOTE != *..* ]] \
+  || die "远端名非法：$REMOTE"
 git -C "$DIR" remote get-url "$REMOTE" >/dev/null 2>&1 \
   || die "没有 $REMOTE 远端，无法拉取：$DIR"
 

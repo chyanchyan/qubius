@@ -280,6 +280,60 @@ test("启用的实例缺少 deploy/install.sh 时返回 400 且不启动任务",
   }
 });
 
+test("POST /api/deploy/update 按当前配置启动拉取部署，且不写回强制开关", async () => {
+  const harness = await startHarness();
+  try {
+    makeFakeJob(harness.base);
+    const repo = makeRepo(harness.base, "primary");
+    const dataPrimary = path.join(harness.base, "data-primary");
+    fs.writeFileSync(
+      path.join(harness.configDir, "config.yaml"),
+      `role: primary\ndataDir: '${dataPrimary}'\n`,
+    );
+    fs.writeFileSync(path.join(harness.configDir, "env"), [
+      "QUBIUS_PRIMARY_PORT=19181",
+      "QUBIUS_SECONDARY_PORT=19182",
+      `QUBIUS_PRIMARY_DIR=${repo}`,
+      `QUBIUS_DATA_PRIMARY=${dataPrimary}`,
+      "QUBIUS_START_PRIMARY=1",
+      "QUBIUS_START_SECONDARY=0",
+      "QUBIUS_PULL_LATEST=0",
+      "",
+    ].join("\n"));
+
+    const result = await call<{ ok: boolean; jobId: string }>(
+      harness,
+      "POST",
+      "/api/deploy/update",
+      {},
+    );
+    assert.equal(result.status, 202);
+    assert.ok(result.data.jobId.length > 0);
+    await waitFor(
+      () => call<{ job: { state: string; jobId: string } | null }>(harness, "GET", "/api/deploy/status"),
+      (value) => value.data.job?.state === "success" && value.data.job.jobId === result.data.jobId,
+    );
+
+    // 一键更新不改用户保存的配置；强制拉取只作用于本次任务。
+    const envText = fs.readFileSync(path.join(harness.configDir, "env"), "utf8");
+    assert.match(envText, /^QUBIUS_PULL_LATEST=0$/m);
+    assert.doesNotMatch(envText, /QUBIUS_PULL_PREFER_GITHUB/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("POST /api/deploy/update 首次部署前返回 400", async () => {
+  const harness = await startHarness({ setupRequired: true });
+  try {
+    const result = await call<{ error: string }>(harness, "POST", "/api/deploy/update", {});
+    assert.equal(result.status, 400);
+    assert.match(result.data.error, /首次部署/);
+  } finally {
+    await harness.close();
+  }
+});
+
 test("已有部署任务在跑时 POST 返回 409，且不写配置", async () => {
   const harness = await startHarness();
   try {

@@ -6,6 +6,9 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
+# 宿主环境可能带着真实部署用的 QUBIUS_*；这些用例只测默认/显式行为。
+unset QUBIUS_PULL_REMOTE QUBIUS_PULL_PREFER_GITHUB
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -91,5 +94,63 @@ git init --quiet "$PLAIN"
   git commit -qm x
 )
 if "$PULL" "$PLAIN" >/dev/null 2>&1; then fail "没有 origin 时必须失败"; fi
+
+# 7. QUBIUS_PULL_PREFER_GITHUB=1：有 github 远端时优先从它拉取。
+ORIGIN2="$TMP/origin2.git"
+GITHUB2="$TMP/github2.git"
+SEED2="$TMP/seed2"
+WORK2="$TMP/work2"
+git init --quiet --bare "$ORIGIN2"
+git init --quiet --bare "$GITHUB2"
+git init --quiet "$SEED2"
+(
+  cd "$SEED2"
+  echo one >file.txt
+  git add file.txt
+  git commit -qm one
+  git remote add origin "$ORIGIN2"
+  git remote add github "$GITHUB2"
+  git push -q origin main
+  git push -q github main
+)
+git clone --quiet "$ORIGIN2" "$WORK2"
+git -C "$WORK2" remote add github "$GITHUB2"
+(
+  cd "$SEED2"
+  echo from-github >gh.txt
+  git add gh.txt
+  git commit -qm github-only
+  git push -q github main
+)
+QUBIUS_PULL_PREFER_GITHUB=1 "$PULL" "$WORK2" >/dev/null 2>&1 \
+  || fail "prefer github 时应从 github 远端快进成功"
+[[ $(cat "$WORK2/gh.txt" 2>/dev/null) == from-github ]] || fail "没有从 github 远端拉取"
+[[ $(git -C "$ORIGIN2" rev-parse main) != $(git -C "$WORK2" rev-parse HEAD) ]] \
+  || fail "prefer github 时不应拉取 origin"
+
+# 8. prefer github 但没有 github 远端：回落到 origin。
+ORIGIN3="$TMP/origin3.git"
+SEED3="$TMP/seed3"
+WORK3="$TMP/work3"
+git init --quiet --bare "$ORIGIN3"
+git init --quiet "$SEED3"
+(
+  cd "$SEED3"
+  echo one >file.txt
+  git add file.txt
+  git commit -qm one
+  git remote add origin "$ORIGIN3"
+  git push -q origin main
+)
+git clone --quiet "$ORIGIN3" "$WORK3"
+(
+  cd "$SEED3"
+  echo two >file.txt
+  git commit -qam two
+  git push -q origin main
+)
+QUBIUS_PULL_PREFER_GITHUB=1 "$PULL" "$WORK3" >/dev/null 2>&1 \
+  || fail "没有 github 远端时应回落到 origin"
+[[ $(cat "$WORK3/file.txt") == two ]] || fail "回落 origin 后工作区未更新"
 
 echo "deploy/pull-latest.sh 测试通过"

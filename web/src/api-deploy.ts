@@ -16,7 +16,7 @@ export interface DeployForm {
   startPrimary: boolean;
   startSecondary: boolean;
   clonePeer: boolean;
-  /** 构建前从各 checkout 的 origin 快进拉取当前分支。 */
+  /** 构建前从各 checkout 的远端（默认 origin）快进拉取当前分支。 */
   pullLatest: boolean;
   primaryPort: number;
   secondaryPort: number;
@@ -166,6 +166,16 @@ export function applyDeploy(
 
 export function getDeployStatus(signal?: AbortSignal): Promise<{ job: DeployJob | null }> {
   return request("/api/deploy/status", undefined, signal);
+}
+
+/**
+ * 一键更新部署：服务端按当前已保存的配置重新部署，并在构建前从 GitHub
+ * 远端快进拉取（没有 GitHub 远端时回落到 origin）。不需要提交表单。
+ */
+export function updateDeploy(
+  signal?: AbortSignal,
+): Promise<{ ok: true; jobId: string; oneTime?: DeployOneTimeInfo }> {
+  return request("/api/deploy/update", { method: "POST", body: "{}" }, signal);
 }
 
 /** 读取当前启用的 API 访问令牌；未启用时 404。 */

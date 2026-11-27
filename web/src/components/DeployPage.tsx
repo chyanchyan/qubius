@@ -13,6 +13,7 @@ import {
   isDeployResidualError,
   resetAuthToken as resetAuthTokenApi,
   resetLanPassword as resetLanPasswordApi,
+  updateDeploy,
   type DeployForm,
   type DeployJob,
   type DeployOneTimeInfo,
@@ -933,6 +934,68 @@ export function DeployPage() {
     setFormError("");
   }
 
+  /** 部署入口共用：清掉上一轮状态、记录本次表单并进入「提交中」。 */
+  function startDeployTracking(nextForm: DeployForm): AbortController {
+    setFormError("");
+    setJob(null);
+    setReloading(false);
+    setPortChanged(false);
+    setSubmittedForm(cloneForm(nextForm));
+    submittedPorts.current = enabledPortsOf(nextForm);
+    pollFailures.current = 0;
+    window.clearTimeout(reloadTimer.current);
+    restartDeadline.current = 0;
+    setPhaseSafe("submitting");
+    const controller = new AbortController();
+    submitAbort.current = controller;
+    activeJobId.current = "";
+    return controller;
+  }
+
+  /** 服务端已接受部署：保存一次性凭据并开始轮询任务状态。 */
+  function acceptDeploy(result: { jobId: string; oneTime?: DeployOneTimeInfo }): void {
+    if (result.oneTime) {
+      oneTimeRef.current = result.oneTime;
+      storeOneTimeInfo(result.oneTime);
+      setOneTime(result.oneTime);
+    }
+    activeJobId.current = result.jobId;
+    setPhaseSafe("running");
+    schedulePoll();
+  }
+
+  /** 提交失败的统一收尾：residual/busy 有各自的状态流转，其它回到 idle 并提示。 */
+  function handleDeployError(reason: unknown): void {
+    if (!mounted.current) return;
+    if (isDeployResidualError(reason)) {
+      // 部署锁空闲但有残留进程：不能当作普通失败，也不能去轮询不存在的任务。
+      const pids = deployResidualPids(reason);
+      setPhaseSafe("idle");
+      setFormError(
+        `部署锁有残留进程${pids.length > 0 ? `（${pids.join(", ")}）` : ""}，请到公网入口面板回收。`,
+      );
+      return;
+    }
+    if (isDeployBusyError(reason)) {
+      const kind = deployBusyKind(reason);
+      if (!kind || kind === "deploy") {
+        // 旧服务端没有 kind，或确实是部署任务：展示并轮询它，不要停在 idle。
+        activeJobId.current = "";
+        restartDeadline.current = 0;
+        setPhaseSafe("running");
+        schedulePoll();
+        return;
+      }
+      // 锁被公网入口任务占用：deploy status 里可能是旧的成功任务，
+      // 不能认领它并触发自动 reload；保持 idle 让用户稍后重试。
+      setPhaseSafe("idle");
+      setFormError("公网入口任务在运行，请稍后再部署。");
+      return;
+    }
+    setPhaseSafe("idle");
+    setFormError(readableError(reason, "提交部署失败"));
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (
@@ -952,20 +1015,7 @@ export function DeployPage() {
       return;
     }
 
-    setFormError("");
-    setJob(null);
-    setReloading(false);
-    setPortChanged(false);
-    setSubmittedForm(cloneForm(form));
-    submittedPorts.current = enabledPortsOf(form);
-    pollFailures.current = 0;
-    window.clearTimeout(reloadTimer.current);
-    restartDeadline.current = 0;
-    setPhaseSafe("submitting");
-
-    const controller = new AbortController();
-    submitAbort.current = controller;
-    activeJobId.current = "";
+    const controller = startDeployTracking(form);
     try {
       // 两个实例共用同一个仓库：副实例地址始终跟随界面上唯一的仓库输入。
       const hosts = effectivePublicHosts(form);
@@ -991,43 +1041,57 @@ export function DeployPage() {
         result = await applyDeploy({ ...payload, confirmDataDirChange: true }, controller.signal);
       }
       if (!mounted.current || controller.signal.aborted) return;
-      if (result.oneTime) {
-        oneTimeRef.current = result.oneTime;
-        storeOneTimeInfo(result.oneTime);
-        setOneTime(result.oneTime);
-      }
-      activeJobId.current = result.jobId;
-      setPhaseSafe("running");
-      schedulePoll();
+      acceptDeploy(result);
     } catch (reason) {
       if (!mounted.current || controller.signal.aborted) return;
-      if (isDeployResidualError(reason)) {
-        // 部署锁空闲但有残留进程：不能当作普通失败，也不能去轮询不存在的任务。
-        const pids = deployResidualPids(reason);
-        setPhaseSafe("idle");
-        setFormError(
-          `部署锁有残留进程${pids.length > 0 ? `（${pids.join(", ")}）` : ""}，请到公网入口面板回收。`,
-        );
-        return;
-      }
-      if (isDeployBusyError(reason)) {
-        const kind = deployBusyKind(reason);
-        if (!kind || kind === "deploy") {
-          // 旧服务端没有 kind，或确实是部署任务：展示并轮询它，不要停在 idle。
-          activeJobId.current = "";
-          restartDeadline.current = 0;
-          setPhaseSafe("running");
-          schedulePoll();
-          return;
-        }
-        // 锁被公网入口任务占用：deploy status 里可能是旧的成功任务，
-        // 不能认领它并触发自动 reload；保持 idle 让用户稍后重试。
-        setPhaseSafe("idle");
-        setFormError("公网入口任务在运行，请稍后再部署。");
-        return;
-      }
-      setPhaseSafe("idle");
-      setFormError(readableError(reason, "提交部署失败"));
+      handleDeployError(reason);
+    } finally {
+      if (submitAbort.current === controller) submitAbort.current = null;
+    }
+  }
+
+  /**
+   * 一键更新：不提交表单，服务端按当前已保存的配置重新部署，并在构建前从
+   * GitHub 远端拉取最新代码。更新前的确认只提示影响，不再逐项确认配置。
+   */
+  async function onUpdateDeploy() {
+    if (
+      !form ||
+      !deployState ||
+      phase === "submitting" ||
+      phase === "running" ||
+      phase === "restarting" ||
+      phase === "relocated" ||
+      reloading
+    ) return;
+
+    const version = githubVersion && !githubVersion.error && githubVersion.version
+      ? githubVersion.status === "ahead"
+        ? `GitHub 上是 v${githubVersion.version}。`
+        : githubVersion.status === "same"
+          ? "GitHub 版本号与当前一致，但可能还有未发版的提交。"
+          : ""
+      : "";
+    const confirmed = await dialogs.confirm({
+      title: "拉取最新代码并更新部署？",
+      message:
+        `${version}将从 GitHub 远端（没有时用 origin）快进拉取当前分支，`
+        + "按当前已保存的配置重新构建并重启服务。"
+        + "有进行中的会话、工作区有未提交改动或与远端分叉时会中止更新（不会打断会话）。",
+      confirmLabel: "更新并部署",
+    });
+    if (!confirmed) return;
+
+    // 服务端用的是已保存配置；跟踪状态也用同一份，避免把表单里未保存的
+    // 端口/域名当成部署结果，导致错误的“端口已变化”提示和访问地址。
+    const controller = startDeployTracking(deployState.form);
+    try {
+      const result = await updateDeploy(controller.signal);
+      if (!mounted.current || controller.signal.aborted) return;
+      acceptDeploy(result);
+    } catch (reason) {
+      if (!mounted.current || controller.signal.aborted) return;
+      handleDeployError(reason);
     } finally {
       if (submitAbort.current === controller) submitAbort.current = null;
     }
@@ -1201,6 +1265,16 @@ export function DeployPage() {
         <div className="deploy-redeploy">
           <button
             type="button"
+            className="btn btn-primary"
+            disabled={busy || reloading || phase === "relocated"}
+            onClick={onUpdateDeploy}
+          >
+            {githubVersion?.status === "ahead" && githubVersion.version
+              ? `更新到 v${githubVersion.version} 并部署`
+              : "从 GitHub 更新并部署"}
+          </button>
+          <button
+            type="button"
             className="btn"
             disabled={busy || reloading || phase === "relocated"}
             onClick={() => openWizard("redeploy")}
@@ -1208,7 +1282,8 @@ export function DeployPage() {
             重新部署…
           </button>
           <p className="deploy-inline-hint">
-            从向导第一步开始逐项确认配置；当前配置会预填到向导里，改完最后一步再提交部署。
+            「更新」从 GitHub 远端拉取最新代码（没有 GitHub 远端时用 origin），按当前已保存的配置
+            重新构建并重启，不用逐项确认；「重新部署」从向导第一步开始，可以修改任意配置后再提交。
           </p>
         </div>
       )}
