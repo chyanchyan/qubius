@@ -95,6 +95,13 @@ test("监听任务的列表标题、就绪进度与可编辑状态", () => {
   const paused = makeWatch({ status: "paused" });
   assert.equal(isWatchInBoard(paused), true);
   assert.equal(watchCanEditTargets(paused), true);
+
+  // 启动整合审核就失败的任务没有审核会话代表，必须留在列表里让用户看到原因。
+  const failed = makeWatch({ status: "failed" });
+  assert.equal(isWatchInBoard(failed), true);
+  assert.equal(watchCanEditTargets(failed), false);
+  const failedReview = makeWatch({ status: "failed", reviewSessionId: "review-1" });
+  assert.equal(isWatchInBoard(failedReview), false);
 });
 
 test("toggleWatchAction 保持动作组合的一致性", () => {

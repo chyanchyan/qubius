@@ -202,9 +202,11 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
       setNote(
         data.watch.status === "reviewing"
           ? "所选会话已全部完成，已自动启动整合审核会话"
-          : data.watch.status === "paused"
-            ? "监听已创建，但有会话需要处理，已暂停等待确认"
-            : "已开始脚本监听（等待阶段零 token），全部完成后将自动启动审核整合",
+          : data.watch.status === "launching"
+            ? "所选会话已全部完成，正在采集改动并启动整合审核"
+            : data.watch.status === "paused"
+              ? "监听已创建，但有会话需要处理，已暂停等待确认"
+              : "已开始脚本监听（等待阶段零 token），全部完成后将自动启动审核整合",
       );
       await onRefresh();
       onCreated?.(data.watch);

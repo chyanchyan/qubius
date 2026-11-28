@@ -49,6 +49,8 @@ export const WatchBoardRow = memo(function WatchBoardRow({
   const ready = watchReadyCount(watch);
   const total = watch.targetViews.length;
   const paused = watch.status === "paused";
+  const failed = watch.status === "failed";
+  const canResume = paused || failed;
   const hasBlockers = (watch.pausedSessionIds?.length ?? 0) > 0;
   const canCancel = watch.status === "waiting" || watch.status === "paused";
   const canEdit = watchCanEditTargets(watch);
@@ -88,6 +90,7 @@ export const WatchBoardRow = memo(function WatchBoardRow({
               就绪 {ready}/{total} · {summarizeActions(watch.actions)}
             </span>
             {paused && watch.pauseReason && <span className="error">{watch.pauseReason}</span>}
+            {failed && watch.lastError && <span className="error">{watch.lastError}</span>}
           </span>
           <span className="convo-meta watch-toggle">{open ? "收起" : "详情"}</span>
         </button>
@@ -157,7 +160,7 @@ export const WatchBoardRow = memo(function WatchBoardRow({
                   编辑监听会话
                 </button>
               )}
-              {paused && (
+              {canResume && (
                 <button
                   type="button"
                   className="btn"
@@ -167,7 +170,7 @@ export const WatchBoardRow = memo(function WatchBoardRow({
                   {busy === "resume" ? "检查中…" : "重新检查并继续"}
                 </button>
               )}
-              {paused && hasBlockers && (
+              {canResume && hasBlockers && (
                 <button
                   type="button"
                   className="text-btn"

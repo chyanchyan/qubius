@@ -80,9 +80,14 @@ export function activeWatchCount(watches: readonly BatchWatch[]): number {
  * 是否把这条监听任务作为列表里的「会话条目」展示。
  * 脚本监听/暂停/启动阶段还没有对应的整合审核会话，需要在列表里露出来；
  * 进入 reviewing 后整合审核会话本身已经是普通会话条目，避免重复。
+ * 启动整合失败（还没有 reviewSessionId）时同样要露出来，否则用户看不到失败原因；
+ * 有审核会话的 failed 由审核会话本身代表。
  */
 export function isWatchInBoard(watch: BatchWatch): boolean {
-  return watch.status === "waiting" || watch.status === "paused" || watch.status === "launching";
+  return watch.status === "waiting"
+    || watch.status === "paused"
+    || watch.status === "launching"
+    || (watch.status === "failed" && !watch.reviewSessionId);
 }
 
 /** 只有还没开始审核整合（脚本监听中或暂停）的任务才能增减被监听的会话。 */
