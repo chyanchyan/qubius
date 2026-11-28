@@ -73,6 +73,10 @@ export interface LegacyMigrationResult {
   copied: string[];
   /** 当前目录已有相同内容、不需要重写的文件。 */
   unchanged: string[];
+  /** 内容不同、按确认覆盖掉的文件（覆盖前已备份）。 */
+  overwritten: string[];
+  /** 覆盖时备份当前文件得到的文件名（相对当前配置目录）。 */
+  backups: string[];
   /** 校验通过后从旧目录删掉的文件。 */
   deleted: string[];
   /** 旧目录里没有迁移（data/、日志等），因此保留下来的条目。 */
@@ -308,6 +312,22 @@ function migrateMode(name: string): number {
   return name === "env" || name === "lan-proxy.credentials" ? 0o600 : 0o644;
 }
 
+/**
+ * 覆盖同名文件前的备份名：`<name>.bak.<时间戳>`，与部署写配置的约定一致。
+ * 同一毫秒内重复覆盖时追加序号，避免覆盖掉上一次的备份。
+ */
+function backupFileName(targetDir: string, name: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const base = `${name}.bak.${stamp}`;
+  let candidate = base;
+  let counter = 1;
+  while (fs.existsSync(path.join(targetDir, candidate))) {
+    candidate = `${base}-${counter}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
 /** 迁移后写入目标目录的实际内容（配置文件会改写路径）。 */
 function plannedContent(
   legacyDir: string,
@@ -445,16 +465,22 @@ export function findLegacyConfig(
 /**
  * 把旧配置目录里的可迁移文件复制到当前配置目录，逐文件校验后删除源文件；
  * 旧目录里还有别的文件（data/、日志等）时保留目录并报告 leftovers。
+ *
+ * `overwrite` 用于当前配置目录已被新部署自动生成、与旧文件冲突的场景：
+ * 用户确认后覆盖同名文件，覆盖前把当前内容备份为 `*.bak.<时间戳>`。
  */
 export function migrateLegacyConfig(options: {
   requestedPath: string;
   currentConfigDir: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  /** 允许覆盖当前配置目录里内容不同的同名文件（先备份）。 */
+  overwrite?: boolean;
 }): LegacyMigrationResult {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const targetDir = path.resolve(options.currentConfigDir);
+  const overwrite = options.overwrite === true;
   const candidate = findLegacyConfig(options.requestedPath, {
     currentConfigDir: targetDir,
     env,
@@ -463,9 +489,10 @@ export function migrateLegacyConfig(options: {
   if (!candidate) {
     throw new LegacyMigrationError("没有找到这个旧配置目录，可能已被移动或删除", 404);
   }
-  if (candidate.conflicts.length > 0) {
+  if (candidate.conflicts.length > 0 && !overwrite) {
     throw new LegacyMigrationError(
-      `当前配置目录已有内容不同的同名文件：${candidate.conflicts.join("、")}；请先手工合并或忽略`,
+      `当前配置目录已有内容不同的同名文件：${candidate.conflicts.join("、")}；`
+        + "可以确认覆盖（覆盖前会备份当前文件）或先手工合并",
       409,
     );
   }
@@ -485,13 +512,40 @@ export function migrateLegacyConfig(options: {
   }
   const copied: string[] = [];
   const unchanged: string[] = [];
+  const overwritten: string[] = [];
+  const backups: string[] = [];
   for (const file of planned) {
     const targetFile = path.join(targetDir, file.name);
+    const mode = migrateMode(file.name);
     if (fs.existsSync(targetFile)) {
-      unchanged.push(file.name);
+      let existing: Buffer;
+      try {
+        existing = fs.readFileSync(targetFile);
+      } catch (error) {
+        throw new LegacyMigrationError(
+          `无法读取当前配置目录里的 ${file.name}：${error instanceof Error ? error.message : String(error)}`,
+          400,
+        );
+      }
+      if (sha256(existing) === sha256(file.content)) {
+        unchanged.push(file.name);
+        continue;
+      }
+      // 扫描之后目标文件可能又被写过，这里按实际内容再判断一次。
+      if (!overwrite) {
+        throw new LegacyMigrationError(
+          `当前配置目录里的 ${file.name} 内容不同；请确认覆盖后再迁移`,
+          409,
+        );
+      }
+      const backupName = backupFileName(targetDir, file.name);
+      writeFileAtomic(path.join(targetDir, backupName), existing.toString("utf8"), { mode });
+      writeFileAtomic(targetFile, file.content.toString("utf8"), { mode });
+      overwritten.push(file.name);
+      backups.push(backupName);
       continue;
     }
-    writeFileAtomic(targetFile, file.content.toString("utf8"), { mode: migrateMode(file.name) });
+    writeFileAtomic(targetFile, file.content.toString("utf8"), { mode });
     const written = fs.readFileSync(targetFile);
     if (written.length !== file.content.length || sha256(written) !== sha256(file.content)) {
       throw new LegacyMigrationError(`写入 ${targetFile} 后校验失败，旧目录未改动`, 400);
@@ -532,5 +586,5 @@ export function migrateLegacyConfig(options: {
   if (failures.length > 0) {
     leftovers = [...new Set([...failures, ...leftovers])].sort();
   }
-  return { path: candidate.path, copied, unchanged, deleted, leftovers, removedDir };
+  return { path: candidate.path, copied, unchanged, overwritten, backups, deleted, leftovers, removedDir };
 }

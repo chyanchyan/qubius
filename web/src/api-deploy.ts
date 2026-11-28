@@ -149,7 +149,7 @@ export interface LegacyConfigCandidate {
   origin: string;
   files: LegacyConfigFileInfo[];
   hasConfig: boolean;
-  /** 当前配置目录已有同名但内容不同的文件；非空时不能迁移。 */
+  /** 当前配置目录已有同名但内容不同的文件；确认覆盖后可以迁移。 */
   conflicts: string[];
 }
 
@@ -157,6 +157,10 @@ export interface LegacyMigrationResult {
   path: string;
   copied: string[];
   unchanged: string[];
+  /** 内容不同、按确认覆盖掉的文件。 */
+  overwritten: string[];
+  /** 覆盖时生成的备份文件名（相对当前配置目录）。 */
+  backups: string[];
   deleted: string[];
   leftovers: string[];
   removedDir: boolean;
@@ -169,11 +173,19 @@ export function getDeployState(signal?: AbortSignal): Promise<DeployState> {
 /** 把旧配置目录的文件迁移到当前配置目录；服务端会校验后删除旧文件。 */
 export function migrateLegacyConfig(
   path: string,
+  options: { overwrite?: boolean } = {},
   signal?: AbortSignal,
 ): Promise<{ ok: true; result: LegacyMigrationResult }> {
   return request(
     "/api/deploy/legacy-migrate",
-    { method: "POST", body: JSON.stringify({ path, confirm: true }) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        path,
+        confirm: true,
+        ...(options.overwrite ? { overwrite: true } : {}),
+      }),
+    },
     signal,
   );
 }

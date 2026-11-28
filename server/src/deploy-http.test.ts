@@ -862,3 +862,52 @@ test("扫描旧配置目录：忽略持久化，迁移需要确认并清理旧�
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("旧配置迁移：冲突默认拒绝，确认覆盖后备份并替换", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "qubius-legacy-overwrite-home-"));
+  const legacy = path.join(home, ".config", "qubius");
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, "env"), "QUBIUS_AUTH=1\n");
+  const savedHome = process.env.HOME;
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  process.env.HOME = home;
+  process.env.XDG_CONFIG_HOME = path.join(home, ".config");
+  const harness = await startHarness();
+  try {
+    // 部署自动生成的 env 与旧目录内容不同：不确认覆盖时拒绝。
+    const conflict = await call(
+      harness,
+      "POST",
+      "/api/deploy/legacy-migrate",
+      { path: legacy, confirm: true },
+    );
+    assert.equal(conflict.status, 409);
+    assert.ok(fs.existsSync(path.join(legacy, "env")));
+
+    const replaced = await call<{
+      ok: boolean;
+      result: { overwritten: string[]; backups: string[]; deleted: string[] };
+    }>(harness, "POST", "/api/deploy/legacy-migrate", {
+      path: legacy,
+      confirm: true,
+      overwrite: true,
+    });
+    assert.equal(replaced.status, 200);
+    assert.deepEqual(replaced.data.result.overwritten, ["env"]);
+    assert.deepEqual(replaced.data.result.deleted, ["env"]);
+    assert.equal(replaced.data.result.backups.length, 1);
+
+    const envFile = path.join(harness.configDir, "env");
+    assert.match(fs.readFileSync(envFile, "utf8"), /^QUBIUS_AUTH=1$/m);
+    const backup = path.join(harness.configDir, replaced.data.result.backups[0] ?? "");
+    assert.match(fs.readFileSync(backup, "utf8"), /^QUBIUS_PRIMARY_PORT=19181$/m);
+    assert.equal(fs.existsSync(legacy), false);
+  } finally {
+    await harness.close();
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = savedXdg;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

@@ -707,7 +707,11 @@ export function createAppServer(options: {
         throw new HttpError(400, "迁移会删除旧目录里的配置文件，需要确认后执行");
       }
       try {
-        const result = migrateLegacyConfig({ requestedPath: requested, currentConfigDir: configDir });
+        const result = migrateLegacyConfig({
+          requestedPath: requested,
+          currentConfigDir: configDir,
+          overwrite: record.overwrite === true,
+        });
         sendJson(res, 200, { ok: true, result });
       } catch (error) {
         if (error instanceof LegacyMigrationError) throw new HttpError(error.status, error.message);

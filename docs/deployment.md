@@ -339,7 +339,8 @@ git -C "$QUBIUS_SECONDARY_DIR" push -u origin main
 - 迁移目标就是当前部署页使用的配置目录；正在使用的配置目录本身不会被当成迁移来源，所以要把旧布局切到新默认目录，需要先按新路径启动一次（运行中的服务不能改配置目录）。
 - `config.yaml` 缺省的 `dataDir` 和相对路径（`dataDir`、`archive.dir`、`secondary.*`、`projects[].path`、`projects.yaml`）会改写成基于旧目录的绝对路径，避免换基准目录后会话看起来消失；数据目录和归档不移动。
 - `env` 里的 `QUBIUS_CONFIG_DIR`/`QUBIUS_ENV` 改到新目录，早期的 `QODER_*`/`REMOTE_CODER_*` 变量名统一成 `QUBIUS_*`。
-- 目标目录已有内容不同的同名文件时拒绝迁移并列出冲突文件，需要先手工合并；「忽略」会把路径记到 `<configDir>/.legacy-config-ignored.json`，卡片底部可以「重新提示」。
+- 目标目录已有内容不同的同名文件（例如部署时刚自动生成的 `config.yaml`、`env`）时，不覆盖的迁移会被拒绝并列出冲突文件；页面可确认「覆盖并迁移」，接口带 `overwrite: true` 时用旧配置替换同名文件，覆盖前把当前内容备份为 `*.bak.<时间戳>`，需要时可以手工恢复。
+- 「忽略」会把路径记到 `<configDir>/.legacy-config-ignored.json`，卡片底部可以「重新提示」。
 - 迁移完成后重新部署或重启服务才会生效；迁移接口要求 `confirm: true`，页面在删除前还有一次确认。
 
 迁移到新机器或分享：

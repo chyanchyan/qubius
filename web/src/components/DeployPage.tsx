@@ -1252,8 +1252,9 @@ export function DeployPage() {
   async function onMigrateLegacy(item: LegacyConfigCandidate) {
     if (legacyBusy || !deployState) return;
     const names = item.files.map((file) => file.name).join("、");
+    const overwrite = item.conflicts.length > 0;
     const confirmed = await dialogs.confirm({
-      title: "迁移旧配置",
+      title: overwrite ? "覆盖并迁移旧配置" : "迁移旧配置",
       message: (
         <>
           <p>
@@ -1261,10 +1262,17 @@ export function DeployPage() {
             {" "}<span className="mono">{deployState.configDir}</span>，
             逐个校验内容后再删除旧目录里的这些文件。
           </p>
+          {overwrite && (
+            <p>
+              当前配置目录里的 {item.conflicts.join("、")} 内容不同，将用旧配置覆盖；
+              覆盖前会把当前文件备份为 <span className="mono">*.bak.&lt;时间戳&gt;</span>，
+              需要时可以手工恢复。
+            </p>
+          )}
           <p>数据目录和归档不会被移动；迁移完成后需要重新部署或重启服务才会生效，页面会重新加载。</p>
         </>
       ),
-      confirmLabel: "迁移并清理",
+      confirmLabel: overwrite ? "覆盖并迁移" : "迁移并清理",
       danger: true,
     });
     if (!confirmed) return;
@@ -1272,14 +1280,17 @@ export function DeployPage() {
     setLegacyError("");
     setLegacyNotice("");
     try {
-      const { result } = await migrateLegacyConfigApi(item.path);
+      const { result } = await migrateLegacyConfigApi(item.path, { overwrite });
       if (!mounted.current) return;
-      const moved = [...result.copied, ...result.unchanged];
+      const moved = [...result.copied, ...result.unchanged, ...result.overwritten];
+      const overwriteNote = result.overwritten.length > 0
+        ? `；覆盖 ${result.overwritten.join("、")}（已备份为 ${result.backups.join("、")}）`
+        : "";
       const cleanup = result.removedDir
         ? "旧目录已清空并删除"
         : `旧目录里保留：${result.leftovers.join("、") || "（空）"}`;
       setLegacyNotice(
-        `已迁移 ${moved.join("、") || "（无）"}；${cleanup}。重新部署或重启服务后生效。`,
+        `已迁移 ${moved.join("、") || "（无）"}${overwriteNote}；${cleanup}。重新部署或重启服务后生效。`,
       );
       setLegacyBusy("");
       setReloadKey((key) => key + 1);
@@ -1632,7 +1643,7 @@ export function DeployPage() {
                     <dt>冲突</dt>
                     <dd className="deploy-legacy-warn">
                       当前配置目录已有内容不同的同名文件：{item.conflicts.join("、")}。
-                      请先手工合并，或选择忽略。
+                      可以确认覆盖（覆盖前自动备份当前文件），或先手工合并。
                     </dd>
                   </div>
                 )}
@@ -1641,10 +1652,14 @@ export function DeployPage() {
                 <button
                   type="button"
                   className="btn btn-primary"
-                  disabled={busy || legacyBusy !== "" || item.conflicts.length > 0}
+                  disabled={busy || legacyBusy !== ""}
                   onClick={() => void onMigrateLegacy(item)}
                 >
-                  {legacyBusy === item.path ? "迁移中…" : "迁移并清理"}
+                  {legacyBusy === item.path
+                    ? "迁移中…"
+                    : item.conflicts.length > 0
+                      ? "覆盖并迁移"
+                      : "迁移并清理"}
                 </button>
                 <button
                   type="button"

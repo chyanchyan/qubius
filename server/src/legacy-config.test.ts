@@ -197,6 +197,52 @@ test("目标已有不同内容时拒绝迁移，旧目录保持不变", () => {
   assert.equal(fs.readFileSync(path.join(target, "config.yaml"), "utf8"), "role: secondary\n");
 });
 
+test("确认覆盖时替换同名文件，覆盖前把当前内容备份为 *.bak.<时间戳>", () => {
+  const home = tempHome();
+  const legacy = path.join(home, ".config", "qubius");
+  writeLegacy(legacy, {
+    "config.yaml": "role: primary\n",
+    "env": "QUBIUS_AUTH=1\n",
+  });
+  const target = path.join(home, "checkout", ".qubius");
+  // 新部署自动生成的配置和 env，内容与旧目录不同。
+  writeLegacy(target, {
+    "config.yaml": "role: secondary\n",
+    "env": "QUBIUS_PRIMARY_PORT=8787\n",
+  });
+
+  const result = migrateLegacyConfig({
+    requestedPath: legacy,
+    currentConfigDir: target,
+    env: envFor(home),
+    overwrite: true,
+  });
+  assert.deepEqual(result.overwritten.sort(), ["config.yaml", "env"]);
+  assert.equal(result.copied.length, 0);
+  assert.equal(result.backups.length, 2);
+  assert.equal(result.removedDir, true);
+
+  // 旧目录里的文件清理掉了，数据目录仍然保留（这里没有 data/）。
+  assert.equal(fs.existsSync(path.join(legacy, "config.yaml")), false);
+  assert.equal(fs.existsSync(path.join(legacy, "env")), false);
+
+  // 当前文件已替换为迁移后的旧配置。
+  const config = parseYaml(fs.readFileSync(path.join(target, "config.yaml"), "utf8")) as {
+    dataDir: string;
+  };
+  assert.equal(config.dataDir, path.join(legacy, "data"));
+  assert.match(fs.readFileSync(path.join(target, "env"), "utf8"), /^QUBIUS_AUTH=1$/m);
+
+  // 每个被覆盖的文件都有备份，内容正好是覆盖前的版本。
+  for (const backup of result.backups) {
+    assert.match(backup, /\.bak\./);
+    const original = backup.startsWith("config.yaml")
+      ? "role: secondary\n"
+      : "QUBIUS_PRIMARY_PORT=8787\n";
+    assert.equal(fs.readFileSync(path.join(target, backup), "utf8"), original);
+  }
+});
+
 test("目标已有相同内容时记为 unchanged，仍然清理旧目录", () => {
   const home = tempHome();
   const legacy = path.join(home, ".config", "qubius");
