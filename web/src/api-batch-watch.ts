@@ -82,6 +82,20 @@ export function createBatchWatch(
   );
 }
 
+/** 修改等待/暂停中的监听任务被监听的会话集合。 */
+export function updateBatchWatchTargets(
+  projectId: string,
+  watchId: string,
+  sessionIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ watch: BatchWatch }> {
+  return request<{ watch: BatchWatch }>(
+    `/api/projects/${projectId}/batch-watches/${watchId}`,
+    { method: "PATCH", body: JSON.stringify({ sessionIds }) },
+    signal,
+  );
+}
+
 export function resumeBatchWatch(
   projectId: string,
   watchId: string,

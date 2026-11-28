@@ -1,6 +1,9 @@
 import type { BatchMergeMode, BatchWatch, BatchWatchActions, BatchWatchStatus } from "./api-batch-watch";
 import type { Session } from "./api";
 
+/** 与服务端 MAX_WATCH_SESSIONS 保持一致，表单侧提前拦住超限。 */
+export const MAX_WATCH_SESSIONS = 20;
+
 export const WATCH_STATUS_LABEL: Record<BatchWatchStatus, string> = {
   waiting: "脚本监听中",
   paused: "已暂停（待处理）",
@@ -71,4 +74,32 @@ export function activeWatchCount(watches: readonly BatchWatch[]): number {
     || item.status === "launching"
     || item.status === "reviewing",
   ).length;
+}
+
+/**
+ * 是否把这条监听任务作为列表里的「会话条目」展示。
+ * 脚本监听/暂停/启动阶段还没有对应的整合审核会话，需要在列表里露出来；
+ * 进入 reviewing 后整合审核会话本身已经是普通会话条目，避免重复。
+ */
+export function isWatchInBoard(watch: BatchWatch): boolean {
+  return watch.status === "waiting" || watch.status === "paused" || watch.status === "launching";
+}
+
+/** 只有还没开始审核整合（脚本监听中或暂停）的任务才能增减被监听的会话。 */
+export function watchCanEditTargets(watch: BatchWatch): boolean {
+  return watch.status === "waiting" || watch.status === "paused";
+}
+
+/** 列表行标题：优先用来源会话的当前标题，方便和普通会话条目放在一起识别。 */
+export function watchTitle(watch: BatchWatch): string {
+  const count = watch.targetViews.length;
+  const first = watch.targetViews[0]?.currentTitle?.trim();
+  if (count === 0) return "监听任务";
+  if (count === 1) return first ? `监听 · ${first}` : "监听 · 1 个会话";
+  return first ? `监听 · ${first} 等 ${count} 个会话` : `监听 · ${count} 个会话`;
+}
+
+/** 就绪会话数（被跳过或已完成），列表右侧进度和徽章共用。 */
+export function watchReadyCount(watch: BatchWatch): number {
+  return watch.targetViews.filter((target) => target.ready).length;
 }

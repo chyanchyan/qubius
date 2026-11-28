@@ -119,7 +119,7 @@ agent 用 Bash 的 `run_in_background` 启动下载、安装等耗时命令后�
 - `GET|POST /api/sessions/<id>/diff-comments`：读取或新建 diff 行级评论；`PATCH|DELETE /api/sessions/<id>/diff-comments/<commentId>` 修改/删除单条，`DELETE /api/sessions/<id>/diff-comments` 清空。评论存在 `<dataDir>/diff-comments/<对话 id>.json`。
 - `GET|POST /api/sessions/<id>/pull-request`：读取或创建当前分支的 GitHub PR / GitLab MR。依赖本机已登录的 `gh` / `glab`；创建前会校验会话分支并 `git push -u origin HEAD`（不 force），body `{ title, body, base? }`。
 - `GET|POST /api/projects/<id>/multi-model-groups`：读取或保存多模型对比分组；`DELETE /api/projects/<id>/multi-model-groups/<groupId>` 删除一组。分组存在 `<dataDir>/multi-model-groups.json`，每个项目最多 20 组。
-- `GET|POST /api/projects/<id>/batch-watches`：读取或创建批量会话监听整合任务（body `{ sessionIds, providerId, model, effort, actions: { commit, mergeMode, push, deploy, baseBranch? }, extraPrompt? }`）；`POST .../<wid>/resume`（`{ skipBlockers?, skipSessionId? }`）在暂停/失败后恢复；`POST .../<wid>/cancel` 取消监听；`DELETE .../<wid>` 删除记录。任务存在 `<dataDir>/batch-watches.json`。
+- `GET|POST /api/projects/<id>/batch-watches`：读取或创建批量会话监听整合任务（body `{ sessionIds, providerId, model, effort, actions: { commit, mergeMode, push, deploy, baseBranch? }, extraPrompt? }`）；`PATCH .../<wid>`（`{ sessionIds }`）在等待或暂停时增减被监听的会话；`POST .../<wid>/resume`（`{ skipBlockers?, skipSessionId? }`）在暂停/失败后恢复；`POST .../<wid>/cancel` 取消监听；`DELETE .../<wid>` 删除记录。任务存在 `<dataDir>/batch-watches.json`。
 - `GET /api/sessions/<id>/tasks/<taskId>/output`：后台任务输出尾部，返回 `output` / `totalBytes` / `truncated`；会话没有活跃进程时 409。
 - `POST /api/sessions/<id>/tasks/background`：body `{ toolUseId }`，把正在前台运行的 Bash 转到后台，返回 `{ ok, backgrounded }`。
 - `POST /api/sessions/<id>/tasks/<taskId>/stop`：停止后台任务，返回 `{ ok }`。
@@ -187,6 +187,7 @@ agent 用 Bash 的 `run_in_background` 启动下载、安装等耗时命令后�
 - 等待阶段由服务端订阅会话事件脚本化执行，不启动轮询对话、不消耗模型 token；服务重启后仍会从 `<dataDir>/batch-watches.json` 恢复监听。
 - 任一被监听会话失败、已停止、进入「等待确认」或被删除时，任务自动暂停并标出具体原因，由用户处理后点「重新检查并继续」，或选择「跳过异常会话继续」/单独跳过某个会话。
 - 所有未跳过的目标会话完成后，服务端自动采集各会话的工作区变更、提交记录与末轮说明，创建指定模型的整合审核会话统一审核修订并按所选收尾动作落地。
+- 脚本监听中或已暂停的任务会作为一条会话条目出现在项目列表里；创建成功后整合面板自动收起，点开条目即可查看来源会话、处理暂停，并「编辑监听会话」增减被监听的会话。进入审核整合后由审核会话本身代表，不再重复显示监听条目。
 
 ### 命令行
 

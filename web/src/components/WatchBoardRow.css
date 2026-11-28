@@ -1,0 +1,135 @@
+/* 监听任务作为会话列表里的一行：外形跟随 .convo，左侧圆点表示监听状态。 */
+.watch-convo {
+  cursor: pointer;
+}
+
+.watch-mark {
+  flex: none;
+  width: calc(12px * var(--control-scale));
+  height: calc(12px * var(--control-scale));
+  margin-top: calc(5px * var(--control-scale));
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+}
+
+.watch-mark[data-status="waiting"],
+.watch-mark[data-status="launching"] {
+  border-color: color-mix(in srgb, var(--blue) 70%, var(--line));
+  background: color-mix(in srgb, var(--blue) 55%, transparent);
+  animation: msg-status-pulse 1.4s ease-in-out infinite;
+}
+
+.watch-mark[data-status="paused"] {
+  border-color: color-mix(in srgb, var(--warn) 70%, var(--line));
+  background: color-mix(in srgb, var(--warn) 55%, transparent);
+}
+
+.watch-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: calc(1px * var(--control-scale)) calc(7px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: var(--fs-11);
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.watch-badge[data-status="waiting"],
+.watch-badge[data-status="launching"] {
+  border-color: color-mix(in srgb, var(--blue) 50%, var(--line));
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+  color: var(--blue);
+}
+
+.watch-badge[data-status="paused"] {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.watch-toggle {
+  padding-top: calc(3px * var(--control-scale));
+  font-size: var(--fs-11);
+}
+
+.watch-detail {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--control-scale));
+  margin: 0 calc(8px * var(--control-scale)) calc(4px * var(--control-scale));
+  padding: calc(8px * var(--control-scale));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.watch-detail-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(8px * var(--control-scale));
+  flex-wrap: wrap;
+}
+
+.watch-detail-meta {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.watch-targets {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--control-scale));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.watch-target {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--control-scale));
+  min-width: 0;
+  font-size: var(--fs-12);
+}
+
+.watch-target[data-skipped="true"] {
+  opacity: 0.65;
+}
+
+.watch-target[data-blocked="true"] .watch-target-state {
+  color: var(--red);
+}
+
+.watch-target-link {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.watch-target-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.watch-target-link:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.watch-target-state {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}

@@ -1,18 +1,22 @@
 import type { Session } from "./api";
+import type { BatchWatch } from "./api-batch-watch";
+import { watchTitle } from "./batch-watch";
 import type { PendingSession } from "./pending-session";
 
 /**
  * 项目页列表行的关键词过滤。
  *
- * 列表行要么是真实会话，要么是发送后还在创建的占位行。过滤只按用户能看到的
- * 标题、摘要和分支名匹配，大小写不敏感；排队中、等待确认和运行中的会话始终
- * 显示，避免用户搜索时把需要处理或马上要跑的行藏起来。
+ * 列表行要么是真实会话，要么是发送后还在创建的占位行，要么是正在脚本监听
+ * （或已暂停等待处理）的监听任务。过滤只按用户能看到的标题、摘要和分支名
+ * 匹配，大小写不敏感；排队中、等待确认和运行中的会话与监听任务始终显示，
+ * 避免用户搜索时把需要处理或马上要跑的行藏起来。
  */
 
-/** 列表行：真实会话，或发送后还在创建的本地占位行。 */
+/** 列表行：真实会话、发送后还在创建的本地占位行，或脚本监听任务。 */
 export type BoardEntry =
   | { kind: "session"; session: Session }
-  | { kind: "pending"; pending: PendingSession };
+  | { kind: "pending"; pending: PendingSession }
+  | { kind: "watch"; watch: BatchWatch };
 
 function needleOf(query: string): string {
   return query.trim().toLowerCase();
@@ -27,6 +31,10 @@ export function boardEntryMatches(entry: BoardEntry, query: string): boolean {
   const needle = needleOf(query);
   if (!needle) return true;
   if (entry.kind === "pending") return false;
+  if (entry.kind === "watch") {
+    return includesText(watchTitle(entry.watch), needle)
+      || entry.watch.targetViews.some((target) => includesText(target.currentTitle, needle));
+  }
   const { session } = entry;
   return includesText(session.title, needle)
     || includesText(session.summary, needle)
@@ -34,14 +42,14 @@ export function boardEntryMatches(entry: BoardEntry, query: string): boolean {
 }
 
 /**
- * 即使不匹配也必须保留的行：创建中的占位行、排队中、等待确认、正在运行的会话。
- * 搜索时它们不会消失，但会在提示里单独计数。
+ * 即使不匹配也必须保留的行：创建中的占位行、脚本监听任务、排队中、等待确认、
+ * 正在运行的会话。搜索时它们不会消失，但会在提示里单独计数。
  *
  * needs_input 可能没有 pending（例如等待用户输入而不是工具确认），只按 phase
  * 判断也能保留；queued 还没开始跑，但已经在队列里，同样不能藏起来。
  */
 export function isBoardEntryAlwaysVisible(entry: BoardEntry): boolean {
-  if (entry.kind === "pending") return true;
+  if (entry.kind === "pending" || entry.kind === "watch") return true;
   const { session } = entry;
   return Boolean(session.pending)
     || session.phase === "queued"

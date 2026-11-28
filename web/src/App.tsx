@@ -54,12 +54,13 @@ import { SchedulesPanel } from "./components/SchedulesPanel";
 import { QueuePanel, SessionActionsMenu, sendContinue, useSessionActions } from "./components/SessionTools";
 import { DiffDock, HISTORY_PAGE, Thread } from "./components/Thread";
 import { UsagePanel } from "./components/UsagePanel";
+import { WatchBoardRow } from "./components/WatchBoardRow";
 import { WorkflowDock } from "./components/WorkflowDock";
 import { DENSITY_OPTIONS, useDensity } from "./density";
 import { detectWorkflowSkill, WORKFLOW_OPTIONS } from "./workflow-mode";
 import { getDeployState } from "./api-deploy";
-import { getBatchWatches } from "./api-batch-watch";
-import { activeWatchCount } from "./batch-watch";
+import { getBatchWatches, type BatchWatch } from "./api-batch-watch";
+import { activeWatchCount, isWatchInBoard } from "./batch-watch";
 import { startDiscussion } from "./api-discussion";
 import { AccessModeIcon, FontSizeIcon, MoreIcon, RefreshIcon } from "./header-icons";
 import { getMergeStatus, type MergeStatus } from "./api-git";
@@ -975,15 +976,14 @@ function compareSessions(a: Session, b: Session): number {
   return compareSessionOrder(a, b);
 }
 
-/** 占位行和真实会话混排；占位行的置顶状态固定为 false。 */
+/** 占位行和监听任务混排；两者都不参与置顶。 */
 function compareBoardEntries(a: BoardEntry, b: BoardEntry): number {
-  const left = a.kind === "session"
-    ? a.session
-    : { pinned: false, createdAt: new Date(a.pending.startedAt).toISOString() };
-  const right = b.kind === "session"
-    ? b.session
-    : { pinned: false, createdAt: new Date(b.pending.startedAt).toISOString() };
-  return compareSessionOrder(left, right);
+  const order = (entry: BoardEntry): { pinned?: boolean; createdAt: string } => {
+    if (entry.kind === "session") return entry.session;
+    if (entry.kind === "watch") return { pinned: false, createdAt: entry.watch.createdAt };
+    return { pinned: false, createdAt: new Date(entry.pending.startedAt).toISOString() };
+  };
+  return compareSessionOrder(order(a), order(b));
 }
 
 /**
@@ -1455,9 +1455,29 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   const [sweeping, setSweeping] = useState(false);
   const [showSchedules, setShowSchedules] = useState(false);
   const [showBatchWatch, setShowBatchWatch] = useState(false);
-  const [batchWatchCount, setBatchWatchCount] = useState(0);
+  /* 监听任务由项目页统一轮询：整合面板和列表条目共用同一份数据。 */
+  const [batchWatches, setBatchWatches] = useState<BatchWatch[] | null>(null);
+  const [batchWatchError, setBatchWatchError] = useState("");
+  const [watchNotice, setWatchNotice] = useState("");
+  const batchWatchCount = useMemo(() => activeWatchCount(batchWatches ?? []), [batchWatches]);
+  /* 脚本监听/暂停阶段的任务作为列表条目展示；进入审核后由审核会话本身代表。 */
+  const monitorWatches = useMemo(
+    () => (batchWatches ?? []).filter(isWatchInBoard),
+    [batchWatches],
+  );
   const [batchWatchSeed, setBatchWatchSeed] = useState<string[] | undefined>(undefined);
   const clearBatchWatchSeed = useCallback(() => setBatchWatchSeed(undefined), []);
+  /* 创建成功后收起整合框：任务本身已经作为列表条目出现。 */
+  const onWatchCreated = useCallback((watch: BatchWatch) => {
+    setShowBatchWatch(false);
+    setWatchNotice(
+      watch.status === "reviewing"
+        ? "监听任务已创建，并已自动启动整合审核会话"
+        : watch.status === "paused"
+          ? "监听任务已创建，已暂停等待处理"
+          : "监听任务已创建，正在脚本监听所选会话",
+    );
+  }, []);
   const archiveSeq = useRef(0);
 
   const refreshArchive = useCallback(async () => {
@@ -1495,6 +1515,19 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
       ));
     } catch {
       // 读取失败不影响列表；下一次刷新会再试。
+    }
+  }, [projectId]);
+
+  /* 监听任务是列表条目和整合面板的共同数据源；读取失败只影响监听相关 UI。 */
+  const refreshWatches = useCallback(async () => {
+    try {
+      const data = await getBatchWatches(projectId);
+      setBatchWatches(data.watches);
+      setBatchWatchError("");
+    } catch (reason) {
+      setBatchWatchError(reason instanceof Error && reason.message.trim()
+        ? reason.message
+        : "无法读取监听任务");
     }
   }, [projectId]);
 
@@ -1879,18 +1912,10 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     void refreshArchive();
     void refreshMerge();
     loadSettings();
-    let alive = true;
-    getBatchWatches(projectId)
-      .then((data) => {
-        if (alive) setBatchWatchCount(activeWatchCount(data.watches));
-      })
-      .catch(() => {
-        if (alive) setBatchWatchCount(0);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [projectId, loadProject, loadSettings, refreshMerge]);
+    setBatchWatches(null);
+    setBatchWatchError("");
+    void refreshWatches();
+  }, [projectId, loadProject, loadSettings, refreshMerge, refreshWatches]);
 
   /* 会话被归档或被其他端删除后，选中集合里已经不在列表中的 id 要丢掉。 */
   useEffect(() => {
@@ -1939,11 +1964,12 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
         void refreshSessions();
         void refreshArchive();
         void refreshMerge();
+        void refreshWatches();
       }
     }
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [projectId, refreshMerge]);
+  }, [projectId, refreshMerge, refreshWatches]);
 
   /* 分支合入状态可能在本页打开期间变化（例如在终端里跑完 ttb）：低频轮询，
      页面不可见时暂停；内容没变时 refreshMerge 不会触发重渲染。非 git 项目
@@ -1955,6 +1981,21 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     }, 20_000);
     return () => window.clearInterval(timer);
   }, [refreshMerge, project?.git]);
+
+  /* 监听任务的就绪/暂停状态由服务端脚本推进；列表条目或整合面板可见时
+     低频轮询，两处都不可见就停下来。 */
+  useEffect(() => {
+    if (!showBatchWatch && monitorWatches.length === 0) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshWatches();
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [refreshWatches, showBatchWatch, monitorWatches.length]);
+
+  /* 打开面板时先取一次最新状态，不必等第一个轮询周期。 */
+  useEffect(() => {
+    if (showBatchWatch) void refreshWatches();
+  }, [showBatchWatch, refreshWatches]);
 
   /* Composer 是 memo 组件：回调引用必须稳定，否则列表/会话更新会连带重渲染输入框。 */
   const onCreate = useCallback(async (event: FormEvent) => {
@@ -2218,14 +2259,15 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     },
   ];
 
-  /* 真实会话和“创建中”占位行一起排序：置顶优先，其余按创建时间倒序。 */
+  /* 真实会话、「创建中」占位行和监听任务一起排序：置顶优先，其余按创建时间倒序。 */
   const allBoardEntries = useMemo<BoardEntry[]>(() => {
     const entries: BoardEntry[] = [
       ...sessions.map((session) => ({ kind: "session" as const, session })),
+      ...monitorWatches.map((watch) => ({ kind: "watch" as const, watch })),
       ...pendingSessions.map((pending) => ({ kind: "pending" as const, pending })),
     ];
     return entries.sort(compareBoardEntries);
-  }, [sessions, pendingSessions]);
+  }, [sessions, monitorWatches, pendingSessions]);
   /* 搜索只影响渲染：排序、选择集合和「全选/归档」仍按完整会话列表计算。 */
   const boardEntries = useMemo(
     () => filterBoardEntries(allBoardEntries, boardQuery),
@@ -2429,9 +2471,12 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
           defaultProviderId={providerId}
           defaultModel={model}
           defaultEffort={effort}
+          watches={batchWatches}
+          loadError={batchWatchError}
+          onRefresh={refreshWatches}
           initialSessionIds={batchWatchSeed}
           onInitialConsumed={clearBatchWatchSeed}
-          onActiveCountChange={setBatchWatchCount}
+          onCreated={onWatchCreated}
           go={go}
         />
       )}
@@ -2493,7 +2538,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
           {trimmedBoardQuery && (
             <span className="archive-path">
               匹配 {boardEntries.length - alwaysVisibleCount} 个
-              {alwaysVisibleCount > 0 && ` · ${alwaysVisibleCount} 个排队/待确认/运行中始终显示`}
+              {alwaysVisibleCount > 0 && ` · ${alwaysVisibleCount} 个进行中/监听中始终显示`}
             </span>
           )}
         </div>
@@ -2508,44 +2553,58 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
             ? <p className="empty">没有匹配「{trimmedBoardQuery}」的对话。</p>
             : <p className="empty">还没有对话。在下面写下要做的事。</p>
         )}
-        {boardEntries.map((entry) => (
-          entry.kind === "pending"
-            ? <PendingSessionRow key={entry.pending.id} pending={entry.pending} />
-            : (
-              <div className="board-session" key={entry.session.id}>
-                <BoardSessionRow
-                  session={entry.session}
-                  open={swipeOpenId === entry.session.id}
-                  busy={deletingIds.has(entry.session.id)}
-                  continuing={continuingIds.has(entry.session.id)}
-                  selectMode={selectMode}
-                  selected={selectedIds.has(entry.session.id)}
-                  lamp={entry.session.branch ? branchLampState({
-                    merged: mergeBase ? mergedBranches.has(entry.session.branch) : undefined,
-                    untouched: untouchedBranches.has(entry.session.branch),
-                    dirty: dirtyBranches.has(entry.session.branch),
-                    active: isActivePhase(entry.session.phase),
-                  }) : undefined}
-                  mergeBase={mergeBase}
-                  onToggleOpen={onToggleSwipe}
-                  onDelete={onDeleteSession}
-                  onContinue={onContinueSession}
-                  onToggleSelect={onToggleSelect}
-                  go={go}
+        {boardEntries.map((entry) => {
+          if (entry.kind === "pending") {
+            return <PendingSessionRow key={entry.pending.id} pending={entry.pending} />;
+          }
+          if (entry.kind === "watch") {
+            return (
+              <WatchBoardRow
+                key={`watch-${entry.watch.id}`}
+                projectId={projectId}
+                watch={entry.watch}
+                sessions={sessions}
+                onChanged={refreshWatches}
+                onOpenPanel={() => setShowBatchWatch(true)}
+                go={go}
+              />
+            );
+          }
+          return (
+            <div className="board-session" key={entry.session.id}>
+              <BoardSessionRow
+                session={entry.session}
+                open={swipeOpenId === entry.session.id}
+                busy={deletingIds.has(entry.session.id)}
+                continuing={continuingIds.has(entry.session.id)}
+                selectMode={selectMode}
+                selected={selectedIds.has(entry.session.id)}
+                lamp={entry.session.branch ? branchLampState({
+                  merged: mergeBase ? mergedBranches.has(entry.session.branch) : undefined,
+                  untouched: untouchedBranches.has(entry.session.branch),
+                  dirty: dirtyBranches.has(entry.session.branch),
+                  active: isActivePhase(entry.session.phase),
+                }) : undefined}
+                mergeBase={mergeBase}
+                onToggleOpen={onToggleSwipe}
+                onDelete={onDeleteSession}
+                onContinue={onContinueSession}
+                onToggleSelect={onToggleSelect}
+                go={go}
+              />
+              {entry.session.pending && !selectMode && (
+                <Approval
+                  pending={entry.session.pending}
+                  variant="inline"
+                  busy={answeringIds.has(entry.session.id)}
+                  onAnswer={(behavior, answers, remember, approvedFull) => {
+                    void onAnswerSession(entry.session, behavior, answers, remember, approvedFull);
+                  }}
                 />
-                {entry.session.pending && !selectMode && (
-                  <Approval
-                    pending={entry.session.pending}
-                    variant="inline"
-                    busy={answeringIds.has(entry.session.id)}
-                    onAnswer={(behavior, answers, remember, approvedFull) => {
-                      void onAnswerSession(entry.session, behavior, answers, remember, approvedFull);
-                    }}
-                  />
-                )}
-              </div>
-            )
-        ))}
+              )}
+            </div>
+          );
+        })}
       </div>
       {error && (
         <Notice
@@ -2586,6 +2645,22 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
           } : undefined}
         >
           {archiveNotice}
+        </Notice>
+      )}
+      {watchNotice && (
+        <Notice
+          tone="success"
+          className="dock-notice"
+          onDismiss={() => setWatchNotice("")}
+          action={{
+            label: "查看监听整合",
+            onClick: () => {
+              setWatchNotice("");
+              setShowBatchWatch(true);
+            },
+          }}
+        >
+          {watchNotice}
         </Notice>
       )}
       {draft.restored && (
