@@ -1459,12 +1459,16 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
   const [batchWatches, setBatchWatches] = useState<BatchWatch[] | null>(null);
   const [batchWatchError, setBatchWatchError] = useState("");
   const [watchNotice, setWatchNotice] = useState("");
+  /* 监听任务刷新可能重叠（5 秒轮询与创建/取消/编辑并发），只接受最后一次请求的结果。 */
+  const watchSeqRef = useRef(0);
   const batchWatchCount = useMemo(() => activeWatchCount(batchWatches ?? []), [batchWatches]);
   /* 脚本监听/暂停阶段的任务作为列表条目展示；进入审核后由审核会话本身代表。 */
   const monitorWatches = useMemo(
     () => (batchWatches ?? []).filter(isWatchInBoard),
     [batchWatches],
   );
+  /* 面板打开、还有活跃任务（含审核中）或列表里有监听行时需要轮询。 */
+  const shouldPollWatches = showBatchWatch || batchWatchCount > 0 || monitorWatches.length > 0;
   const [batchWatchSeed, setBatchWatchSeed] = useState<string[] | undefined>(undefined);
   const clearBatchWatchSeed = useCallback(() => setBatchWatchSeed(undefined), []);
   /* 创建成功后收起整合框：任务本身已经作为列表条目出现。 */
@@ -1473,9 +1477,11 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     setWatchNotice(
       watch.status === "reviewing"
         ? "监听任务已创建，并已自动启动整合审核会话"
-        : watch.status === "paused"
-          ? "监听任务已创建，已暂停等待处理"
-          : "监听任务已创建，正在脚本监听所选会话",
+        : watch.status === "launching"
+          ? "监听任务已创建，正在采集来源会话并启动整合审核"
+          : watch.status === "paused"
+            ? "监听任务已创建，已暂停等待处理"
+            : "监听任务已创建，正在脚本监听所选会话",
     );
   }, []);
   const archiveSeq = useRef(0);
@@ -1520,11 +1526,14 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
 
   /* 监听任务是列表条目和整合面板的共同数据源；读取失败只影响监听相关 UI。 */
   const refreshWatches = useCallback(async () => {
+    const seq = ++watchSeqRef.current;
     try {
       const data = await getBatchWatches(projectId);
+      if (seq !== watchSeqRef.current) return;
       setBatchWatches(data.watches);
       setBatchWatchError("");
     } catch (reason) {
+      if (seq !== watchSeqRef.current) return;
       setBatchWatchError(reason instanceof Error && reason.message.trim()
         ? reason.message
         : "无法读取监听任务");
@@ -1982,15 +1991,15 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
     return () => window.clearInterval(timer);
   }, [refreshMerge, project?.git]);
 
-  /* 监听任务的就绪/暂停状态由服务端脚本推进；列表条目或整合面板可见时
-     低频轮询，两处都不可见就停下来。 */
+  /* 监听任务的就绪/暂停状态由服务端脚本推进；面板、列表行或审核中的任务
+     存在时低频轮询，全部落定后停下来。 */
   useEffect(() => {
-    if (!showBatchWatch && monitorWatches.length === 0) return;
+    if (!shouldPollWatches) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void refreshWatches();
     }, 5_000);
     return () => window.clearInterval(timer);
-  }, [refreshWatches, showBatchWatch, monitorWatches.length]);
+  }, [refreshWatches, shouldPollWatches]);
 
   /* 打开面板时先取一次最新状态，不必等第一个轮询周期。 */
   useEffect(() => {

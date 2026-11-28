@@ -25,6 +25,11 @@
   background: color-mix(in srgb, var(--warn) 55%, transparent);
 }
 
+.watch-mark[data-status="failed"] {
+  border-color: color-mix(in srgb, var(--red) 70%, var(--line));
+  background: color-mix(in srgb, var(--red) 55%, transparent);
+}
+
 .watch-badge {
   flex: none;
   display: inline-flex;
@@ -48,6 +53,12 @@
   border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
   background: color-mix(in srgb, var(--warn) 16%, transparent);
   color: var(--warn);
+}
+
+.watch-badge[data-status="failed"] {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--line));
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--red);
 }
 
 .watch-toggle {
