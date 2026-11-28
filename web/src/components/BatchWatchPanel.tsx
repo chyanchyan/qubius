@@ -501,7 +501,7 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
                 disabled={busyAnywhere}
                 onChange={() => toggleSession(item.id)}
               />
-              <span className="bw-session-title">{item.title}</span>
+              <span className="bw-session-title" title={item.title}>{item.title}</span>
               <span className="bw-session-phase">{PHASE_LABEL[item.phase]}</span>
             </label>
           ))}

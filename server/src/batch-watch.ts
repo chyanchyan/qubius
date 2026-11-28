@@ -853,7 +853,7 @@ export class BatchWatchManager {
         providerId: watch.providerId,
         model: watch.model,
         effort: watch.effort,
-        title: `整合审核 · ${titleSummary}`.slice(0, 80),
+        title: `[监听合并] 整合审核 · ${titleSummary}`,
       });
 
       this.deps.watchStore.update(watchId, (current) => ({

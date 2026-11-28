@@ -30,13 +30,10 @@ function localId(): string {
 /** 只发图片、没有文字时的占位标题，与服务端 createSession 一致。 */
 export const PROVISIONAL_TITLE = "新对话";
 
-/** 与服务端 session-title.ts 的 MAX_TITLE_CHARS 保持一致。 */
-const MAX_TITLE_CHARS = 40;
-
 /**
  * 新建会话的初始标题，规则与服务端 session-title.ts 的 titleFromPrompt 一致：
- * 取首条用户消息的第一行，折叠空白并截断；没有文字时退回占位词。两边必须
- * 逐字一致，matchesPending 靠标题把 SSE 先到的真实会话认回这条占位行。
+ * 取首条用户消息的第一行，折叠空白；没有文字时退回占位词。两边必须逐字
+ * 一致，matchesPending 靠标题把 SSE 先到的真实会话认回这条占位行。
  */
 export function pendingTitle(prompt: string): string {
   const firstLine = prompt
@@ -45,9 +42,7 @@ export function pendingTitle(prompt: string): string {
     .map((line) => line.trim())
     .find(Boolean) ?? "";
   const title = firstLine.replace(/\s+/g, " ").trim();
-  if (!title) return PROVISIONAL_TITLE;
-  const points = Array.from(title);
-  return points.length > MAX_TITLE_CHARS ? points.slice(0, MAX_TITLE_CHARS).join("").trim() : title;
+  return title || PROVISIONAL_TITLE;
 }
 
 export function beginPendingSession(options: {

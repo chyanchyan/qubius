@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   cleanGeneratedTitle,
-  MAX_TITLE_CHARS,
   PROVISIONAL_TITLE,
   resultText,
   titleFromPrompt,
@@ -38,14 +37,13 @@ function session(overrides: Partial<SessionCore> = {}): SessionCore {
   };
 }
 
-test("初始标题：取用户消息第一行，折叠空白并截断", () => {
+test("初始标题：取用户消息第一行，折叠空白，不截断", () => {
   assert.equal(titleFromPrompt("修一下登录超时"), "修一下登录超时");
   assert.equal(titleFromPrompt("  修一下   登录超时  "), "修一下 登录超时");
   assert.equal(titleFromPrompt("\n\n修一下登录超时\n顺便补测试"), "修一下登录超时");
   assert.equal(titleFromPrompt("修一下登录\r\n顺便补测试"), "修一下登录");
-  // 超长消息按字符截断，不把 emoji 的代理对切成两半。
-  assert.equal(titleFromPrompt("字".repeat(MAX_TITLE_CHARS + 10)), "字".repeat(MAX_TITLE_CHARS));
-  assert.equal(Array.from(titleFromPrompt("🛠".repeat(MAX_TITLE_CHARS + 3))).length, MAX_TITLE_CHARS);
+  // 不设长度上限：超长消息原样保留，由界面省略显示。
+  assert.equal(titleFromPrompt("字".repeat(200)), "字".repeat(200));
   // 只发图片（没有文字）时退回占位词，等首轮总结。
   assert.equal(titleFromPrompt(""), PROVISIONAL_TITLE);
   assert.equal(titleFromPrompt("  \n\t "), PROVISIONAL_TITLE);
@@ -62,13 +60,12 @@ test("标题清洗：只取第一行，去掉 Markdown、前缀和引号", () =>
   assert.equal(cleanGeneratedTitle("  修复   登录  "), "修复 登录");
 });
 
-test("标题清洗：去掉句末标点并截断超长标题", () => {
+test("标题清洗：去掉句末标点，不截断超长标题", () => {
   assert.equal(cleanGeneratedTitle("修复登录接口超时。"), "修复登录接口超时");
   assert.equal(cleanGeneratedTitle("修复登录接口超时？"), "修复登录接口超时");
   assert.equal(cleanGeneratedTitle("fix login timeout!"), "fix login timeout");
-  assert.equal(cleanGeneratedTitle("字".repeat(MAX_TITLE_CHARS + 10)), "字".repeat(MAX_TITLE_CHARS));
-  // 按字符截断，不把 emoji 的代理对切成两半。
-  assert.equal(Array.from(cleanGeneratedTitle("🛠".repeat(MAX_TITLE_CHARS + 3)) ?? "").length, MAX_TITLE_CHARS);
+  // 不设长度上限，完整保留。
+  assert.equal(cleanGeneratedTitle("字".repeat(200)), "字".repeat(200));
 });
 
 test("标题清洗：空内容、只有标点或退化成占位词时返回 undefined", () => {

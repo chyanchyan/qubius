@@ -33,6 +33,7 @@ import {
   type BoardEntry,
 } from "./board-filter";
 import { instanceBrand } from "./brand";
+import { writeClipboard } from "./clipboard";
 import { useAttachments } from "./Attachments";
 import {
   EFFORT_DESCRIPTION,
@@ -1260,7 +1261,7 @@ const BoardSessionRow = memo(function BoardSessionRow({
                   base={mergeBase}
                 />
               )}
-              <strong className="convo-title">{session.title}</strong>
+              <strong className="convo-title" title={session.title}>{session.title}</strong>
             </span>
             <span className="convo-sub">{session.summary || PHASE_LABEL[session.phase]}</span>
             {session.lastError && session.phase === "failed" && <span className="error">{session.lastError}</span>}
@@ -1301,7 +1302,7 @@ const PendingSessionRow = memo(function PendingSessionRow({ pending }: { pending
           <PhaseMark phase="queued" />
           <span className="convo-text">
             <span className="convo-head">
-              <strong className="convo-title">{pending.title}</strong>
+              <strong className="convo-title" title={pending.title}>{pending.title}</strong>
             </span>
             <span className="convo-sub">正在创建对话…</span>
           </span>
@@ -2083,7 +2084,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
       effort: selection.effort,
       images: attachments.images.length > 0 ? attachments.images : undefined,
       workflow,
-      title: `多模型 · ${selection.model}`.slice(0, 80),
+      title: `多模型 · ${selection.model}`,
     });
     sseTouchedAt.current.set(created.session.id, Date.now());
     setSessions((current) => upsertSession(current, created.session));
@@ -2410,7 +2411,7 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
             return (
               <div className={pendingCleanup ? "archive-row pending-cleanup" : "archive-row"} key={item.id}>
                 <div className="archive-text">
-                  <strong className="convo-title">{item.title}</strong>
+                  <strong className="convo-title" title={item.title}>{item.title}</strong>
                   <span className="convo-sub">{item.summary}</span>
                   <span className="archive-meta">
                     {pendingCleanup && <span className="error">待清理 · 本机副本仍在 · </span>}
@@ -2743,6 +2744,10 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
   const [messageNotice, setMessageNotice] = useState("");
   /* 用户手动关掉失败提示后，同一轮失败不再重复出现；下一轮结束再恢复。 */
   const [failureDismissed, setFailureDismissed] = useState(false);
+  /* 复制标题的短暂反馈；卸载时清掉定时器。 */
+  const [titleCopied, setTitleCopied] = useState<"" | "copied" | "failed">("");
+  const titleCopyTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(titleCopyTimer.current), []);
   const attachments = useAttachments();
   const draft = useDraftPersistence(sessionDraftKey(sessionId), attachments.texts, attachments.restoreTexts);
   const prompt = draft.prompt;
@@ -3584,6 +3589,15 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
     );
   }
 
+  /* 列表里标题会被省略，复制时始终用完整标题。 */
+  const sessionTitle = session.title;
+  async function copyTitle(): Promise<void> {
+    const ok = await writeClipboard(sessionTitle);
+    setTitleCopied(ok ? "copied" : "failed");
+    window.clearTimeout(titleCopyTimer.current);
+    titleCopyTimer.current = window.setTimeout(() => setTitleCopied(""), 1600);
+  }
+
   const active = session.phase === "queued" || session.phase === "running" || session.phase === "needs_input";
   /* 轮次刚落定但还有排队消息没被取走时，Enter 仍然是排队语义。 */
   const queueMode = willQueue(session, false);
@@ -3613,7 +3627,16 @@ function DetailPage({ sessionId, go, brand }: { sessionId: string; go: (to: stri
         <div className="chat-title" tabIndex={-1} ref={titleRef}>
           <div className="chat-title-head">
             {session.branch && <BranchBadge branch={session.branch} />}
-            <strong>{session.title}</strong>
+            <strong title={session.title}>{session.title}</strong>
+            <button
+              type="button"
+              className="text-btn chat-title-copy"
+              title="复制标题"
+              aria-label="复制会话标题"
+              onClick={() => void copyTitle()}
+            >
+              {titleCopied === "copied" ? "已复制" : titleCopied === "failed" ? "复制失败" : "复制"}
+            </button>
           </div>
           <span className="chat-sub" title={session.branch || session.cwd}>
             <span className="chat-sub-project">{projectName || session.projectId}</span>

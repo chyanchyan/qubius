@@ -37,8 +37,8 @@ test("占位标题直接取用户首条消息原文，规则与服务端一致",
   assert.equal(pendingTitle("修一下登录"), "修一下登录");
   assert.equal(pendingTitle("  修一下   登录  "), "修一下 登录");
   assert.equal(pendingTitle("修一下登录\n顺便补测试"), "修一下登录");
-  // 超长消息按字符截断。
-  assert.equal(pendingTitle("字".repeat(50)).length, 40);
+  // 不设长度上限：超长消息原样保留，由界面省略显示。
+  assert.equal(pendingTitle("字".repeat(50)), "字".repeat(50));
   // 只发图片时退回占位词。
   assert.equal(pendingTitle(""), PROVISIONAL_TITLE);
 });

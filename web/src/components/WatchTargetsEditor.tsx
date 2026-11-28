@@ -103,7 +103,7 @@ export const WatchTargetsEditor = memo(function WatchTargetsEditor({
                 disabled={disabled || (option.phase === "missing" && !checked)}
                 onChange={() => toggle(option.id)}
               />
-              <span className="wte-title">{option.title}</span>
+              <span className="wte-title" title={option.title}>{option.title}</span>
               <span className="wte-phase">
                 {option.phase === "missing" ? "已删除" : PHASE_LABEL[option.phase]}
                 {option.skipped ? " · 已跳过" : ""}

@@ -48,6 +48,7 @@ export const WatchBoardRow = memo(function WatchBoardRow({
 
   const ready = watchReadyCount(watch);
   const total = watch.targetViews.length;
+  const title = watchTitle(watch);
   const paused = watch.status === "paused";
   const failed = watch.status === "failed";
   const canResume = paused || failed;
@@ -84,7 +85,7 @@ export const WatchBoardRow = memo(function WatchBoardRow({
               <span className="watch-badge" data-status={watch.status}>
                 {WATCH_STATUS_LABEL[watch.status]}
               </span>
-              <strong className="convo-title">{watchTitle(watch)}</strong>
+              <strong className="convo-title" title={title}>{title}</strong>
             </span>
             <span className="convo-sub">
               就绪 {ready}/{total} · {summarizeActions(watch.actions)}

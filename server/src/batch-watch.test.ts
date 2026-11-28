@@ -310,6 +310,7 @@ test("BatchWatchManager 脚本监听会话：等待不触发模型，全部完�
     await waitFor(() => launched.length === 1);
     assert.equal(launched[0]!.model, "model-review");
     assert.equal(launched[0]!.effort, "xhigh");
+    assert.match(launched[0]!.title, /^\[监听合并\] /);
     assert.match(launched[0]!.prompt, /功能 A/);
     assert.match(launched[0]!.prompt, /功能 B/);
     assert.equal(watchStore.get(watch.id)?.status, "reviewing");

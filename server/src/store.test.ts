@@ -1002,18 +1002,18 @@ test("updateRunConfig 改 provider/model/effort 后 summary 与落盘都更新",
   }
 });
 
-test("updateMeta 标题 80 字通过、81 字报错", async () => {
+test("updateMeta 接受任意长度标题，只拒绝空标题", async () => {
   const dataDir = tempDir();
   let store: Store | undefined;
   try {
     store = new Store(dataDir);
     store.create(createInput("s1", "边界"));
 
-    const ok = "字".repeat(80);
-    assert.equal(store.updateMeta("s1", { title: ok }).title, ok);
-    assert.throws(() => store?.updateMeta("s1", { title: "字".repeat(81) }), /标题最多 80 字/);
+    const long = "字".repeat(200);
+    assert.equal(store.updateMeta("s1", { title: long }).title, long);
+    assert.throws(() => store?.updateMeta("s1", { title: "   " }), /标题不能为空/);
     // 失败调用不改动已有标题。
-    assert.equal(store.require("s1").title, ok);
+    assert.equal(store.require("s1").title, long);
   } finally {
     await store?.flush().catch(() => undefined);
     fs.rmSync(dataDir, { recursive: true, force: true });

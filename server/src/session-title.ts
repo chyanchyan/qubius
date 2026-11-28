@@ -19,17 +19,15 @@ export const PROVISIONAL_TITLE = "新对话";
 const REQUEST_CHARS = 4_000;
 const REPLY_CHARS = 4_000;
 
-/** 标题硬上限；模型偶尔会违反 20 字约定，超出时截断而不是整条丢弃。 */
-export const MAX_TITLE_CHARS = 40;
-
 /** 生成标题最多等这么久；卡住时放弃，下一轮成功后再试。 */
 const TITLE_TIMEOUT_MS = 25_000;
 
 /**
- * 新建会话的初始标题：取首条用户消息的第一行，折叠空白并按字符截断。
+ * 新建会话的初始标题：取首条用户消息的第一行，折叠空白。
  *
  * 用原文而不是等首轮总结，列表在会话创建时就显示这次要做什么；首轮结束后
- * 仍会被总结出的标题替换。没有文字（只发图片）时退回占位词。
+ * 仍会被总结出的标题替换。标题不设长度上限，界面用省略号显示、悬停看全文。
+ * 没有文字（只发图片）时退回占位词。
  */
 export function titleFromPrompt(prompt: string): string {
   const firstLine = prompt
@@ -39,8 +37,7 @@ export function titleFromPrompt(prompt: string): string {
     .find(Boolean) ?? "";
   const title = firstLine.replace(/\s+/g, " ").trim();
   if (!title) return PROVISIONAL_TITLE;
-  const points = Array.from(title);
-  return points.length > MAX_TITLE_CHARS ? points.slice(0, MAX_TITLE_CHARS).join("").trim() : title;
+  return title;
 }
 
 /** 标题模型只做一件事，不需要项目说明和工具。 */
@@ -100,7 +97,7 @@ export function titlePrompt(input: Pick<TitleSummaryInput, "request" | "reply">)
 
 /**
  * 清洗模型返回的标题：取第一行，去掉 Markdown/「标题：」前缀、成对引号和
- * 句末标点，折叠空白，超长截断。空标题或退化成占位词时返回 undefined。
+ * 句末标点，折叠空白。标题不设长度上限，超长时由界面省略显示。
  */
 export function cleanGeneratedTitle(raw: string): string | undefined {
   const firstLine = raw
@@ -118,9 +115,7 @@ export function cleanGeneratedTitle(raw: string): string | undefined {
   title = title.replace(/[。．.!,，、;；:：?？]+$/g, "").trim();
   title = title.replace(/\s+/g, " ");
   if (!title) return undefined;
-  const points = Array.from(title);
-  if (points.length > MAX_TITLE_CHARS) title = points.slice(0, MAX_TITLE_CHARS).join("").trim();
-  if (!title || title === PROVISIONAL_TITLE) return undefined;
+  if (title === PROVISIONAL_TITLE) return undefined;
   return title;
 }
 

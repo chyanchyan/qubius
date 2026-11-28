@@ -481,7 +481,6 @@ export class Store {
       if (typeof patch.title !== "string") throw new Error("标题不能为空");
       const title = patch.title.trim();
       if (!title) throw new Error("标题不能为空");
-      if (title.length > 80) throw new Error("标题最多 80 字");
       next.title = title;
       // 用户显式改名后，后台总结不能再把标题覆盖回去。
       delete next.titlePending;
@@ -502,7 +501,7 @@ export class Store {
     const current = this.sessions.get(id);
     if (!current || current.titlePending !== true) return undefined;
     const nextTitle = title.trim();
-    if (!nextTitle || nextTitle.length > 80) return undefined;
+    if (!nextTitle) return undefined;
     const next: SessionCore = { ...current, title: nextTitle, updatedAt: new Date().toISOString() };
     delete next.titlePending;
     return this.commit(next);

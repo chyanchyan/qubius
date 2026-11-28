@@ -89,19 +89,15 @@ export function useSessionActions(
     const input = await dialogs.prompt({
       title: "重命名对话",
       message: "标题会显示在列表和标签页上。",
-      label: "标题（1-80 字）",
+      label: "标题",
       initialValue: session.title,
-      maxLength: 80,
       confirmLabel: "保存",
-      validate: (value) => {
-        const title = value.trim();
-        return title.length >= 1 && title.length <= 80 ? "" : "标题需要 1 到 80 个字符";
-      },
+      validate: (value) => (value.trim() ? "" : "标题不能为空"),
     });
     if (input === null) return;
     const title = input.trim();
-    if (title.length < 1 || title.length > 80) {
-      onError("标题需要 1 到 80 个字符");
+    if (!title) {
+      onError("标题不能为空");
       return;
     }
     if (!start("rename")) return;

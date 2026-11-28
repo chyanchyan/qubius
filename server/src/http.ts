@@ -2103,7 +2103,7 @@ export async function createSession(
   // 调用方（定时任务/API）显式给标题时直接采用；否则先用用户首条消息的原文
   // 做标题，首个成功轮次结束后再由 agent 总结成更贴合实际的标题。
   const explicitTitle = typeof record.title === "string" && record.title.trim()
-    ? record.title.trim().slice(0, 80)
+    ? record.title.trim()
     : undefined;
   const title = explicitTitle ?? titleFromPrompt(prompt);
   let images;
@@ -2600,7 +2600,7 @@ async function forkSession(
     }
 
     const newId = randomUUID();
-    const title = `${latest.title}（分叉）`.slice(0, 80);
+    const title = `${latest.title}（分叉）`;
     const summary = clip(target.text, 160) || "图片对话";
 
     let cwd = project.path;

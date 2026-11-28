@@ -377,20 +377,14 @@ export function OverviewPage({ go, children }: Props) {
       message: "标题会显示在总览和对话页里。",
       label: "标题",
       initialValue: session.title,
-      placeholder: "输入 1-80 个字符",
-      maxLength: 80,
+      placeholder: "输入标题",
       confirmLabel: "保存",
-      validate: (value) => {
-        const title = value.trim();
-        if (title.length < 1) return "标题不能为空";
-        if (title.length > 80) return "标题最多 80 个字符";
-        return "";
-      },
+      validate: (value) => (value.trim() ? "" : "标题不能为空"),
     });
     if (input === null) return;
     const title = input.trim();
-    if (title.length < 1 || title.length > 80) {
-      setActionError("标题需要 1 到 80 个字符");
+    if (!title) {
+      setActionError("标题不能为空");
       return;
     }
     setBusyId(session.id);
@@ -560,7 +554,7 @@ export function OverviewPage({ go, children }: Props) {
                           {session.pinned ? "★" : "·"}
                         </span>
                         <span className="convo-text">
-                          <strong className="convo-title">
+                          <strong className="convo-title" title={title}>
                             {session.title
                               ? <HighlightText text={session.title} query={trimmedQuery} />
                               : title}
