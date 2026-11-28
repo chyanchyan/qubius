@@ -922,6 +922,60 @@ export class BatchWatchManager {
     return evaluated;
   }
 
+  /**
+   * 修改等待中或已暂停任务的监听会话集合：
+   * - 已有的目标保留原始 title/branch/skipped 快照；
+   * - 新加入的目标按当前 Store 中的会话补全快照；
+   * - 更新后回到 waiting 并立即重新求值（可能重新进入 waiting/paused/reviewing）。
+   */
+  async updateTargets(watchId: string, sessionIds: string[]): Promise<BatchWatchView> {
+    const watch = this.deps.watchStore.get(watchId);
+    if (!watch) throw new BatchWatchError(404, "找不到批量监听任务");
+    if (watch.status !== "waiting" && watch.status !== "paused") {
+      throw new BatchWatchError(409, "只有等待中或已暂停的监听任务才能修改监听会话");
+    }
+
+    const uniqueIds = [...new Set(sessionIds.map((id) => id.trim()).filter(Boolean))];
+    if (uniqueIds.length === 0) throw new BatchWatchError(400, "至少选择一个要监听的会话");
+    if (uniqueIds.length > MAX_WATCH_SESSIONS) {
+      throw new BatchWatchError(400, `最多同时监听 ${MAX_WATCH_SESSIONS} 个会话`);
+    }
+
+    const project = this.deps.config.projects.find((item) => item.id === watch.projectId);
+    if (!project) throw new BatchWatchError(404, "找不到项目");
+
+    const existing = new Map(watch.targets.map((target) => [target.sessionId, target]));
+    const targets: BatchWatchTarget[] = uniqueIds.map((sessionId) => {
+      // 已在任务里的目标保留原快照：来源会话即使已被归档/删除，
+      // 也允许继续保留（或由用户在编辑器里取消勾选移除）。
+      const previous = existing.get(sessionId);
+      if (previous) return { ...previous };
+      const session = this.deps.store.get(sessionId);
+      if (!session || session.projectId !== project.id) {
+        throw new BatchWatchError(400, `会话 ${sessionId} 不存在或不属于该项目`);
+      }
+      return {
+        sessionId: session.id,
+        title: session.title,
+        ...(session.branch ? { branch: session.branch } : {}),
+      };
+    });
+
+    this.deps.watchStore.update(watchId, (current) => ({
+      ...current,
+      targets,
+      status: "waiting",
+      pauseReason: undefined,
+      pausedSessionIds: undefined,
+      lastError: undefined,
+      finishedAt: undefined,
+    }));
+
+    const evaluated = await this.evaluate(watchId);
+    if (!evaluated) throw new BatchWatchError(404, "找不到批量监听任务");
+    return evaluated;
+  }
+
   cancel(watchId: string): BatchWatchView {
     const watch = this.deps.watchStore.get(watchId);
     if (!watch) throw new BatchWatchError(404, "找不到批量监听任务");
@@ -958,6 +1012,7 @@ function asRecord(value: unknown): Record<string, unknown> {
  * - POST   /api/projects/<projectId>/batch-watches
  * - POST   /api/projects/<projectId>/batch-watches/<id>/resume
  * - POST   /api/projects/<projectId>/batch-watches/<id>/cancel
+ * - PATCH  /api/projects/<projectId>/batch-watches/<id>（增减被监听的会话）
  * - DELETE /api/projects/<projectId>/batch-watches/<id>
  */
 export async function handleBatchWatchRoutes(ctx: FeatureContext): Promise<FeatureResult | null> {
@@ -1015,6 +1070,16 @@ export async function handleBatchWatchRoutes(ctx: FeatureContext): Promise<Featu
     const action = singleMatch![3] || "";
     const existing = manager.listViews(project.id).find((item) => item.id === watchId);
     if (!existing) return { status: 404, body: { error: "找不到批量监听任务" } };
+
+    if (!action && ctx.method === "PATCH") {
+      const body = asRecord(await ctx.readJson(ctx.req));
+      const rawIds = body.sessionIds;
+      if (!Array.isArray(rawIds) || !rawIds.every((id) => typeof id === "string")) {
+        throw new BatchWatchError(400, "sessionIds 必须是字符串数组");
+      }
+      const watch = await manager.updateTargets(watchId, rawIds);
+      return { status: 200, body: { watch } };
+    }
 
     if (action === "/resume") {
       if (ctx.method !== "POST") return { status: 405, body: { error: "不支持的方法" } };

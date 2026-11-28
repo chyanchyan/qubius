@@ -3,8 +3,12 @@ import test from "node:test";
 import {
   activeWatchCount,
   defaultWatchSessionIds,
+  isWatchInBoard,
   summarizeActions,
   toggleWatchAction,
+  watchCanEditTargets,
+  watchReadyCount,
+  watchTitle,
 } from "./batch-watch";
 import type { BatchWatch } from "./api-batch-watch";
 import type { Session } from "./api";
@@ -31,6 +35,67 @@ function makeSession(id: string, phase: Session["phase"]): Session {
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
 }
+
+function makeWatch(overrides: Partial<BatchWatch> = {}): BatchWatch {
+  return {
+    id: "watch-1",
+    projectId: "p1",
+    providerId: "prov",
+    providerName: "Prov",
+    model: "m1",
+    effort: "high",
+    actions: { commit: true, mergeMode: "merge", push: false, deploy: false },
+    status: "waiting",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    targetViews: [
+      {
+        sessionId: "s1",
+        title: "会话一",
+        currentTitle: "会话一",
+        phase: "running",
+        ready: false,
+      },
+      {
+        sessionId: "s2",
+        title: "会话二",
+        currentTitle: "会话二",
+        phase: "completed",
+        ready: true,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+test("监听任务的列表标题、就绪进度与可编辑状态", () => {
+  const watch = makeWatch();
+  assert.equal(watchTitle(watch), "监听 · 会话一 等 2 个会话");
+  assert.equal(watchReadyCount(watch), 1);
+  assert.equal(isWatchInBoard(watch), true);
+  assert.equal(watchCanEditTargets(watch), true);
+
+  const single = makeWatch({
+    targetViews: [{
+      sessionId: "s1",
+      title: "会话一",
+      currentTitle: "最新标题",
+      phase: "running",
+      ready: false,
+    }],
+  });
+  assert.equal(watchTitle(single), "监听 · 最新标题");
+
+  // 进入审核整合后不再作为列表条目，也不能再改监听会话。
+  const reviewing = makeWatch({ status: "reviewing" });
+  assert.equal(isWatchInBoard(reviewing), false);
+  assert.equal(watchCanEditTargets(reviewing), false);
+
+  // 暂停的任务仍在列表里，可以继续编辑。
+  const paused = makeWatch({ status: "paused" });
+  assert.equal(isWatchInBoard(paused), true);
+  assert.equal(watchCanEditTargets(paused), true);
+});
 
 test("toggleWatchAction 保持动作组合的一致性", () => {
   const initial = { commit: false, mergeMode: "none" as const, push: false, deploy: false };

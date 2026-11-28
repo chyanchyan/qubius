@@ -1,11 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { memo, useEffect, useRef, useState, type FormEvent } from "react";
 import { EFFORTS, PHASE_LABEL, type Effort, type Provider, type Session } from "../api";
 import {
   cancelBatchWatch,
   createBatchWatch,
   deleteBatchWatch,
-  getBatchWatches,
   resumeBatchWatch,
+  updateBatchWatchTargets,
   type BatchMergeMode,
   type BatchWatch,
   type BatchWatchActions,
@@ -16,13 +16,14 @@ import {
   defaultWatchSessionIds,
   summarizeActions,
   toggleWatchAction,
+  watchCanEditTargets,
 } from "../batch-watch";
 import { effortLabel, effortOptionLabel, formatMessageFullTime, formatRelativeTime } from "../format";
 import { Notice, useDialogs } from "../ui";
 import { useNow } from "../useNow";
+import { WatchTargetsEditor } from "./WatchTargetsEditor";
 import "./BatchWatchPanel.css";
 
-const REFRESH_MS = 5_000;
 const NOW_REFRESH_MS = 30_000;
 
 export interface BatchWatchPanelProps {
@@ -32,10 +33,17 @@ export interface BatchWatchPanelProps {
   defaultProviderId: string;
   defaultModel: string;
   defaultEffort: Effort;
+  /** 由项目页统一轮询的监听任务列表；null 表示还没读取到。 */
+  watches: readonly BatchWatch[] | null;
+  /** 列表读取失败时的提示；操作刷新失败由面板自己提示。 */
+  loadError?: string;
+  /** 重新读取监听任务（创建/恢复/取消/删除/编辑后调用）。 */
+  onRefresh: () => Promise<void>;
   /** 从外部（如列表多选模式）一键带入要监听的会话 id。 */
   initialSessionIds?: readonly string[];
   onInitialConsumed?: () => void;
-  onActiveCountChange?: (count: number) => void;
+  /** 创建成功：项目页据此收起整合框，新任务作为列表条目展示。 */
+  onCreated?: (watch: BatchWatch) => void;
   go: (to: string) => void;
 }
 
@@ -51,16 +59,19 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
   defaultProviderId,
   defaultModel,
   defaultEffort,
+  watches,
+  loadError,
+  onRefresh,
   initialSessionIds,
   onInitialConsumed,
-  onActiveCountChange,
+  onCreated,
   go,
 }: BatchWatchPanelProps) {
   const dialogs = useDialogs();
   const now = useNow(NOW_REFRESH_MS);
-  const [watches, setWatches] = useState<BatchWatch[] | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [editingId, setEditingId] = useState("");
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const busyAnywhere = busy.size > 0;
   const busyRef = useRef(false);
@@ -83,9 +94,6 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
     baseBranch: "main",
   });
   const [extraPrompt, setExtraPrompt] = useState("");
-
-  const mounted = useRef(true);
-  const seqRef = useRef(0);
 
   // 外部传入预选会话（例如在列表多选后点「监听整合」）时覆盖当前勾选。
   useEffect(() => {
@@ -120,59 +128,6 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
       return changed ? next : current;
     });
   }, [sessions]);
-
-  const refresh = useCallback(async () => {
-    const seq = ++seqRef.current;
-    try {
-      const data = await getBatchWatches(projectId);
-      if (!mounted.current || seq !== seqRef.current) return;
-      setWatches(data.watches);
-      onActiveCountChange?.(
-        data.watches.filter((item) =>
-          item.status === "waiting"
-          || item.status === "paused"
-          || item.status === "launching"
-          || item.status === "reviewing",
-        ).length,
-      );
-      setError("");
-    } catch (reason) {
-      if (!mounted.current || seq !== seqRef.current) return;
-      setError(errorText(reason, "无法读取批量监听任务"));
-    }
-  }, [projectId, onActiveCountChange]);
-
-  useEffect(() => {
-    mounted.current = true;
-    void refresh();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      void refresh();
-    }, REFRESH_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      mounted.current = false;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [refresh]);
-
-  // 会话列表状态通过 SSE 更新时，顺手刷新监听面板以即时反映就绪/暂停变化。
-  const phaseSignature = useMemo(
-    () => sessions.map((item) => `${item.id}:${item.phase}`).join("|"),
-    [sessions],
-  );
-  useEffect(() => {
-    if (watches === null) return;
-    const hasActive = watches.some((item) =>
-      item.status === "waiting" || item.status === "paused" || item.status === "reviewing" || item.status === "launching",
-    );
-    if (hasActive) void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phaseSignature]);
 
   const currentProvider = providers.find((item) => item.id === providerId);
 
@@ -251,7 +206,8 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
             ? "监听已创建，但有会话需要处理，已暂停等待确认"
             : "已开始脚本监听（等待阶段零 token），全部完成后将自动启动审核整合",
       );
-      await refresh();
+      await onRefresh();
+      onCreated?.(data.watch);
     } catch (reason) {
       setError(errorText(reason, "创建批量监听失败"));
     } finally {
@@ -261,20 +217,18 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
 
   async function onResume(watch: BatchWatch, options: { skipBlockers?: boolean; skipSessionId?: string }): Promise<void> {
     if (busyAnywhere) return;
-    seqRef.current += 1;
     const key = `${watch.id}:resume`;
     markBusy(key);
     setError("");
     setNote("");
     try {
       const data = await resumeBatchWatch(projectId, watch.id, options);
-      setWatches((current) => current?.map((item) => (item.id === watch.id ? data.watch : item)) ?? null);
       if (data.watch.status === "reviewing") {
         setNote("已恢复并自动启动整合审核会话");
       } else if (data.watch.status === "waiting") {
         setNote("已恢复脚本监听，等待其余会话完成");
       }
-      await refresh();
+      await onRefresh();
     } catch (reason) {
       setError(errorText(reason, "恢复监听失败"));
     } finally {
@@ -284,14 +238,12 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
 
   async function onCancel(watch: BatchWatch): Promise<void> {
     if (busyAnywhere) return;
-    seqRef.current += 1;
     const key = `${watch.id}:cancel`;
     markBusy(key);
     setError("");
     try {
-      const data = await cancelBatchWatch(projectId, watch.id);
-      setWatches((current) => current?.map((item) => (item.id === watch.id ? data.watch : item)) ?? null);
-      await refresh();
+      await cancelBatchWatch(projectId, watch.id);
+      await onRefresh();
     } catch (reason) {
       setError(errorText(reason, "取消监听失败"));
     } finally {
@@ -307,15 +259,13 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
       confirmLabel: "删除",
       danger: true,
     });
-    if (!confirmed || !mounted.current || busyRef.current) return;
-    seqRef.current += 1;
+    if (!confirmed || busyRef.current) return;
     const key = `${watch.id}:delete`;
     markBusy(key);
     setError("");
     try {
       await deleteBatchWatch(projectId, watch.id);
-      setWatches((current) => current?.filter((item) => item.id !== watch.id) ?? null);
-      await refresh();
+      await onRefresh();
     } catch (reason) {
       setError(errorText(reason, "删除监听记录失败"));
     } finally {
@@ -340,8 +290,9 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
 
       {error && <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice>}
       {note && <Notice tone="success" onDismiss={() => setNote("")}>{note}</Notice>}
+      {loadError && <Notice tone="error">{loadError}</Notice>}
 
-      {watches === null && <p className="muted">正在读取监听任务…</p>}
+      {watches === null && !loadError && <p className="muted">正在读取监听任务…</p>}
       {watches && watches.length > 0 && (
         <div className="bw-list">
           {watches.map((watch) => {
@@ -373,42 +324,56 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
                   </time>
                 </p>
 
-                <ul className="bw-targets">
-                  {watch.targetViews.map((target) => (
-                    <li
-                      key={target.sessionId}
-                      className="bw-target"
-                      data-skipped={target.skipped ? "true" : undefined}
-                      data-blocked={target.blocker ? "true" : undefined}
-                    >
-                      <button
-                        type="button"
-                        className="bw-target-link"
-                        disabled={target.phase === "missing"}
-                        onClick={() => go(`/sessions/${target.sessionId}`)}
+                {editingId === watch.id ? (
+                  <WatchTargetsEditor
+                    sessions={sessions}
+                    targets={watch.targetViews}
+                    busy={busyAnywhere}
+                    onSave={async (sessionIds) => {
+                      await updateBatchWatchTargets(projectId, watch.id, sessionIds);
+                      setEditingId("");
+                      await onRefresh();
+                    }}
+                    onCancel={() => setEditingId("")}
+                  />
+                ) : (
+                  <ul className="bw-targets">
+                    {watch.targetViews.map((target) => (
+                      <li
+                        key={target.sessionId}
+                        className="bw-target"
+                        data-skipped={target.skipped ? "true" : undefined}
+                        data-blocked={target.blocker ? "true" : undefined}
                       >
-                        {target.currentTitle}
-                      </button>
-                      <span className="bw-target-state">
-                        {target.skipped
-                          ? "已跳过"
-                          : target.phase === "missing"
-                            ? "已删除"
-                            : PHASE_LABEL[target.phase]}
-                      </span>
-                      {canResume && !target.skipped && target.blocker && (
                         <button
                           type="button"
-                          className="text-btn bw-skip-one"
-                          disabled={busyAnywhere}
-                          onClick={() => void onResume(watch, { skipSessionId: target.sessionId })}
+                          className="bw-target-link"
+                          disabled={target.phase === "missing"}
+                          onClick={() => go(`/sessions/${target.sessionId}`)}
                         >
-                          跳过此会话
+                          {target.currentTitle}
                         </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                        <span className="bw-target-state">
+                          {target.skipped
+                            ? "已跳过"
+                            : target.phase === "missing"
+                              ? "已删除"
+                              : PHASE_LABEL[target.phase]}
+                        </span>
+                        {canResume && !target.skipped && target.blocker && (
+                          <button
+                            type="button"
+                            className="text-btn bw-skip-one"
+                            disabled={busyAnywhere}
+                            onClick={() => void onResume(watch, { skipSessionId: target.sessionId })}
+                          >
+                            跳过此会话
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
 
                 {watch.pauseReason && watch.status === "paused" && (
                   <Notice tone="warn" className="bw-notice">
@@ -421,58 +386,70 @@ export const BatchWatchPanel = memo(function BatchWatchPanel({
                   </Notice>
                 )}
 
-                <div className="actions">
-                  {watch.reviewSessionId && (
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => go(`/sessions/${watch.reviewSessionId}`)}
-                    >
-                      打开审核会话
-                      {watch.reviewPhase && watch.reviewPhase !== "missing"
-                        ? `（${PHASE_LABEL[watch.reviewPhase]}）`
-                        : ""}
-                    </button>
-                  )}
-                  {canResume && (
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={busyAnywhere}
-                      onClick={() => void onResume(watch, { skipBlockers: false })}
-                    >
-                      重新检查并继续
-                    </button>
-                  )}
-                  {canResume && hasBlockers && (
-                    <button
-                      type="button"
-                      className="text-btn"
-                      disabled={busyAnywhere}
-                      onClick={() => void onResume(watch, { skipBlockers: true })}
-                    >
-                      跳过异常会话继续
-                    </button>
-                  )}
-                  {canCancel && (
+                {editingId !== watch.id && (
+                  <div className="actions">
+                    {watchCanEditTargets(watch) && (
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={busyAnywhere}
+                        onClick={() => setEditingId(watch.id)}
+                      >
+                        编辑监听会话
+                      </button>
+                    )}
+                    {watch.reviewSessionId && (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => go(`/sessions/${watch.reviewSessionId}`)}
+                      >
+                        打开审核会话
+                        {watch.reviewPhase && watch.reviewPhase !== "missing"
+                          ? `（${PHASE_LABEL[watch.reviewPhase]}）`
+                          : ""}
+                      </button>
+                    )}
+                    {canResume && (
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={busyAnywhere}
+                        onClick={() => void onResume(watch, { skipBlockers: false })}
+                      >
+                        重新检查并继续
+                      </button>
+                    )}
+                    {canResume && hasBlockers && (
+                      <button
+                        type="button"
+                        className="text-btn"
+                        disabled={busyAnywhere}
+                        onClick={() => void onResume(watch, { skipBlockers: true })}
+                      >
+                        跳过异常会话继续
+                      </button>
+                    )}
+                    {canCancel && (
+                      <button
+                        type="button"
+                        className="text-btn danger"
+                        disabled={busyAnywhere}
+                        onClick={() => void onCancel(watch)}
+                      >
+                        取消监听
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="text-btn danger"
                       disabled={busyAnywhere}
-                      onClick={() => void onCancel(watch)}
+                      onClick={() => void onRemove(watch)}
                     >
-                      取消监听
+                      删除记录
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="text-btn danger"
-                    disabled={busyAnywhere}
-                    onClick={() => void onRemove(watch)}
-                  >
-                    删除记录
-                  </button>
-                </div>
+                  </div>
+                )}
               </article>
             );
           })}

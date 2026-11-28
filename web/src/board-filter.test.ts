@@ -7,6 +7,7 @@ import {
   type BoardEntry,
 } from "./board-filter";
 import type { Pending, Session } from "./api";
+import type { BatchWatch } from "./api-batch-watch";
 
 function approval(): Pending {
   return {
@@ -47,8 +48,38 @@ function entry(extra: Partial<Session> = {}): BoardEntry {
 
 function ids(entries: BoardEntry[]): string[] {
   return entries.map((item) => (
-    item.kind === "session" ? item.session.id : item.pending.id
+    item.kind === "session"
+      ? item.session.id
+      : item.kind === "watch"
+        ? `watch-${item.watch.id}`
+        : item.pending.id
   ));
+}
+
+function watch(id: string, targets: Array<{ sessionId: string; title: string }>): BatchWatch {
+  return {
+    id,
+    projectId: "p",
+    providerId: "prov",
+    providerName: "接口",
+    model: "m",
+    effort: "high",
+    actions: { commit: true, mergeMode: "merge", push: false, deploy: false },
+    status: "waiting",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    targetViews: targets.map((target) => ({
+      sessionId: target.sessionId,
+      title: target.title,
+      currentTitle: target.title,
+      phase: "running",
+      ready: false,
+    })),
+  };
+}
+
+function watchEntry(id: string, targets: Array<{ sessionId: string; title: string }>): BoardEntry {
+  return { kind: "watch", watch: watch(id, targets) };
 }
 
 test("按标题匹配，大小写不敏感", () => {
@@ -151,4 +182,19 @@ test("boardEntryMatches 只判断元数据，不包含始终可见规则", () =>
   assert.equal(boardEntryMatches(waiting, "授权"), true);
   assert.equal(boardEntryMatches(waiting, "zzz"), false);
   assert.equal(boardEntryMatches(waiting, "  "), true);
+});
+
+test("监听任务按来源会话标题匹配，且始终保留在列表里", () => {
+  const watch = watchEntry("w1", [
+    { sessionId: "s1", title: "修复移动端布局" },
+    { sessionId: "s2", title: "补充测试" },
+  ]);
+  assert.equal(boardEntryMatches(watch, "移动端"), true);
+  assert.equal(boardEntryMatches(watch, "补充"), true);
+  assert.equal(boardEntryMatches(watch, "监听"), true);
+  assert.equal(boardEntryMatches(watch, "zzz"), false);
+  assert.equal(isBoardEntryAlwaysVisible(watch), true);
+
+  const entries: BoardEntry[] = [entry({ id: "other", title: "其他" }), watch];
+  assert.deepEqual(ids(filterBoardEntries(entries, "zzz")), ["watch-w1"]);
 });
