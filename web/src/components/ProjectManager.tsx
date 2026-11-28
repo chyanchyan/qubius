@@ -168,7 +168,7 @@ export function ProjectManager({ onChange }: { onChange?: () => void }) {
               </label>
             </div>
             <p className="project-manage-add-hint">
-              路径必须在运行服务的开发机上，且已经是 git 仓库。添加后立即出现在项目列表里，重启后仍保留。
+              路径必须在运行服务的开发机上；目录不存在时会自动创建并初始化 git 仓库，已存在的目录必须是 git 仓库。添加后立即出现在项目列表里，重启后仍保留。
             </p>
             {addError && <p className="error" role="alert">{addError}</p>}
             <div className="project-manage-add-actions">

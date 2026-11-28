@@ -88,6 +88,15 @@ test("createGitRepo 创建 main 分支的 git 仓库并提交初始版本，可�
   assert.equal(fs.statSync(worktree).isDirectory(), true);
 });
 
+test("createGitRepo 可递归创建缺失的上级目录", async () => {
+  const base = tempBase();
+  const target = path.join(base, "a", "b", "demo");
+  await withEnv(IDENTITY, () => createGitRepo(target, { createParents: true }));
+  assert.equal(fs.statSync(target).isDirectory(), true);
+  assert.equal(git(target, "rev-parse", "--is-inside-work-tree"), "true");
+  assert.equal(git(target, "log", "--oneline").split("\n").length, 1);
+});
+
 test("createGitRepo 在初始化提交失败时删掉刚建的目录", async () => {
   const base = tempBase();
   const target = path.join(base, "broken");
@@ -105,4 +114,39 @@ test("createGitRepo 在初始化提交失败时删掉刚建的目录", async () 
     (error: unknown) => error instanceof RepoCreateError && /创建 git 仓库失败/.test(error.message),
   );
   assert.equal(fs.existsSync(target), false);
+});
+
+test("createGitRepo 递归创建后初始化失败时连新建的上级空目录一起清理", async () => {
+  const base = tempBase();
+  const target = path.join(base, "a", "b", "broken");
+  const isolated = {
+    ...IDENTITY,
+    GIT_AUTHOR_NAME: undefined,
+    GIT_AUTHOR_EMAIL: undefined,
+    GIT_COMMITTER_NAME: undefined,
+    GIT_COMMITTER_EMAIL: undefined,
+    GIT_CONFIG_GLOBAL: path.join(base, "no-global-config"),
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+  await assert.rejects(
+    withEnv(isolated, () => createGitRepo(target, { createParents: true })),
+    (error: unknown) => error instanceof RepoCreateError && /创建 git 仓库失败/.test(error.message),
+  );
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(fs.existsSync(path.join(base, "a")), false);
+  // 原有目录不能被回收。
+  assert.equal(fs.statSync(base).isDirectory(), true);
+});
+
+test("createGitRepo 目标已存在但不是目录时返回明确错误", async () => {
+  const base = tempBase();
+  const target = path.join(base, "plain.txt");
+  fs.writeFileSync(target, "x");
+  await assert.rejects(
+    () => createGitRepo(target, { createParents: true }),
+    (error: unknown) => error instanceof RepoCreateError
+      && error.status === 409
+      && /路径已存在但不是目录/.test(error.message),
+  );
+  assert.equal(fs.readFileSync(target, "utf8"), "x");
 });

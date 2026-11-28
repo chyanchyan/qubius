@@ -60,14 +60,44 @@ export function resolveNewRepoPath(parent: string, name: string): string {
 /**
  * 在空目录里 `git init` 并提交一个空初始提交，让仓库立刻能建 worktree
  * （没有提交的仓库 `git worktree add ... HEAD` 会失败）。
+ * `createParents` 为 true 时先递归创建缺失的上级目录（运行期直接输入新路径添加项目时用）。
  * 任一步失败都会删掉刚创建的目录，不在磁盘上留下半成品。
  */
-export async function createGitRepo(target: string): Promise<void> {
+export async function createGitRepo(
+  target: string,
+  options: { createParents?: boolean } = {},
+): Promise<void> {
+  /** 递归建上级目录前已存在的最近祖先；失败时只回收到这里，不碰原有目录。 */
+  let existingAncestor: string | undefined;
   try {
+    if (options.createParents) {
+      existingAncestor = nearestExistingDirectory(path.dirname(target));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+    }
     fs.mkdirSync(target);
   } catch (error) {
+    if (existingAncestor) removeEmptyAncestors(path.dirname(target), existingAncestor);
+    // createParents 时 EEXIST 也可能来自上级路径；只有目标本身已存在才算路径冲突。
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new RepoCreateError(`目录已存在：${target}`, 409);
+      let targetExists = false;
+      try {
+        fs.lstatSync(target);
+        targetExists = true;
+      } catch {
+        targetExists = false;
+      }
+      if (targetExists) {
+        let targetIsDir = false;
+        try {
+          targetIsDir = fs.statSync(target).isDirectory();
+        } catch {
+          targetIsDir = false;
+        }
+        throw new RepoCreateError(
+          targetIsDir ? `目录已存在：${target}` : `路径已存在但不是目录：${target}`,
+          409,
+        );
+      }
     }
     throw new RepoCreateError(`无法创建目录 ${target}：${messageOf(error)}`);
   }
@@ -91,7 +121,37 @@ export async function createGitRepo(target: string): Promise<void> {
     );
   } catch (error) {
     fs.rmSync(target, { recursive: true, force: true });
+    if (existingAncestor) removeEmptyAncestors(path.dirname(target), existingAncestor);
     throw new RepoCreateError(`创建 git 仓库失败：${gitMessageOf(error)}`);
+  }
+}
+
+/** 从给定目录向上找第一个已存在的目录；用于记住递归创建前的前缀。 */
+function nearestExistingDirectory(from: string): string {
+  let current = path.resolve(from);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return current;
+}
+
+/**
+ * 回收本次递归创建后失败留下的空上级目录：从 `from` 向上删到 `stopAt`（不含），
+ * 遇到非空目录立即停止。只用于「本来不存在、本次新建」的目录。
+ */
+function removeEmptyAncestors(from: string, stopAt: string): void {
+  const stop = path.resolve(stopAt);
+  const prefix = stop.endsWith(path.sep) ? stop : stop + path.sep;
+  let current = path.resolve(from);
+  while (current !== stop && current.startsWith(prefix)) {
+    try {
+      fs.rmdirSync(current);
+    } catch {
+      return;
+    }
+    current = path.dirname(current);
   }
 }
 

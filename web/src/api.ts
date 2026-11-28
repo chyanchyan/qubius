@@ -928,7 +928,7 @@ export function saveProjectPermission(id: string, permission: PermissionLevel, s
   return request(`/api/projects/${id}`, { method: "PUT", body: JSON.stringify({ permission }) }, signal);
 }
 
-/** 运行期添加本机的 git 仓库；服务端写入额外项目文件后立即生效。 */
+/** 运行期添加本机的 git 仓库；目录不存在时服务端会自动创建并初始化 git 仓库，写入额外项目文件后立即生效。 */
 export function addProject(body: {
   id: string;
   name: string;
