@@ -8,7 +8,7 @@ import { isActivePhase } from "./project-activity";
  * - dirty：有改动但还没有提交（橙）。
  * - unmerged：分支有提交，但还没合入基准分支（黄）。
  * - merged：分支已经合入基准分支（绿）。
- * - untouched：已经做过一轮答复，且没有任何代码改动（蓝）。
+ * - untouched：已经做过一轮答复，且没有任何代码改动（浅绿）。
  *
  * 归档安全性和灯序无关：橙灯最需要提醒，归档会连同未提交的改动一起删掉。
  */
@@ -37,7 +37,7 @@ export function branchLampState(input: BranchLampInput): BranchLamp | undefined 
   return input.merged ? "merged" : "unmerged";
 }
 
-/** 项目列表里各灯色的优先级：橙 > 黄 > 蓝 > 绿 > 灰。 */
+/** 项目列表里各灯色的优先级：橙 > 黄 > 浅绿 > 绿 > 灰。 */
 const PROJECT_LAMP_ORDER: readonly BranchLamp[] = [
   "dirty",
   "unmerged",
@@ -61,7 +61,7 @@ export interface ProjectBranchStatus {
 }
 
 /**
- * 项目列表的灯：先算出项目里每个会话分支的灯色，再按 橙 > 黄 > 蓝 > 绿 > 灰
+ * 项目列表的灯：先算出项目里每个会话分支的灯色，再按 橙 > 黄 > 浅绿 > 绿 > 灰
  * 取第一个存在的状态。项目没有任何分支（包括还没有会话）时返回 undefined，
  * 界面显示空心灯。
  */

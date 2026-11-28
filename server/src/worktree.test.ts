@@ -83,7 +83,7 @@ test("mergedSessionBranches 没有 main 时退回 master，非仓库返回 null"
     const status = await mergedSessionBranches(work);
     assert.equal(status.base, "master");
     assert.deepEqual(status.merged, [branch]);
-    // 分支创建后没有提交：已合入但从未改动，界面按蓝灯显示并参与全部归档。
+    // 分支创建后没有提交：已合入但从未改动，界面按浅绿灯显示并参与全部归档。
     assert.deepEqual(status.untouched, [branch]);
 
     assert.deepEqual(await mergedSessionBranches(plain), { base: null, merged: [], untouched: [] });

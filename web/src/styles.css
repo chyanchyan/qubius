@@ -12,6 +12,8 @@
   --clay: #c6613f;
   --ivory: #faf9f5;
   --green: #74c991;
+  /* 比 --green 更浅的绿：表示「做过答复但没改代码」，和已合入的深绿区分开。 */
+  --green-light: #a8e6b4;
   --red: #c74e39;
   --error: #f48771;
   --warn: #e1c08d;
@@ -678,11 +680,11 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
   color: var(--orange);
 }
 
-/* 做了答复且没有任何代码改动：蓝灯。归档不会丢掉任何代码。 */
+/* 做了答复且没有任何代码改动：浅绿灯。归档不会丢掉任何代码。 */
 .branch-badge[data-state="untouched"] {
-  border-color: color-mix(in srgb, var(--blue) 45%, var(--line));
-  background: color-mix(in srgb, var(--blue) 16%, transparent);
-  color: var(--blue);
+  border-color: color-mix(in srgb, var(--green-light) 45%, var(--line));
+  background: color-mix(in srgb, var(--green-light) 16%, transparent);
+  color: var(--green-light);
 }
 
 /* 已发言、当前这一轮还在进行，且没有未提交改动：灰灯，表示结果还没落定。 */
@@ -1798,10 +1800,10 @@ button.agent-badge:hover:not(:disabled) { border-color: var(--muted); color: var
 .dot[data-tone="run"] { background: var(--green); animation: blink 1s linear infinite; }
 
 /* 项目列表的灯：与会话分支灯同色；项目里没有任何分支时用空心灯。
-   橙 > 黄 > 蓝 > 绿 > 灰 的取舍在 projectLampState 里完成。 */
+   橙 > 黄 > 浅绿 > 绿 > 灰 的取舍在 projectLampState 里完成。 */
 .dot[data-tone="dirty"] { background: var(--orange); }
 .dot[data-tone="unmerged"] { background: var(--warn); }
-.dot[data-tone="untouched"] { background: var(--blue); }
+.dot[data-tone="untouched"] { background: var(--green-light); }
 .dot[data-tone="merged"] { background: var(--green); }
 .dot[data-tone="starting"] { background: var(--muted); }
 .dot[data-tone="empty"] { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }

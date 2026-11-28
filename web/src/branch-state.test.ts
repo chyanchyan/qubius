@@ -32,7 +32,7 @@ test("本轮进行中、没有未提交改动时是灰灯", () => {
   assert.equal(branchLampState({ active: true }), "starting");
 });
 
-test("本轮结束、没有改动时是蓝灯", () => {
+test("本轮结束、没有改动时是浅绿灯", () => {
   assert.equal(
     branchLampState({ merged: true, untouched: true }),
     "untouched",
@@ -59,21 +59,21 @@ test("合入状态未知且本轮已结束时不着色", () => {
   assert.equal(branchLampState({ merged: undefined, untouched: false }), undefined);
 });
 
-test("项目灯按橙 > 黄 > 蓝 > 绿 > 灰取第一个存在的状态", () => {
-  const blue = "qubius/bbbbbbbb";
+test("项目灯按橙 > 黄 > 浅绿 > 绿 > 灰取第一个存在的状态", () => {
+  const lightGreen = "qubius/bbbbbbbb";
   const green = "qubius/cccccccc";
   const yellow = "qubius/dddddddd";
   const orange = "qubius/eeeeeeee";
   const gray = "qubius/ffffffff";
   const status = branchStatus({
-    merged: new Set([blue, green]),
-    untouched: new Set([blue, gray]),
+    merged: new Set([lightGreen, green]),
+    untouched: new Set([lightGreen, gray]),
     dirty: new Set([orange]),
   });
   const sessions = [
     branch("completed", green),
     branch("completed", yellow),
-    branch("completed", blue),
+    branch("completed", lightGreen),
     branch("failed", orange),
     branch("running", gray),
   ];
@@ -103,7 +103,7 @@ test("找不到基准分支时不显示黄灯或绿灯", () => {
   const sessions = [branch("completed", branchName)];
   const unknown = branchStatus({ mergedKnown: false });
   assert.equal(projectLampState(sessions, unknown), undefined);
-  // 蓝灯、橙灯和进行中的灰灯不依赖合入状态，仍然可见。
+  // 浅绿灯、橙灯和进行中的灰灯不依赖合入状态，仍然可见。
   assert.equal(
     projectLampState(sessions, branchStatus({ mergedKnown: false, untouched: new Set([branchName]) })),
     "untouched",

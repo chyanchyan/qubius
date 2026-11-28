@@ -557,7 +557,7 @@ async function sessionBranchCreations(projectPath: string): Promise<Map<string, 
  * 两种收尾流程。未提交的工作区改动不属于分支提交，不参与判断。
  *
  * 另外报告从未提交过代码的分支（untouched）：它们同样以「已合入」出现。
- * 列表据此把没改过代码的分支显示为蓝灯（做过答复但没有改动）；归档这类
+ * 列表据此把没改过代码的分支显示为浅绿灯（做过答复但没有改动）；归档这类
  * 分支不会丢掉任何代码，全部归档按已合入处理。
  */
 export async function mergedSessionBranches(projectPath: string): Promise<MergeStatus> {

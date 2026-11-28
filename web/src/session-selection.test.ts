@@ -121,7 +121,7 @@ test("从未改过代码的分支算已合入，默认归档", () => {
   ];
   const merged = new Set([sessions[0]?.branch ?? "", unchanged]);
 
-  // 蓝灯分支虽然从未改过代码，但停在基准分支上，归档不会丢代码。
+  // 浅绿灯分支虽然从未改过代码，但停在基准分支上，归档不会丢代码。
   assert.deepEqual(
     pickArchiveTargets(sessions, true, merged).map((item) => item.id),
     ["done", "never"],

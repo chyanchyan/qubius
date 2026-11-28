@@ -56,7 +56,7 @@ export function clearAllCandidates(sessions: readonly Session[]): Session[] {
  * 「全部归档」的目标会话。开关打开时只归档分支已经合入基准分支、且没有
  * 未提交改动的会话：未合入的分支、没有分支的会话以及橙灯（有改动没提交）
  * 都保留，避免删掉 main 里还没有的改动、或删掉还没提交的文件。
- * 从未改过代码的分支（蓝灯）同样算已合入，归档它不会丢掉任何代码，因此
+ * 从未改过代码的分支（浅绿灯）同样算已合入，归档它不会丢掉任何代码，因此
  * 也会被归档。关掉开关时归档所有非运行中的会话。
  */
 export function pickArchiveTargets(

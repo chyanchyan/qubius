@@ -266,7 +266,7 @@ export function ProjectsPage({ go }: { go: (to: string) => void }) {
           <div className="stack">
             {ordered.map((project) => {
               // 不可用项目优先显示红点；灯数据到位后按项目内的分支灯取
-              // 橙 > 黄 > 蓝 > 绿 > 灰，没有分支时用空心灯；数据加载前沿用活动灯。
+              // 橙 > 黄 > 浅绿 > 绿 > 灰，没有分支时用空心灯；数据加载前沿用活动灯。
               const status = projectStatuses[project.id];
               const lamp = lampSessions === null
                 ? undefined
