@@ -613,7 +613,77 @@ test("运行期添加 git 仓库：立即生效并写入 projects.yaml", async (
   }
 });
 
-test("运行期添加仓库会拒绝非 git 目录、缺失目录、重复 id 和非法 id", async () => {
+test("运行期添加仓库：目录不存在时自动创建并初始化 git 仓库", async () => {
+  await withGitIdentity(async () => {
+    const harness = await startHarness();
+    try {
+      const target = path.join(harness.base, "nested", "new-repo");
+      const created = await call<{
+        project: { id: string; path: string; git: boolean; available: boolean };
+      }>(harness, "POST", "/api/projects", { id: "auto", name: "自动创建", path: target });
+      assert.equal(created.status, 201);
+      assert.equal(created.data.project.id, "auto");
+      assert.equal(created.data.project.path, target);
+      assert.equal(created.data.project.git, true);
+      assert.equal(created.data.project.available, true);
+      assert.equal(fs.statSync(target).isDirectory(), true);
+
+      const inside = await exec("git", ["-C", target, "rev-parse", "--is-inside-work-tree"]);
+      assert.equal(inside.stdout.trim(), "true");
+      const log = await exec("git", ["-C", target, "log", "--oneline"]);
+      assert.equal(log.stdout.trim().split("\n").length, 1);
+
+      const list = await call<{ projects: Array<{ id: string }> }>(harness, "GET", "/api/projects");
+      assert.ok(list.data.projects.some((project) => project.id === "auto"));
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+test("运行期添加仓库：项目文件损坏时不会先创建目录", async () => {
+  await withGitIdentity(async () => {
+    const harness = await startHarness();
+    try {
+      // 额外项目文件读取失败时应先返回 400，不能在磁盘上留下新建的仓库。
+      fs.writeFileSync(path.join(harness.base, "projects.yaml"), "- id: [\n");
+      const target = path.join(harness.base, "should-not-exist", "repo");
+      const created = await call(harness, "POST", "/api/projects", {
+        id: "broken-file",
+        name: "Broken",
+        path: target,
+      });
+      assert.equal(created.status, 400);
+      assert.match(String(created.data.error), /项目文件无法读取/);
+      assert.equal(fs.existsSync(target), false);
+      assert.equal(fs.existsSync(path.dirname(target)), false);
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+test("运行期添加仓库：路径已存在但不是目录时明确拒绝且不改动原文件", async () => {
+  await withGitIdentity(async () => {
+    const harness = await startHarness();
+    try {
+      const target = path.join(harness.base, "plain-file");
+      fs.writeFileSync(target, "keep\n");
+      const created = await call(harness, "POST", "/api/projects", {
+        id: "plain-file",
+        name: "Plain",
+        path: target,
+      });
+      assert.equal(created.status, 409);
+      assert.match(String(created.data.error), /不是目录/);
+      assert.equal(fs.readFileSync(target, "utf8"), "keep\n");
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+test("运行期添加仓库会拒绝非 git 目录、重复 id 和非法 id", async () => {
   const harness = await startHarness();
   try {
     const notGit = await call(harness, "POST", "/api/projects", {
@@ -624,12 +694,15 @@ test("运行期添加仓库会拒绝非 git 目录、缺失目录、重复 id �
     assert.equal(notGit.status, 400);
     assert.match(String(notGit.data.error), /不是 git 仓库/);
 
-    const missing = await call(harness, "POST", "/api/projects", {
-      id: "gone",
-      name: "Gone",
-      path: path.join(harness.base, "missing"),
+    // 父路径是文件时无法创建目录，仍按 400 报错。
+    fs.writeFileSync(path.join(harness.base, "blocker"), "x");
+    const unwritable = await call(harness, "POST", "/api/projects", {
+      id: "blocked",
+      name: "Blocked",
+      path: path.join(harness.base, "blocker", "child"),
     });
-    assert.equal(missing.status, 400);
+    assert.equal(unwritable.status, 400);
+    assert.match(String(unwritable.data.error), /无法创建目录/);
 
     const duplicate = await call(harness, "POST", "/api/projects", {
       id: "p2",

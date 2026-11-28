@@ -1097,7 +1097,8 @@ export function createAppServer(options: {
       return;
     }
     if (url.pathname === "/api/projects" && method === "POST") {
-      // 运行期新增项目：只接受本机已有的 git 仓库，写入额外项目文件后立即生效。
+      // 运行期新增项目：目录不存在时自动创建并初始化 git 仓库，已有目录必须是 git 仓库；
+      // 写入额外项目文件后立即生效。
       const body = asRecord(await readJson(req));
       const id = typeof body.id === "string" ? body.id.trim() : "";
       const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -1116,20 +1117,56 @@ export function createAppServer(options: {
         throw new HttpError(409, `项目 id 已存在：${id}`);
       }
       const projectPath = path.resolve(config.configDir, rawPath);
+      // 先预检额外项目文件：文件损坏或 id 已占用时不要先在磁盘上建出目录/仓库。
+      const projectsFile = config.projectsFile ?? path.join(config.configDir, "projects.yaml");
+      const precheck = readProjectsFile(projectsFile, config.configDir);
+      if (precheck.error) {
+        throw new HttpError(400, `项目文件无法读取，先修复 ${projectsFile}：${precheck.error}`);
+      }
+      if (precheck.projects.some((project) => project.id === id)) {
+        throw new HttpError(409, `项目 id 已存在：${id}`);
+      }
+
       let isDir = false;
+      let pathExists = false;
       try {
         isDir = fs.statSync(projectPath).isDirectory();
+        pathExists = true;
       } catch {
-        isDir = false;
+        // stat 会跟随符号链接；悬空链接需要用 lstat 才能识别成「已存在但不是目录」。
+        try {
+          fs.lstatSync(projectPath);
+          pathExists = true;
+        } catch {
+          pathExists = false;
+        }
       }
-      if (!isDir) throw new HttpError(400, `目录不存在：${projectPath}`);
+      if (pathExists && !isDir) {
+        throw new HttpError(409, `路径已存在但不是目录：${projectPath}`);
+      }
+      let autoCreated = false;
+      if (!isDir) {
+        // 目录不存在时自动创建并初始化 git 仓库；已有目录仍要求是 git 仓库。
+        try {
+          await createGitRepo(projectPath, { createParents: true });
+          autoCreated = true;
+        } catch (error) {
+          if (error instanceof RepoCreateError) throw new HttpError(error.status, error.message);
+          throw error;
+        }
+      }
+      /** 后续校验失败时回收本次自动创建的仓库，已有目录一律不删。 */
+      const discardAutoCreated = (): void => {
+        if (autoCreated) fs.rmSync(projectPath, { recursive: true, force: true });
+      };
       // 绕过 30 秒缓存：刚 git init 的目录也要能立即加入。
       if (!(await isGitRepo(projectPath, { ttlMs: 0 }))) {
+        discardAutoCreated();
         throw new HttpError(400, `不是 git 仓库：${projectPath}`);
       }
-      const projectsFile = config.projectsFile ?? path.join(config.configDir, "projects.yaml");
       const existing = readProjectsFile(projectsFile, config.configDir);
       if (existing.error) {
+        discardAutoCreated();
         throw new HttpError(400, `项目文件无法读取，先修复 ${projectsFile}：${existing.error}`);
       }
       // 探测 git 期间可能有另一个请求写入同一 id，落盘前再查一次。
@@ -1137,10 +1174,16 @@ export function createAppServer(options: {
         existing.projects.some((project) => project.id === id)
         || config.projects.some((project) => project.id === id)
       ) {
+        discardAutoCreated();
         throw new HttpError(409, `项目 id 已存在：${id}`);
       }
       const project: ProjectConfig = { id, name, path: projectPath, permission, isolated: false };
-      appendProjectToFile(projectsFile, project);
+      try {
+        appendProjectToFile(projectsFile, project);
+      } catch (error) {
+        discardAutoCreated();
+        throw error;
+      }
       config.projects.push(project);
       sendJson(res, 201, { project: await projectView(project, ctx.permissions.current, true) });
       return;
