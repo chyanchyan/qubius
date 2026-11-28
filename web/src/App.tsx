@@ -2403,23 +2403,23 @@ function BoardPage({ projectId, go, brand }: { projectId: string; go: (to: strin
       )}
       <div className="archive-bar schedules-bar-wide">
         <button
-          className="text-btn"
+          className="text-btn panel-toggle"
           aria-expanded={showBatchWatch}
+          data-tooltip="脚本监听多个会话，全部完成后用指定模型审核合入"
           onClick={() => setShowBatchWatch((value) => !value)}
         >
           {showBatchWatch
             ? "收起监听整合"
             : `监听整合${batchWatchCount > 0 ? ` (${batchWatchCount})` : ""}`}
         </button>
-        <span className="archive-path">脚本监听多个会话并在完成后用指定模型审核合入</span>
         <button
-          className="text-btn"
+          className="text-btn panel-toggle"
           aria-expanded={showSchedules}
+          data-tooltip="按固定间隔自动新建对话"
           onClick={() => setShowSchedules((value) => !value)}
         >
           {showSchedules ? "收起定时任务" : "定时任务"}
         </button>
-        <span className="archive-path">按固定间隔自动新建对话</span>
       </div>
       {showBatchWatch && (
         <BatchWatchPanel

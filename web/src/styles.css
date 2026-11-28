@@ -258,7 +258,8 @@ summary:focus-visible {
 .access-mode-dot[data-mode="public"] { background: var(--orange); }
 
 /* 悬停时立即显示入口说明；原生 title 的延迟太长，也不方便截图/触屏查看。 */
-.access-mode::after {
+.access-mode::after,
+.archive-bar .panel-toggle[data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   z-index: 30;
@@ -282,14 +283,17 @@ summary:focus-visible {
   pointer-events: none;
 }
 
-.access-mode:hover::after {
+.access-mode:hover::after,
+.archive-bar .panel-toggle[data-tooltip]:hover::after,
+.archive-bar .panel-toggle[data-tooltip]:focus-visible::after {
   opacity: 1;
   visibility: visible;
   transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .access-mode::after { transition: none; }
+  .access-mode::after,
+  .archive-bar .panel-toggle[data-tooltip]::after { transition: none; }
 }
 
 .access-mode[data-mode="lan"] {
@@ -2482,6 +2486,25 @@ h1 { font-size: var(--fs-15); font-weight: 600; margin: calc(4px * var(--control
   padding: 0;
   border-bottom: 0;
   justify-content: flex-end;
+}
+
+/* 「监听整合」「定时任务」是会话列表页的常用入口，做成描边胶囊按钮，
+   比普通文字按钮更显眼；说明文案收进悬停提示，不再用行内小字挤占列表。 */
+.archive-bar .panel-toggle {
+  position: relative;
+  padding: calc(4px * var(--control-scale)) calc(12px * var(--control-scale));
+  border-color: var(--line);
+  border-radius: 999px;
+  background: var(--elev);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.archive-bar .panel-toggle:hover:not(:disabled),
+.archive-bar .panel-toggle[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--blue) 55%, var(--line));
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+  color: var(--blue);
 }
 
 /* 窄屏顶栏只留返回图标、标题和「更多」，其余入口收进菜单；
